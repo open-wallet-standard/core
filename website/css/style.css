@@ -897,6 +897,33 @@ img {
   line-height: 1.7;
 }
 
+.docs-content pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+  color: inherit;
+}
+
+.code-copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  background: var(--gray-700);
+  border: 1px solid var(--gray-600);
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  color: var(--gray-300);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+div:hover > .code-copy-btn { opacity: 1; }
+.code-copy-btn:hover { background: var(--gray-600); color: var(--white); }
+
 .docs-content table {
   width: 100%;
   border-collapse: collapse;

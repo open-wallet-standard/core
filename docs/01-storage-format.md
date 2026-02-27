@@ -36,8 +36,7 @@ The Ethereum Keystore v3 format has been battle-tested since 2015, is implemente
 ├── plugins/
 │   ├── <chain-type>/              # Chain-specific plugins
 │   │   ├── signer.js              # Signing implementation
-│   │   ├── builder.js             # Transaction builder
-│   │   └── simulator.js           # Transaction simulator
+│   │   └── builder.js             # Transaction builder
 │   └── ...
 └── logs/
     └── audit.jsonl                # Append-only audit log
@@ -193,7 +192,6 @@ All signing operations are appended to `~/.lws/logs/audit.jsonl`:
   "value": "1000000",
   "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
   "policy_result": "allow",
-  "simulation_result": "success",
   "tx_hash": "0xabc123..."
 }
 ```

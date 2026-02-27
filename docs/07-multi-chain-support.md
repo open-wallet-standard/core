@@ -4,7 +4,7 @@
 
 ## Design Decision
 
-**LWS uses a chain plugin system where each supported chain provides a signer, transaction builder, and simulator that implement a standard interface. New chains are added by writing a plugin — no changes to the core spec or implementation are needed.**
+**LWS uses a chain plugin system where each supported chain provides a signer and transaction builder that implement a standard interface. New chains are added by writing a plugin — no changes to the core spec or implementation are needed.**
 
 This follows x402's scheme/network separation: the core protocol defines _how_ signing works; chain plugins define _what_ gets signed and how transactions are built for a specific network.
 
@@ -66,32 +66,6 @@ interface ChainPlugin {
     chainId: ChainId,
     rpcUrl: string
   ): Promise<{ hash: string }>;
-
-  /** Simulate a transaction */
-  simulate(
-    tx: SerializedTransaction,
-    chainId: ChainId,
-    address: string,
-    rpcUrl: string
-  ): Promise<SimulationResult>;
-
-  /** Get account balance */
-  getBalance(
-    address: string,
-    chainId: ChainId,
-    rpcUrl: string,
-    tokens?: string[]
-  ): Promise<BalanceResult>;
-}
-
-interface BalanceResult {
-  native: string;                       // in smallest unit
-  tokens: Array<{
-    address: string;
-    symbol?: string;
-    balance: string;
-    decimals: number;
-  }>;
 }
 ```
 
@@ -124,8 +98,6 @@ Supports all EVM-compatible chains: Ethereum, Base, Polygon, Arbitrum, Optimism,
 }
 ```
 
-**Simulation:** `eth_call` + `eth_estimateGas` + optional `debug_traceCall` for state diffs.
-
 ### Solana (`@lws/plugin-solana`)
 
 | Property | Value |
@@ -154,8 +126,6 @@ Supports all EVM-compatible chains: Ethereum, Base, Polygon, Arbitrum, Optimism,
   feePayer: "..."               // defaults to wallet address
 }
 ```
-
-**Simulation:** `simulateTransaction` RPC method.
 
 **Commitment mapping:** LWS `confirmations: 1` → Solana `"confirmed"`, `confirmations: 31` → Solana `"finalized"`.
 
@@ -269,7 +239,7 @@ To add support for a new chain:
 2. Register a CAIP-2 namespace (if not already registered at [chainagnostic.org](https://chainagnostic.org))
 3. Specify the BIP-44 coin type (from [SLIP-44](https://github.com/satoshilabs/slips/blob/master/slip-0044.md))
 4. Publish as an npm package with `lws-plugin` keyword
-5. Document the chain-specific transaction format and simulation behavior
+5. Document the chain-specific transaction format
 
 No changes to LWS core, the signing interface, or the policy engine are needed.
 

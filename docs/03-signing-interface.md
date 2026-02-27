@@ -1,10 +1,10 @@
 # 03 - Signing Interface
 
-> The core operations exposed by an LWS implementation: signing, sending, simulating, and message signing.
+> The core operations exposed by an LWS implementation: signing, sending, and message signing.
 
 ## Design Decision
 
-**LWS defines a minimal, chain-agnostic interface with four core operations (`sign`, `signAndSend`, `signMessage`, `simulate`) that accept serialized chain-specific data and return chain-specific results. The interface never exposes private keys.**
+**LWS defines a minimal, chain-agnostic interface with three core operations (`sign`, `signAndSend`, `signMessage`) that accept serialized chain-specific data and return chain-specific results. The interface never exposes private keys.**
 
 ### Why This Shape
 
@@ -19,7 +19,7 @@ We studied the interfaces of six major wallet systems:
 | WalletConnect v2 | JSON-RPC over relay | `wallet_invokeMethod` routes to chain-specific RPC |
 | Turnkey | REST API (sign arbitrary payloads) | Curve-primitive signing, chain-agnostic |
 
-LWS takes Turnkey's chain-agnostic signing philosophy, wraps it in Coinbase's provider pattern, and adds simulation as a first-class operation (influenced by Privy's policy engine and ERC-4337's validation model).
+LWS takes Turnkey's chain-agnostic signing philosophy and wraps it in Coinbase's provider pattern.
 
 ## Interface Definition
 
@@ -32,27 +32,24 @@ interface SignRequest {
   walletId: WalletId;
   chainId: ChainId;                    // CAIP-2
   transaction: SerializedTransaction;  // chain-specific
-  simulate?: boolean;                  // default: true
 }
 
 interface SignResult {
   signature: string;
   signedTransaction: string;
-  simulationResult?: SimulationResult;
 }
 ```
 
 **Flow:**
 1. Resolve `walletId` → wallet file
 2. Resolve `chainId` → chain plugin
-3. If `simulate !== false`, run simulation via chain plugin
-4. Authenticate caller: owner (passphrase/passkey) or agent (API key)
-5. If agent: verify wallet is in API key's `walletIds` scope; evaluate API key's policies against the transaction + simulation result
-6. If owner: skip policy evaluation (sudo access)
-7. If policies pass (or owner), decrypt key material in the signing enclave
-8. Sign via chain plugin's signer
-9. Wipe key material
-10. Return signed transaction
+3. Authenticate caller: owner (passphrase/passkey) or agent (API key)
+4. If agent: verify wallet is in API key's `walletIds` scope; evaluate API key's policies against the transaction
+5. If owner: skip policy evaluation (sudo access)
+6. If policies pass (or owner), decrypt key material in the signing enclave
+7. Sign via chain plugin's signer
+8. Wipe key material
+9. Return signed transaction
 
 ### `signAndSend(request: SignAndSendRequest): Promise<SignAndSendResult>`
 
@@ -96,31 +93,6 @@ Message signing follows chain-specific conventions:
 - **EVM**: `personal_sign` (EIP-191) or `eth_signTypedData_v4` (EIP-712)
 - **Solana**: Ed25519 signature over the raw message bytes
 - **Cosmos**: ADR-036 off-chain signing
-
-### `simulate(request: SimulateRequest): Promise<SimulationResult>`
-
-Simulates a transaction without signing or broadcasting. Used for pre-flight checks, gas estimation, and policy evaluation.
-
-```typescript
-interface SimulateRequest {
-  walletId: WalletId;
-  chainId: ChainId;
-  transaction: SerializedTransaction;
-}
-
-interface SimulationResult {
-  success: boolean;
-  gasEstimate?: string;
-  stateChanges?: StateChange[];
-  error?: string;
-  warnings?: string[];
-}
-```
-
-Simulation is chain-plugin-dependent:
-- **EVM**: `eth_call` + `eth_estimateGas` + trace-based state diff
-- **Solana**: `simulateTransaction` RPC
-- **Cosmos**: `tx simulate` endpoint
 
 ## SerializedTransaction Format
 
@@ -181,7 +153,6 @@ interface LwsError {
 | `WALLET_NOT_FOUND` | No wallet with the given ID exists |
 | `CHAIN_NOT_SUPPORTED` | No plugin loaded for the given chain |
 | `POLICY_DENIED` | Transaction rejected by policy engine |
-| `SIMULATION_FAILED` | Transaction would revert on-chain |
 | `INSUFFICIENT_FUNDS` | Account balance too low |
 | `INVALID_PASSPHRASE` | Vault passphrase incorrect |
 | `VAULT_LOCKED` | Vault has not been unlocked |
@@ -200,4 +171,3 @@ LWS implementations MUST support concurrent signing requests across different wa
 - [Turnkey Signing API](https://docs.turnkey.com)
 - [EIP-191: Signed Data Standard](https://eips.ethereum.org/EIPS/eip-191)
 - [EIP-712: Typed Structured Data](https://eips.ethereum.org/EIPS/eip-712)
-- [ERC-4337: UserOperation Validation](https://eips.ethereum.org/EIPS/eip-4337)

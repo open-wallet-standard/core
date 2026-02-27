@@ -28,6 +28,8 @@ A policy is any executable program. LWS invokes the executable, pipes a `PolicyC
 
 This follows the Unix philosophy and mirrors the enclave protocol already used by LWS (JSON-RPC over stdio). Policies can be written in any language — shell scripts, Python, Go, Rust, JavaScript — whatever the operator prefers.
 
+Because a policy is arbitrary code, it can perform any logic before returning a verdict — including making RPC calls to simulate the transaction, querying on-chain state, checking balances, calling external APIs, or consulting a local database. LWS core does not provide these capabilities directly; they are delegated to the policy layer.
+
 **Invocation:**
 
 ```
@@ -95,12 +97,6 @@ The JSON object piped to the policy executable's stdin:
       }
     ]
   },
-  "simulation": {
-    "success": true,
-    "gasEstimate": "21000",
-    "stateChanges": [],
-    "warnings": []
-  },
   "timestamp": "2026-02-27T10:35:22Z",
   "api_key_id": "7a2f1b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c"
 }
@@ -111,7 +107,6 @@ The JSON object piped to the policy executable's stdin:
 | `transaction` | object | yes | The chain-specific serialized transaction being evaluated |
 | `chain_id` | string | yes | CAIP-2 chain identifier |
 | `wallet` | object | yes | Wallet descriptor (id, name, chain_type, accounts — never key material) |
-| `simulation` | object | no | Simulation result, if simulation was performed |
 | `timestamp` | string | yes | ISO 8601 timestamp of the signing request |
 | `api_key_id` | string | yes | The ID of the API key making this request |
 

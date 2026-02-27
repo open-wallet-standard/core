@@ -1,0 +1,4 @@
+{
+  "buildCommand": "mkdir -p website/docs/md && cp docs/*.md website/docs/md/",
+  "outputDirectory": "website"
+}

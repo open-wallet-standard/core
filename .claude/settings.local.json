@@ -22,7 +22,11 @@
       "WebFetch(domain:www.npmjs.com)",
       "WebFetch(domain:spark.litprotocol.com)",
       "WebFetch(domain:blog.thirdweb.com)",
-      "WebFetch(domain:lobehub.com)"
+      "WebFetch(domain:lobehub.com)",
+      "Bash(ls:*)",
+      "Bash(head:*)",
+      "WebFetch(domain:cdn.jsdelivr.net)",
+      "Bash(git status:*)"
     ]
   }
 }

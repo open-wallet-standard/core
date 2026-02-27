@@ -48,38 +48,14 @@ List all wallets in the vault (no sensitive data exposed).
 
 **Returns:** Array of `WalletDescriptor` objects (id, name, accounts — never key material). If the caller is an API key, only wallets in the key's `walletIds` scope are returned.
 
-### `lws_get_balance`
-
-Get the balance of a wallet account.
-
-```json
-{
-  "name": "lws_get_balance",
-  "description": "Get the native and token balances of a wallet account",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "walletId": { "type": "string" },
-      "chainId": { "type": "string", "description": "CAIP-2 chain ID" },
-      "tokens": {
-        "type": "array",
-        "items": { "type": "string" },
-        "description": "Token contract addresses to check (optional)"
-      }
-    },
-    "required": ["walletId", "chainId"]
-  }
-}
-```
-
 ### `lws_sign_transaction`
 
-Sign a transaction (with policy enforcement and optional simulation).
+Sign a transaction (with policy enforcement).
 
 ```json
 {
   "name": "lws_sign_transaction",
-  "description": "Sign a transaction using a wallet. Enforces attached policies. Simulates by default.",
+  "description": "Sign a transaction using a wallet. Enforces attached policies.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -88,8 +64,7 @@ Sign a transaction (with policy enforcement and optional simulation).
       "transaction": {
         "type": "object",
         "description": "Chain-specific transaction object"
-      },
-      "simulate": { "type": "boolean", "default": true }
+      }
     },
     "required": ["walletId", "chainId", "transaction"]
   }
@@ -134,26 +109,6 @@ Sign an arbitrary message for authentication or attestation.
       "typedData": { "type": "object", "description": "EIP-712 typed data (EVM only)" }
     },
     "required": ["walletId", "chainId", "message"]
-  }
-}
-```
-
-### `lws_simulate`
-
-Simulate a transaction without signing.
-
-```json
-{
-  "name": "lws_simulate",
-  "description": "Simulate a transaction to preview state changes and estimate gas",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "walletId": { "type": "string" },
-      "chainId": { "type": "string" },
-      "transaction": { "type": "object" }
-    },
-    "required": ["walletId", "chainId", "transaction"]
   }
 }
 ```
@@ -232,8 +187,6 @@ GET  /v1/wallets/:id                 → Get wallet descriptor
 POST /v1/wallets/:id/sign            → Sign transaction
 POST /v1/wallets/:id/sign-and-send   → Sign and broadcast
 POST /v1/wallets/:id/sign-message    → Sign message
-POST /v1/wallets/:id/simulate        → Simulate transaction
-GET  /v1/wallets/:id/balance         → Get balance
 GET  /v1/wallets/:id/policy          → Get caller's policies
 
 POST   /v1/keys                      → Create API key (owner only)
@@ -316,13 +269,7 @@ Agent: "I need to send 0.01 ETH to 0x4B08... on Base"
    → Returns only wallets in the API key's scope
    → [{ id: "3198bc9c-...", name: "agent-treasury", ... }]
 
-2. Agent calls lws_get_balance to check funds
-   → Returns: { native: "50000000000000000", ... }  (0.05 ETH)
-
-3. Agent calls lws_simulate to preview the transfer
-   → Returns: { success: true, gasEstimate: "21000", stateChanges: [...] }
-
-4. Agent calls lws_sign_and_send to execute
+2. Agent calls lws_sign_and_send to execute
    → API key verified: wallet is in key's scope
    → Policy engine evaluates the API key's attached policies
    → Signing enclave decrypts key, signs, wipes
