@@ -1,0 +1,186 @@
+# 01 - Storage Format
+
+> How wallets are encrypted, structured, and stored on the local filesystem.
+
+## Design Decision
+
+**LWS uses an extended Ethereum Keystore v3 format with per-chain type adaptations, stored in a well-known directory with strict filesystem permissions.**
+
+### Why This Approach
+
+We evaluated four storage strategies:
+
+| Approach | Pros | Cons |
+|---|---|---|
+| Raw private keys in env vars | Simple | Catastrophically insecure; keys leak into logs, process lists, LLM contexts |
+| Cloud KMS (Privy, Turnkey) | Strong security, TEE-backed | Requires network; not local-first; vendor lock-in |
+| OS keychain (macOS Keychain, Windows DPAPI) | OS-level encryption | Not portable across platforms; no standard multi-key format |
+| **Encrypted JSON keystore** | Portable, proven, auditable, local-first | Must protect against brute-force; requires passphrase management |
+
+The Ethereum Keystore v3 format has been battle-tested since 2015, is implemented in every major Web3 library, and provides strong encryption with configurable KDF parameters. LWS extends it to support non-EVM chains while maintaining backward compatibility with existing EVM tooling.
+
+## Vault Directory Structure
+
+```
+~/.lws/
+├── config.json                    # Global configuration
+├── wallets/
+│   ├── <wallet-id>.json           # Encrypted wallet file (one per wallet)
+│   └── ...
+├── policies/
+│   ├── <policy-id>.json           # Policy definition
+│   └── ...
+├── plugins/
+│   ├── <chain-type>/              # Chain-specific plugins
+│   │   ├── signer.js              # Signing implementation
+│   │   ├── builder.js             # Transaction builder
+│   │   └── simulator.js           # Transaction simulator
+│   └── ...
+└── logs/
+    └── audit.jsonl                # Append-only audit log
+```
+
+### Filesystem Permissions
+
+```
+~/.lws/                  drwx------  (700)
+~/.lws/wallets/          drwx------  (700)
+~/.lws/wallets/*.json    -rw-------  (600)
+~/.lws/policies/         drwxr-xr-x  (755)
+~/.lws/config.json       -rw-------  (600)
+~/.lws/logs/audit.jsonl  -rw-------  (600)
+```
+
+The `wallets/` directory and its contents MUST be readable only by the owner. Implementations MUST verify permissions on startup and refuse to operate if the vault directory is world-readable or group-readable.
+
+## Wallet File Format
+
+Each wallet is stored as a single JSON file extending the Ethereum Keystore v3 structure:
+
+```json
+{
+  "lws_version": 1,
+  "id": "3198bc9c-6672-5ab3-d995-4942343ae5b6",
+  "name": "agent-treasury",
+  "created_at": "2026-02-27T10:30:00Z",
+  "chain_type": "evm",
+  "accounts": [
+    {
+      "account_id": "eip155:8453:0xab16a96D359eC26a11e2C2b3d8f8B8942d5Bfcdb",
+      "address": "0xab16a96D359eC26a11e2C2b3d8f8B8942d5Bfcdb",
+      "chain_id": "eip155:8453",
+      "derivation_path": "m/44'/60'/0'/0/0"
+    }
+  ],
+  "policy_ids": ["spending-limit-01"],
+  "crypto": {
+    "cipher": "aes-256-gcm",
+    "cipherparams": {
+      "iv": "6087dab2f9fdbbfaddc31a90"
+    },
+    "ciphertext": "5318b4d5bcd28de64ee5559e671353e16f075ecae9f99c7a79a38af5f869aa46",
+    "auth_tag": "3c5d8c2f1a4b6e9d0f2a5c8b",
+    "kdf": "scrypt",
+    "kdfparams": {
+      "dklen": 32,
+      "n": 262144,
+      "r": 8,
+      "p": 1,
+      "salt": "ae3cd4e7013836a3df6bd7241b12db061dbe2c6785853cce422d148a624ce0bd"
+    }
+  },
+  "key_type": "mnemonic",
+  "metadata": {}
+}
+```
+
+### Field Definitions
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `lws_version` | integer | yes | Schema version (currently `1`) |
+| `id` | string | yes | UUID v4 wallet identifier |
+| `name` | string | yes | Human-readable wallet name |
+| `created_at` | string | yes | ISO 8601 creation timestamp |
+| `chain_type` | string | yes | Primary chain type: `evm`, `solana`, `tron`, `cosmos`, `bitcoin` |
+| `accounts` | array | yes | Derived accounts (see Account object) |
+| `policy_ids` | array | no | Attached policy IDs |
+| `crypto` | object | yes | Encryption parameters (see Crypto object) |
+| `key_type` | string | yes | `mnemonic` (BIP-39) or `private_key` (raw) |
+| `metadata` | object | no | Extensible metadata |
+
+### Crypto Object
+
+The `crypto` object follows Keystore v3 conventions with two upgrades:
+
+1. **AES-256-GCM** is the default cipher (upgraded from AES-128-CTR). GCM provides authenticated encryption, eliminating the need for a separate MAC field.
+2. **scrypt** remains the recommended KDF with the same parameter semantics. PBKDF2-SHA256 is an acceptable alternative for resource-constrained environments.
+
+| Field | Type | Description |
+|---|---|---|
+| `cipher` | string | `aes-256-gcm` (recommended) or `aes-128-ctr` (v3 compat) |
+| `cipherparams.iv` | string | Hex-encoded initialization vector |
+| `ciphertext` | string | Hex-encoded encrypted key material |
+| `auth_tag` | string | Hex-encoded GCM auth tag (only for `aes-256-gcm`) |
+| `kdf` | string | `scrypt` (recommended) or `pbkdf2` |
+| `kdfparams` | object | KDF-specific parameters |
+
+For `aes-128-ctr` (backward compat), a `mac` field with `keccak-256(dk[16..31] ++ ciphertext)` is required, following the Keystore v3 spec.
+
+### What Gets Encrypted
+
+The `ciphertext` contains the encrypted form of either:
+
+- **BIP-39 mnemonic entropy** (128 or 256 bits) — when `key_type` is `mnemonic`. The mnemonic can derive keys for any supported chain via BIP-44 derivation paths.
+- **Raw private key** (32 bytes for secp256k1/ed25519) — when `key_type` is `private_key`. Used for imported single-chain keys.
+
+Storing the mnemonic (rather than individual private keys) enables a single encrypted blob to derive accounts across multiple chains and indices.
+
+## Passphrase Management
+
+The vault passphrase is used to derive the encryption key via the configured KDF. LWS does NOT define how the passphrase is obtained — this is deliberately left to the implementation:
+
+- **Interactive CLI**: Prompt at first use, optionally cache in OS keychain for a session
+- **Agent/daemon mode**: Read from an environment variable (`LWS_PASSPHRASE`), a file descriptor, or a hardware token
+- **Unlocked mode** (development only): A config flag that uses a well-known passphrase — MUST produce a visible warning
+
+The passphrase MUST be at least 12 characters. Implementations SHOULD enforce this at wallet creation time.
+
+## Audit Log
+
+All signing operations are appended to `~/.lws/logs/audit.jsonl`:
+
+```json
+{
+  "timestamp": "2026-02-27T10:35:22Z",
+  "wallet_id": "3198bc9c-6672-5ab3-d995-4942343ae5b6",
+  "operation": "sign_transaction",
+  "chain_id": "eip155:8453",
+  "to": "0x4B0897b0513fdC7C541B6d9D7E929C4e5364D2dB",
+  "value": "1000000",
+  "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "policy_result": "allow",
+  "simulation_result": "success",
+  "tx_hash": "0xabc123..."
+}
+```
+
+The audit log is append-only. Implementations MUST NOT allow deletion or modification of existing entries. Log rotation is permitted (e.g., monthly archives).
+
+## Backward Compatibility
+
+Any valid Ethereum Keystore v3 file can be imported into an LWS vault. The importer:
+
+1. Reads the v3 JSON
+2. Wraps it in the LWS envelope (adds `lws_version`, `name`, `chain_type: "evm"`, `accounts`)
+3. Optionally re-encrypts with AES-256-GCM
+
+Exported LWS wallets with `cipher: "aes-128-ctr"` and `key_type: "private_key"` are valid Keystore v3 files (minus the LWS envelope fields, which are ignored by v3 parsers).
+
+## References
+
+- [Ethereum Web3 Secret Storage Definition](https://ethereum.org/developers/docs/data-structures-and-encoding/web3-secret-storage)
+- [ERC-2335: BLS12-381 Keystore](https://eips.ethereum.org/EIPS/eip-2335)
+- [BIP-39: Mnemonic Seed Phrases](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki)
+- [NIST SP 800-38D: GCM Mode](https://csrc.nist.gov/publications/detail/sp/800-38d/final)
+- [Privy: Low-Level Key Management](https://privy.io/blog/powering-programmable-wallets-with-low-level-key-management)

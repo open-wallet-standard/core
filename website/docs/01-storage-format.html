@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage Format - LWS Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <a href="../" class="header-logo">LWS</a>
+      <nav class="header-nav" id="nav">
+        <a href="../#principles">Principles</a>
+        <a href="../#architecture">Architecture</a>
+        <a href="../#spec">Specification</a>
+        <a href="./">Docs</a>
+      </nav>
+      <div class="header-actions">
+        <a href="./" class="btn btn-outline">Docs</a>
+        <a href="https://github.com" class="btn btn-primary">GitHub</a>
+      </div>
+      <button class="mobile-menu-btn" onclick="document.getElementById('nav').classList.toggle('active')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Specification</div>
+      <a href="./">Overview</a>
+      <a href="01-storage-format.html" class="active">01 &mdash; Storage Format</a>
+      <a href="02-chain-agnostic-addressing.html">02 &mdash; Addressing</a>
+      <a href="03-signing-interface.html">03 &mdash; Signing Interface</a>
+      <a href="04-policy-engine.html">04 &mdash; Policy Engine</a>
+      <a href="05-key-isolation.html">05 &mdash; Key Isolation</a>
+      <a href="06-agent-access-layer.html">06 &mdash; Agent Access</a>
+      <a href="07-multi-chain-support.html">07 &mdash; Multi-Chain</a>
+      <a href="08-wallet-lifecycle.html">08 &mdash; Wallet Lifecycle</a>
+    </aside>
+
+    <main class="docs-content">
+      <h1>01 &mdash; Storage Format</h1>
+      <p class="subtitle">How wallets are encrypted, structured, and stored on the local filesystem.</p>
+
+      <h2>Design Decision</h2>
+      <p><strong>LWS uses an extended Ethereum Keystore v3 format with per-chain type adaptations, stored in a well-known directory with strict filesystem permissions.</strong></p>
+
+      <h3>Why This Approach</h3>
+      <table>
+        <thead><tr><th>Approach</th><th>Pros</th><th>Cons</th></tr></thead>
+        <tbody>
+          <tr><td>Raw private keys in env vars</td><td>Simple</td><td>Catastrophically insecure; keys leak into logs, LLM contexts</td></tr>
+          <tr><td>Cloud KMS (Privy, Turnkey)</td><td>Strong security, TEE-backed</td><td>Requires network; not local-first; vendor lock-in</td></tr>
+          <tr><td>OS keychain</td><td>OS-level encryption</td><td>Not portable; no standard multi-key format</td></tr>
+          <tr><td><strong>Encrypted JSON keystore</strong></td><td>Portable, proven, auditable, local-first</td><td>Must protect against brute-force</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Vault Directory Structure</h2>
+<pre>~/.lws/
+├── config.json               # Global configuration
+├── wallets/
+│   ├── &lt;wallet-id&gt;.json      # Encrypted wallet file
+│   └── ...
+├── policies/
+│   ├── &lt;policy-id&gt;.json      # Policy definition
+│   └── ...
+├── plugins/
+│   ├── &lt;chain-type&gt;/         # Chain-specific plugins
+│   │   ├── signer.js
+│   │   ├── builder.js
+│   │   └── simulator.js
+│   └── ...
+└── logs/
+    └── audit.jsonl            # Append-only audit log</pre>
+
+      <h3>Filesystem Permissions</h3>
+<pre>~/.lws/                  drwx------  (700)
+~/.lws/wallets/          drwx------  (700)
+~/.lws/wallets/*.json    -rw-------  (600)
+~/.lws/policies/         drwxr-xr-x  (755)
+~/.lws/config.json       -rw-------  (600)
+~/.lws/logs/audit.jsonl  -rw-------  (600)</pre>
+      <p>The <code>wallets/</code> directory and its contents MUST be readable only by the owner. Implementations MUST verify permissions on startup and refuse to operate if the vault directory is world-readable or group-readable.</p>
+
+      <h2>Wallet File Format</h2>
+      <p>Each wallet is stored as a single JSON file extending the Ethereum Keystore v3 structure:</p>
+<pre>{
+  "lws_version": 1,
+  "id": "3198bc9c-6672-5ab3-d995-4942343ae5b6",
+  "name": "agent-treasury",
+  "created_at": "2026-02-27T10:30:00Z",
+  "chain_type": "evm",
+  "accounts": [
+    {
+      "account_id": "eip155:8453:0xab16a96D...",
+      "address": "0xab16a96D359eC26a11e2C2b...",
+      "chain_id": "eip155:8453",
+      "derivation_path": "m/44'/60'/0'/0/0"
+    }
+  ],
+  "policy_ids": ["spending-limit-01"],
+  "crypto": {
+    "cipher": "aes-256-gcm",
+    "cipherparams": {
+      "iv": "6087dab2f9fdbbfaddc31a90"
+    },
+    "ciphertext": "5318b4d5bcd28de64ee559...",
+    "auth_tag": "3c5d8c2f1a4b6e9d0f2a5c8b",
+    "kdf": "scrypt",
+    "kdfparams": {
+      "dklen": 32,
+      "n": 262144,
+      "r": 8,
+      "p": 1,
+      "salt": "ae3cd4e7013836a3df6bd72..."
+    }
+  },
+  "key_type": "mnemonic",
+  "metadata": {}
+}</pre>
+
+      <h2>Crypto Object</h2>
+      <p>The <code>crypto</code> object follows Keystore v3 conventions with two upgrades:</p>
+      <ol>
+        <li><strong>AES-256-GCM</strong> is the default cipher (upgraded from AES-128-CTR). GCM provides authenticated encryption, eliminating the need for a separate MAC field.</li>
+        <li><strong>scrypt</strong> remains the recommended KDF. PBKDF2-SHA256 is acceptable for resource-constrained environments.</li>
+      </ol>
+
+      <table>
+        <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>cipher</code></td><td>string</td><td><code>aes-256-gcm</code> (recommended) or <code>aes-128-ctr</code></td></tr>
+          <tr><td><code>cipherparams.iv</code></td><td>string</td><td>Hex-encoded initialization vector</td></tr>
+          <tr><td><code>ciphertext</code></td><td>string</td><td>Hex-encoded encrypted key material</td></tr>
+          <tr><td><code>auth_tag</code></td><td>string</td><td>Hex-encoded GCM auth tag (GCM only)</td></tr>
+          <tr><td><code>kdf</code></td><td>string</td><td><code>scrypt</code> (recommended) or <code>pbkdf2</code></td></tr>
+          <tr><td><code>kdfparams</code></td><td>object</td><td>KDF-specific parameters</td></tr>
+        </tbody>
+      </table>
+
+      <h2>What Gets Encrypted</h2>
+      <p>The <code>ciphertext</code> contains either:</p>
+      <ul>
+        <li><strong>BIP-39 mnemonic entropy</strong> (128 or 256 bits) &mdash; when <code>key_type</code> is <code>"mnemonic"</code>. Derives keys for any chain.</li>
+        <li><strong>Raw private key</strong> (32 bytes) &mdash; when <code>key_type</code> is <code>"private_key"</code>. For imported single-chain keys.</li>
+      </ul>
+
+      <h2>Audit Log</h2>
+      <p>All signing operations are appended to <code>~/.lws/logs/audit.jsonl</code>:</p>
+<pre>{
+  "timestamp": "2026-02-27T10:35:22Z",
+  "wallet_id": "3198bc9c-...",
+  "operation": "sign_transaction",
+  "chain_id": "eip155:8453",
+  "to": "0x4B0897b0513fdC7C541B6d9D7E929C4e5364D2dB",
+  "value": "1000000",
+  "policy_result": "allow",
+  "simulation_result": "success",
+  "tx_hash": "0xabc123..."
+}</pre>
+      <p>The audit log is append-only. Implementations MUST NOT allow deletion or modification of existing entries.</p>
+
+      <h2>Backward Compatibility</h2>
+      <p>Any valid Ethereum Keystore v3 file can be imported into an LWS vault. Exported LWS wallets with <code>cipher: "aes-128-ctr"</code> and <code>key_type: "private_key"</code> are valid Keystore v3 files.</p>
+
+      <h2>References</h2>
+      <ul>
+        <li><a href="https://ethereum.org/developers/docs/data-structures-and-encoding/web3-secret-storage">Ethereum Web3 Secret Storage Definition</a></li>
+        <li><a href="https://eips.ethereum.org/EIPS/eip-2335">ERC-2335: BLS12-381 Keystore</a></li>
+        <li><a href="https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki">BIP-39: Mnemonic Seed Phrases</a></li>
+        <li><a href="https://csrc.nist.gov/publications/detail/sp/800-38d/final">NIST SP 800-38D: GCM Mode</a></li>
+      </ul>
+
+      <div class="docs-nav">
+        <a href="./">
+          <span class="label">Previous</span>
+          <span class="title">&larr; Overview</span>
+        </a>
+        <a href="02-chain-agnostic-addressing.html" class="next">
+          <span class="label">Next</span>
+          <span class="title">02 &mdash; Addressing &rarr;</span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../js/main.js"></script>
+</body>
+</html>

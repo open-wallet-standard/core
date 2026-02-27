@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>07 — Multi-Chain Support - LWS Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <a href="../" class="header-logo">LWS</a>
+      <nav class="header-nav" id="nav">
+        <a href="../#principles">Principles</a>
+        <a href="../#architecture">Architecture</a>
+        <a href="../#spec">Specification</a>
+        <a href="./">Docs</a>
+      </nav>
+      <div class="header-actions">
+        <a href="./" class="btn btn-outline">Docs</a>
+        <a href="https://github.com" class="btn btn-primary">GitHub</a>
+      </div>
+      <button class="mobile-menu-btn" onclick="document.getElementById('nav').classList.toggle('active')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Specification</div>
+      <a href="./">Overview</a>
+      <a href="01-storage-format.html">01 &mdash; Storage Format</a>
+      <a href="02-chain-agnostic-addressing.html">02 &mdash; Addressing</a>
+      <a href="03-signing-interface.html">03 &mdash; Signing Interface</a>
+      <a href="04-policy-engine.html">04 &mdash; Policy Engine</a>
+      <a href="05-key-isolation.html">05 &mdash; Key Isolation</a>
+      <a href="06-agent-access-layer.html">06 &mdash; Agent Access</a>
+      <a href="07-multi-chain-support.html" class="active">07 &mdash; Multi-Chain</a>
+      <a href="08-wallet-lifecycle.html">08 &mdash; Wallet Lifecycle</a>
+    </aside>
+
+    <main class="docs-content">
+      <h1>07 &mdash; Multi-Chain Support</h1>
+      <p class="subtitle">How LWS supports EVM, Solana, Cosmos, Bitcoin, Tron, and future chains through a plugin architecture.</p>
+
+      <h2>Design Decision</h2>
+      <p><strong>LWS uses a plugin architecture where each blockchain family is supported by a self-contained chain plugin that implements a standard interface. The core runtime has zero chain-specific logic.</strong></p>
+
+      <h3>Why This Approach</h3>
+      <table>
+        <thead><tr><th>Approach</th><th>Pros</th><th>Cons</th></tr></thead>
+        <tbody>
+          <tr><td>Built-in support for N chains</td><td>No setup required; tightly integrated</td><td>Core bloats with every chain; updates require new releases; cannot support long-tail chains</td></tr>
+          <tr><td><strong>Plugin architecture</strong></td><td>Core stays minimal; chains added independently; community can contribute; versioned separately</td><td>Slightly more complex initial setup; plugin quality varies</td></tr>
+          <tr><td>Raw signing only (no chain awareness)</td><td>Maximum simplicity; zero chain assumptions</td><td>Callers must build transactions themselves; no simulation; no address derivation; poor developer experience</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Plugin Interface</h2>
+      <p>Every chain plugin MUST implement the <code>ChainPlugin</code> interface. This is the contract between the LWS core runtime and any blockchain integration:</p>
+
+<pre>interface ChainPlugin {
+  /** Unique chain family identifier, e.g. "evm", "solana", "cosmos" */
+  readonly chainType: string;
+
+  /** CAIP-2 chain IDs this plugin can handle */
+  readonly supportedChains: string[];
+
+  /** Elliptic curve used for key generation */
+  readonly curve: "secp256k1" | "ed25519";
+
+  /** SLIP-44 coin type for HD derivation */
+  readonly coinType: number;
+
+  /**
+   * Derive a chain-native address from a public key.
+   * @param publicKey - The raw public key bytes
+   * @param chainId  - CAIP-2 chain identifier
+   * @returns Chain-native address string
+   */
+  deriveAddress(publicKey: Uint8Array, chainId: string): string;
+
+  /**
+   * Build a chain-native transaction from a generic descriptor.
+   * @param params - Transaction parameters (to, value, data, etc.)
+   * @param chainId - CAIP-2 chain identifier
+   * @returns Serialized unsigned transaction bytes
+   */
+  buildTransaction(
+    params: Record&lt;string, unknown&gt;,
+    chainId: string
+  ): Promise&lt;Uint8Array&gt;;
+
+  /**
+   * Sign a serialized transaction with the given private key.
+   * @param tx - Unsigned transaction bytes
+   * @param privateKey - 32-byte private key
+   * @param chainId - CAIP-2 chain identifier
+   * @returns Signed transaction bytes ready for broadcast
+   */
+  sign(
+    tx: Uint8Array,
+    privateKey: Uint8Array,
+    chainId: string
+  ): Promise&lt;Uint8Array&gt;;
+
+  /**
+   * Sign an arbitrary message (EIP-191, Solana off-chain, etc.).
+   * @param message - The message to sign
+   * @param privateKey - 32-byte private key
+   * @param chainId - CAIP-2 chain identifier
+   * @returns Signature bytes
+   */
+  signMessage(
+    message: Uint8Array,
+    privateKey: Uint8Array,
+    chainId: string
+  ): Promise&lt;Uint8Array&gt;;
+
+  /**
+   * Broadcast a signed transaction to the network.
+   * @param signedTx - Signed transaction bytes
+   * @param chainId - CAIP-2 chain identifier
+   * @returns Transaction hash
+   */
+  broadcast(
+    signedTx: Uint8Array,
+    chainId: string
+  ): Promise&lt;string&gt;;
+
+  /**
+   * Simulate a transaction without broadcasting.
+   * @param tx - Unsigned transaction bytes
+   * @param chainId - CAIP-2 chain identifier
+   * @returns Simulation result with gas estimate and state changes
+   */
+  simulate(
+    tx: Uint8Array,
+    chainId: string
+  ): Promise&lt;{
+    success: boolean;
+    gasEstimate: string;
+    logs: string[];
+    error?: string;
+  }&gt;;
+
+  /**
+   * Query the balance of an address.
+   * @param address - Chain-native address
+   * @param chainId - CAIP-2 chain identifier
+   * @param asset - Optional asset identifier (defaults to native token)
+   * @returns Balance result
+   */
+  getBalance(
+    address: string,
+    chainId: string,
+    asset?: string
+  ): Promise&lt;BalanceResult&gt;;
+}
+
+interface BalanceResult {
+  /** Raw balance as a decimal string (smallest unit) */
+  raw: string;
+  /** Human-readable balance with decimals */
+  formatted: string;
+  /** Number of decimal places */
+  decimals: number;
+  /** Token symbol */
+  symbol: string;
+}</pre>
+
+      <h2>First-Party Plugins</h2>
+      <p>LWS ships with five first-party plugins covering the most widely used blockchain ecosystems. Each plugin is published as a separate npm package and can be versioned independently.</p>
+
+      <h3>EVM &mdash; <code>@lws/plugin-evm</code></h3>
+      <p>Supports Ethereum, Base, Arbitrum, Optimism, Polygon, and all EIP-155 compatible chains.</p>
+      <table>
+        <thead><tr><th>Property</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Curve</td><td><code>secp256k1</code></td></tr>
+          <tr><td>SLIP-44 Coin Type</td><td><code>60</code></td></tr>
+          <tr><td>Derivation Path</td><td><code>m/44'/60'/0'/0/{index}</code></td></tr>
+          <tr><td>Address Format</td><td>EIP-55 checksummed hex (0x-prefixed, 20 bytes)</td></tr>
+          <tr><td>Transaction Library</td><td><code>ethers</code> v6 / <code>viem</code> (configurable)</td></tr>
+          <tr><td>Signing Scheme</td><td>ECDSA over secp256k1 + keccak256</td></tr>
+          <tr><td>RPC Protocol</td><td>JSON-RPC (Ethereum JSON-RPC spec)</td></tr>
+        </tbody>
+      </table>
+
+      <h4>Transaction Format</h4>
+<pre>{
+  "type": 2,                            // EIP-1559
+  "chainId": 8453,                      // Base
+  "nonce": 42,
+  "to": "0x4B0897b0513fdC7C541B6d9D7E929C4e5364D2dB",
+  "value": "1000000000000000000",       // 1 ETH in wei
+  "data": "0x",
+  "maxFeePerGas": "30000000000",        // 30 gwei
+  "maxPriorityFeePerGas": "1000000000", // 1 gwei
+  "gasLimit": "21000"
+}</pre>
+
+      <h4>Simulation</h4>
+      <p>The EVM plugin uses <code>eth_estimateGas</code> and <code>eth_call</code> for simulation. When the configured RPC supports it, the plugin also calls <code>debug_traceCall</code> to provide detailed state-change logs. Simulation is performed before every transaction unless explicitly disabled via <code>simulate: false</code>.</p>
+
+      <h3>Solana &mdash; <code>@lws/plugin-solana</code></h3>
+      <p>Supports Solana mainnet-beta, devnet, and testnet.</p>
+      <table>
+        <thead><tr><th>Property</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Curve</td><td><code>ed25519</code></td></tr>
+          <tr><td>SLIP-44 Coin Type</td><td><code>501</code></td></tr>
+          <tr><td>Derivation Path</td><td><code>m/44'/501'/{index}'/0'</code></td></tr>
+          <tr><td>Address Format</td><td>Base58-encoded 32-byte public key</td></tr>
+          <tr><td>Transaction Library</td><td><code>@solana/web3.js</code> v2</td></tr>
+          <tr><td>Signing Scheme</td><td>Ed25519</td></tr>
+          <tr><td>RPC Protocol</td><td>Solana JSON-RPC</td></tr>
+        </tbody>
+      </table>
+
+      <h4>Transaction Format</h4>
+<pre>{
+  "recentBlockhash": "GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi",
+  "feePayer": "7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyRWXArAaKv",
+  "instructions": [
+    {
+      "programId": "11111111111111111111111111111111",
+      "keys": [
+        { "pubkey": "7S3P4Hx...", "isSigner": true, "isWritable": true },
+        { "pubkey": "Bx5hG9R...", "isSigner": false, "isWritable": true }
+      ],
+      "data": "AgAAAADoAwAAAAAAAA=="
+    }
+  ]
+}</pre>
+
+      <h4>Commitment Mapping</h4>
+      <p>Solana RPCs accept a commitment level. The plugin maps LWS confirmation levels to Solana commitments:</p>
+      <table>
+        <thead><tr><th>LWS Confirmation</th><th>Solana Commitment</th><th>Use Case</th></tr></thead>
+        <tbody>
+          <tr><td><code>fast</code></td><td><code>processed</code></td><td>Optimistic reads; lowest latency</td></tr>
+          <tr><td><code>standard</code></td><td><code>confirmed</code></td><td>Default for most operations</td></tr>
+          <tr><td><code>finalized</code></td><td><code>finalized</code></td><td>Irreversible; use for high-value transfers</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Cosmos &mdash; <code>@lws/plugin-cosmos</code></h3>
+      <p>Supports Cosmos Hub, Osmosis, and any Cosmos SDK chain with standard Amino/Direct signing.</p>
+      <table>
+        <thead><tr><th>Property</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Curve</td><td><code>secp256k1</code></td></tr>
+          <tr><td>SLIP-44 Coin Type</td><td><code>118</code></td></tr>
+          <tr><td>Derivation Path</td><td><code>m/44'/118'/0'/0/{index}</code></td></tr>
+          <tr><td>Address Format</td><td>Bech32 with chain-specific HRP (<code>cosmos1...</code>, <code>osmo1...</code>)</td></tr>
+          <tr><td>Transaction Library</td><td><code>@cosmjs/stargate</code></td></tr>
+          <tr><td>Signing Modes</td><td>SIGN_MODE_DIRECT (Protobuf) and SIGN_MODE_LEGACY_AMINO_JSON</td></tr>
+          <tr><td>RPC Protocol</td><td>Tendermint RPC + gRPC-web</td></tr>
+        </tbody>
+      </table>
+
+      <h4>Address Derivation</h4>
+      <p>Cosmos addresses are derived by taking the RIPEMD-160 hash of the SHA-256 hash of the compressed secp256k1 public key, then encoding with Bech32. The human-readable part (HRP) varies per chain:</p>
+<pre>cosmos1...   &rarr; Cosmos Hub
+osmo1...     &rarr; Osmosis
+juno1...     &rarr; Juno
+stars1...    &rarr; Stargaze</pre>
+      <p>The plugin maintains a registry mapping CAIP-2 chain IDs to their corresponding Bech32 HRP.</p>
+
+      <h3>Bitcoin &mdash; <code>@lws/plugin-bitcoin</code></h3>
+      <p>Supports Bitcoin mainnet and testnet with native SegWit (bech32) addresses.</p>
+      <table>
+        <thead><tr><th>Property</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Curve</td><td><code>secp256k1</code></td></tr>
+          <tr><td>SLIP-44 Coin Type</td><td><code>0</code></td></tr>
+          <tr><td>Derivation Path</td><td><code>m/84'/0'/0'/0/{index}</code> (BIP-84 native SegWit)</td></tr>
+          <tr><td>Address Format</td><td>Bech32 (<code>bc1q...</code> for mainnet, <code>tb1q...</code> for testnet)</td></tr>
+          <tr><td>Transaction Library</td><td><code>bitcoinjs-lib</code></td></tr>
+          <tr><td>Signing Scheme</td><td>ECDSA over secp256k1 + SHA-256d</td></tr>
+          <tr><td>UTXO Management</td><td>Built-in coin selection (branch-and-bound, then largest-first fallback)</td></tr>
+        </tbody>
+      </table>
+
+      <h4>UTXO Handling</h4>
+      <p>Unlike account-based chains, Bitcoin uses the UTXO model. The plugin automatically fetches unspent outputs for the address, selects inputs using an efficient coin-selection algorithm, and constructs the transaction with appropriate change outputs. The fee rate is estimated from the mempool or can be specified explicitly.</p>
+
+      <h3>Tron &mdash; <code>@lws/plugin-tron</code></h3>
+      <p>Supports Tron mainnet and Shasta testnet.</p>
+      <table>
+        <thead><tr><th>Property</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>Curve</td><td><code>secp256k1</code></td></tr>
+          <tr><td>SLIP-44 Coin Type</td><td><code>195</code></td></tr>
+          <tr><td>Derivation Path</td><td><code>m/44'/195'/0'/0/{index}</code></td></tr>
+          <tr><td>Address Format</td><td>Base58Check (<code>T...</code> prefix, 34 characters)</td></tr>
+          <tr><td>Transaction Library</td><td><code>tronweb</code></td></tr>
+          <tr><td>Signing Scheme</td><td>ECDSA over secp256k1 + SHA-256</td></tr>
+          <tr><td>RPC Protocol</td><td>Tron HTTP API (Full Node + Solidity Node)</td></tr>
+        </tbody>
+      </table>
+
+      <h4>Energy and Bandwidth</h4>
+      <p>Tron uses an energy/bandwidth resource model instead of a simple gas fee. The plugin estimates energy and bandwidth consumption for each transaction and warns if the account lacks sufficient resources, in which case TRX will be burned to cover the cost.</p>
+
+      <h2>Plugin Discovery</h2>
+      <p>Plugins are discovered through two mechanisms:</p>
+
+      <h3>Built-in Plugins</h3>
+      <p>The five first-party plugins listed above are bundled with the default LWS installation and are loaded automatically. They require no additional configuration.</p>
+
+      <h3>External Plugins</h3>
+      <p>Community and third-party plugins are distributed as npm packages with the <code>lws-plugin</code> keyword in their <code>package.json</code>:</p>
+<pre>{
+  "name": "@example/lws-plugin-sui",
+  "version": "1.0.0",
+  "keywords": ["lws-plugin"],
+  "main": "dist/index.js",
+  "lws": {
+    "chainType": "sui",
+    "supportedChains": [
+      "sui:mainnet",
+      "sui:testnet"
+    ]
+  }
+}</pre>
+
+      <p>After installation, external plugins are registered in <code>~/.lws/config.json</code>:</p>
+<pre>{
+  "plugins": {
+    "builtin": ["evm", "solana", "cosmos", "bitcoin", "tron"],
+    "external": [
+      {
+        "package": "@example/lws-plugin-sui",
+        "version": "^1.0.0",
+        "enabled": true
+      },
+      {
+        "package": "@example/lws-plugin-aptos",
+        "version": "^2.1.0",
+        "enabled": true
+      }
+    ]
+  }
+}</pre>
+      <p>External plugins are loaded in a sandboxed environment with limited filesystem access. They can only read their own configuration and communicate with the LWS runtime through the <code>ChainPlugin</code> interface. They MUST NOT have direct access to private keys &mdash; signing is delegated to the enclave, which calls the plugin's <code>sign()</code> method with the key material inside the isolated process.</p>
+
+      <h2>RPC Configuration</h2>
+      <p>Each chain requires an RPC endpoint for broadcasting transactions, simulating calls, and querying balances. RPC URLs are configured per chain in <code>~/.lws/config.json</code>:</p>
+<pre>{
+  "rpc": {
+    "eip155:1": {
+      "url": "https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY",
+      "timeout": 30000,
+      "retries": 3
+    },
+    "eip155:8453": {
+      "url": "https://mainnet.base.org",
+      "timeout": 30000,
+      "retries": 3
+    },
+    "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": {
+      "url": "https://api.mainnet-beta.solana.com",
+      "timeout": 60000,
+      "retries": 5
+    },
+    "cosmos:cosmoshub-4": {
+      "url": "https://rpc.cosmos.network",
+      "timeout": 30000,
+      "retries": 3
+    },
+    "bip122:000000000019d6689c085ae165831e93": {
+      "url": "https://blockstream.info/api",
+      "timeout": 30000,
+      "retries": 3
+    },
+    "tron:0x2b6653dc": {
+      "url": "https://api.trongrid.io",
+      "timeout": 30000,
+      "retries": 3
+    }
+  }
+}</pre>
+      <p>If no RPC is configured for a chain, the plugin falls back to a hardcoded default public endpoint. Implementations SHOULD warn when using default endpoints in production, as they may be rate-limited or unreliable.</p>
+
+      <h2>HD Derivation</h2>
+      <p>LWS uses BIP-32 hierarchical deterministic key derivation from a single BIP-39 mnemonic seed. Each chain plugin defines its own derivation path according to BIP-44 and SLIP-44 standards. A single mnemonic can derive keys for every supported chain:</p>
+
+<pre>                          BIP-39 Mnemonic
+                                |
+                          Master Seed (512-bit)
+                                |
+              +-----------+-----+-----+-----------+-----------+
+              |           |           |           |           |
+         m/44'/60'   m/44'/501' m/44'/118'  m/84'/0'   m/44'/195'
+          (EVM)      (Solana)   (Cosmos)   (Bitcoin)    (Tron)
+              |           |           |           |           |
+         0'/0/{i}    {i}'/0'    0'/0/{i}   0'/0/{i}   0'/0/{i}
+              |           |           |           |           |
+         0xab16...   7S3P4Hx...  cosmos1... bc1q7kw...  TJRab...</pre>
+
+      <p>The derivation follows these standards:</p>
+      <ul>
+        <li><strong>BIP-32</strong> &mdash; Defines the hierarchical deterministic wallet structure and key derivation algorithm.</li>
+        <li><strong>BIP-39</strong> &mdash; Defines the mnemonic phrase encoding (12 or 24 words) and seed generation.</li>
+        <li><strong>BIP-44</strong> &mdash; Defines the multi-account hierarchy: <code>m / purpose' / coin_type' / account' / change / address_index</code>.</li>
+        <li><strong>BIP-84</strong> &mdash; Defines the derivation path for native SegWit Bitcoin addresses (used instead of BIP-44 for Bitcoin).</li>
+        <li><strong>SLIP-44</strong> &mdash; The registered coin type table. Each chain family has a unique coin type number.</li>
+      </ul>
+
+      <p>When a wallet is created from a mnemonic, the encrypted mnemonic entropy is stored once. Account addresses for any chain can be derived on demand without storing additional key material.</p>
+
+      <h2>Adding a New Chain</h2>
+      <p>Supporting a new blockchain requires <strong>zero changes to the LWS core</strong>. The process is:</p>
+      <ol>
+        <li><strong>Implement the <code>ChainPlugin</code> interface</strong> &mdash; Create a new npm package that exports a class implementing all methods of the interface: <code>deriveAddress</code>, <code>buildTransaction</code>, <code>sign</code>, <code>signMessage</code>, <code>broadcast</code>, <code>simulate</code>, and <code>getBalance</code>.</li>
+        <li><strong>Register the CAIP-2 namespace</strong> &mdash; Define the <code>supportedChains</code> array with all CAIP-2 chain IDs the plugin handles. If the chain uses a new CAIP-2 namespace, document it in the plugin's README.</li>
+        <li><strong>Choose the derivation path</strong> &mdash; Look up the chain's registered SLIP-44 coin type. If none exists, request one from the SLIP-44 registry. Define the canonical derivation path.</li>
+        <li><strong>Publish and register</strong> &mdash; Publish the package to npm with the <code>lws-plugin</code> keyword. Users install it and add it to their <code>config.json</code> external plugins array.</li>
+        <li><strong>Test against the LWS plugin test suite</strong> &mdash; LWS provides a conformance test harness (<code>@lws/plugin-test-utils</code>) that validates every method of the <code>ChainPlugin</code> interface against known test vectors.</li>
+      </ol>
+<pre># Install the conformance test suite
+npm install --save-dev @lws/plugin-test-utils
+
+# Run conformance tests
+npx lws-plugin-test --plugin ./dist/index.js</pre>
+
+      <h2>References</h2>
+      <ul>
+        <li><a href="https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki">BIP-32: Hierarchical Deterministic Wallets</a></li>
+        <li><a href="https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki">BIP-39: Mnemonic Code for Generating Deterministic Keys</a></li>
+        <li><a href="https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki">BIP-44: Multi-Account Hierarchy for Deterministic Wallets</a></li>
+        <li><a href="https://github.com/satoshilabs/slips/blob/master/slip-0044.md">SLIP-44: Registered Coin Types for BIP-44</a></li>
+        <li><a href="https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/caip-2.md">CAIP-2: Blockchain ID Specification</a></li>
+        <li><a href="https://docs.privy.io/">Privy &mdash; Supported Chains and Wallet Infrastructure</a></li>
+        <li><a href="https://www.x402.org/">x402 &mdash; HTTP 402 Payment Protocol (scheme separation model)</a></li>
+        <li><a href="https://docs.turnkey.com/">Turnkey &mdash; Cryptographic Key Infrastructure</a></li>
+      </ul>
+
+      <div class="docs-nav">
+        <a href="06-agent-access-layer.html">
+          <span class="label">Previous</span>
+          <span class="title">&larr; 06 &mdash; Agent Access</span>
+        </a>
+        <a href="08-wallet-lifecycle.html" class="next">
+          <span class="label">Next</span>
+          <span class="title">08 &mdash; Wallet Lifecycle &rarr;</span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../js/main.js"></script>
+</body>
+</html>

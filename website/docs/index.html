@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Docs - LWS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+
+  <header class="header">
+    <div class="header-inner">
+      <a href="../" class="header-logo">LWS</a>
+      <nav class="header-nav" id="nav">
+        <a href="../#principles">Principles</a>
+        <a href="../#architecture">Architecture</a>
+        <a href="../#spec">Specification</a>
+        <a href="./">Docs</a>
+      </nav>
+      <div class="header-actions">
+        <a href="./" class="btn btn-outline">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2h7l3 3v9H3V2z"/><path d="M10 2v3h3"/><path d="M5 9h6M5 11.5h4"/></svg>
+          Docs
+        </a>
+        <a href="https://github.com" class="btn btn-primary">GitHub</a>
+      </div>
+      <button class="mobile-menu-btn" onclick="document.getElementById('nav').classList.toggle('active')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Specification</div>
+      <a href="./" class="active">Overview</a>
+      <a href="01-storage-format.html">01 &mdash; Storage Format</a>
+      <a href="02-chain-agnostic-addressing.html">02 &mdash; Addressing</a>
+      <a href="03-signing-interface.html">03 &mdash; Signing Interface</a>
+      <a href="04-policy-engine.html">04 &mdash; Policy Engine</a>
+      <a href="05-key-isolation.html">05 &mdash; Key Isolation</a>
+      <a href="06-agent-access-layer.html">06 &mdash; Agent Access</a>
+      <a href="07-multi-chain-support.html">07 &mdash; Multi-Chain</a>
+      <a href="08-wallet-lifecycle.html">08 &mdash; Wallet Lifecycle</a>
+    </aside>
+
+    <main class="docs-content">
+      <h1>Local Wallet Standard v0.1</h1>
+      <p class="subtitle">An open standard for secure local wallet storage and agent access.</p>
+
+      <h2>Abstract</h2>
+      <p>The Local Wallet Standard (LWS) defines how cryptographic wallets are stored on a local filesystem, how agents and CLI tools access them through a unified interface, and how policy-based controls govern what operations are permitted &mdash; all without ever exposing private keys to the calling process.</p>
+      <p>As AI agents become first-class participants in blockchain ecosystems &mdash; executing trades, paying for services, managing treasuries &mdash; they need a standardized, secure way to access wallets locally. Today, every tool rolls its own approach: environment variables with raw private keys, proprietary cloud APIs, bespoke keystore formats. LWS replaces this fragmentation with a single open standard.</p>
+
+      <h2>Core Types</h2>
+      <p>All types use <a href="https://chainagnostic.org/">CAIP</a> identifiers and are defined in TypeScript for clarity. Implementations may use any language.</p>
+
+<pre>// === Identifiers ===
+
+/** CAIP-2 chain identifier */
+type ChainId = `${string}:${string}`;
+// e.g. "eip155:1", "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+
+/** CAIP-10 account identifier */
+type AccountId = `${ChainId}:${string}`;
+// e.g. "eip155:1:0xab16a96d..."
+
+/** Wallet identifier (UUID v4) */
+type WalletId = string;</pre>
+
+<pre>// === Wallet Descriptor ===
+
+interface WalletDescriptor {
+  id: WalletId;
+  name: string;
+  createdAt: string;                 // ISO 8601
+  chainType: ChainType;
+  accounts: AccountDescriptor[];
+  policyIds: string[];
+  metadata: Record&lt;string, unknown&gt;;
+}
+
+interface AccountDescriptor {
+  accountId: AccountId;              // CAIP-10
+  address: string;                   // chain-native
+  derivationPath: string;            // BIP-44 path
+  chainId: ChainId;                  // CAIP-2
+}</pre>
+
+<pre>// === Operations ===
+
+interface SignRequest {
+  walletId: WalletId;
+  chainId: ChainId;
+  transaction: SerializedTransaction;
+  simulate?: boolean;                // default: true
+}
+
+interface SignAndSendRequest extends SignRequest {
+  maxRetries?: number;
+  confirmations?: number;
+}
+
+interface SignMessageRequest {
+  walletId: WalletId;
+  chainId: ChainId;
+  message: string | Uint8Array;
+  encoding?: "utf8" | "hex";
+}</pre>
+
+<pre>// === Policy ===
+
+interface Policy {
+  id: string;
+  name: string;
+  rules: PolicyRule[];
+  action: "deny" | "warn";
+}
+
+type PolicyRule =
+  | { type: "max_value"; chainId: ChainId; asset: string;
+      maxAmount: string; period?: Duration }
+  | { type: "allowlist"; addresses: string[] }
+  | { type: "denylist"; addresses: string[] }
+  | { type: "chain_restriction"; allowedChains: ChainId[] }
+  | { type: "contract_allowlist"; contracts: string[] }
+  | { type: "require_simulation" }
+  | { type: "time_restriction";
+      allowedHours: { start: number; end: number;
+                      timezone: string } }
+  | { type: "custom"; evaluator: string };</pre>
+
+      <h2>Specification Documents</h2>
+      <table>
+        <thead>
+          <tr><th>Document</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><a href="01-storage-format.html">01 &mdash; Storage Format</a></td><td>Encrypted keystore format, file layout, and vault structure</td></tr>
+          <tr><td><a href="02-chain-agnostic-addressing.html">02 &mdash; Addressing</a></td><td>CAIP-based chain and account identification</td></tr>
+          <tr><td><a href="03-signing-interface.html">03 &mdash; Signing Interface</a></td><td>The core sign, signAndSend, signMessage, and simulate operations</td></tr>
+          <tr><td><a href="04-policy-engine.html">04 &mdash; Policy Engine</a></td><td>Policy types, evaluation, and enforcement model</td></tr>
+          <tr><td><a href="05-key-isolation.html">05 &mdash; Key Isolation</a></td><td>Process isolation, enclave architecture, and threat model</td></tr>
+          <tr><td><a href="06-agent-access-layer.html">06 &mdash; Agent Access</a></td><td>MCP server, REST API, and SDK interface for agents</td></tr>
+          <tr><td><a href="07-multi-chain-support.html">07 &mdash; Multi-Chain</a></td><td>Chain plugins, derivation paths, and transaction builders</td></tr>
+          <tr><td><a href="08-wallet-lifecycle.html">08 &mdash; Wallet Lifecycle</a></td><td>Creation, import, export, backup, recovery, and migration</td></tr>
+        </tbody>
+      </table>
+
+      <h2>License</h2>
+      <p>This specification is released under <a href="https://creativecommons.org/publicdomain/zero/1.0/">CC0 1.0 Universal</a> &mdash; dedicated to the public domain.</p>
+
+      <div class="docs-nav">
+        <div></div>
+        <a href="01-storage-format.html" class="next">
+          <span class="label">Next</span>
+          <span class="title">01 &mdash; Storage Format &rarr;</span>
+        </a>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/main.js"></script>
+</body>
+</html>

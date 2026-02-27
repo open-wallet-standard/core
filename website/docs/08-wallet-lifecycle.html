@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>08 — Wallet Lifecycle - LWS Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <a href="../" class="header-logo">LWS</a>
+      <nav class="header-nav" id="nav">
+        <a href="../#principles">Principles</a>
+        <a href="../#architecture">Architecture</a>
+        <a href="../#spec">Specification</a>
+        <a href="./">Docs</a>
+      </nav>
+      <div class="header-actions">
+        <a href="./" class="btn btn-outline">Docs</a>
+        <a href="https://github.com" class="btn btn-primary">GitHub</a>
+      </div>
+      <button class="mobile-menu-btn" onclick="document.getElementById('nav').classList.toggle('active')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Specification</div>
+      <a href="./">Overview</a>
+      <a href="01-storage-format.html">01 &mdash; Storage Format</a>
+      <a href="02-chain-agnostic-addressing.html">02 &mdash; Addressing</a>
+      <a href="03-signing-interface.html">03 &mdash; Signing Interface</a>
+      <a href="04-policy-engine.html">04 &mdash; Policy Engine</a>
+      <a href="05-key-isolation.html">05 &mdash; Key Isolation</a>
+      <a href="06-agent-access-layer.html">06 &mdash; Agent Access</a>
+      <a href="07-multi-chain-support.html">07 &mdash; Multi-Chain</a>
+      <a href="08-wallet-lifecycle.html" class="active">08 &mdash; Wallet Lifecycle</a>
+    </aside>
+
+    <main class="docs-content">
+      <h1>08 &mdash; Wallet Lifecycle</h1>
+      <p class="subtitle">How wallets are created, imported, exported, backed up, recovered, and migrated.</p>
+
+      <h2>Design Decision</h2>
+      <p><strong>LWS provides complete lifecycle operations &mdash; creation, import, export, backup, recovery, and deletion &mdash; through both the CLI and the programmatic SDK, ensuring wallets can be managed by humans and agents alike.</strong></p>
+
+      <h3>Human Wallets vs. Agent Wallets</h3>
+      <p>While the underlying storage format is identical, human and agent wallets have different lifecycle priorities:</p>
+      <table>
+        <thead><tr><th>Operation</th><th>Human Wallet</th><th>Agent Wallet</th></tr></thead>
+        <tbody>
+          <tr><td>Creation</td><td>Interactive; user writes down mnemonic</td><td>Programmatic; mnemonic stored encrypted, never displayed</td></tr>
+          <tr><td>Backup</td><td>Paper seed phrase; hardware wallet</td><td>Encrypted vault backup; automated scheduled exports</td></tr>
+          <tr><td>Recovery</td><td>Manual mnemonic entry</td><td>Automated restore from encrypted backup</td></tr>
+          <tr><td>Migration</td><td>Rare; manual export/import</td><td>Common; move wallet between servers or environments</td></tr>
+          <tr><td>Deletion</td><td>Rarely needed</td><td>Frequent; ephemeral agent wallets created and destroyed per task</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Creation</h2>
+
+      <h3>Create from New Mnemonic</h3>
+      <p>The most common creation path generates a new BIP-39 mnemonic, derives initial accounts, and stores everything encrypted in the vault.</p>
+
+      <h4>CLI</h4>
+<pre>lws wallet create \
+  --name "agent-treasury" \
+  --chain evm \
+  --chains eip155:8453,eip155:1 \
+  --accounts 3 \
+  --password-env LWS_PASSWORD</pre>
+
+      <h4>TypeScript API</h4>
+<pre>import { LWS } from "@lws/sdk";
+
+const lws = new LWS();
+
+const wallet = await lws.createWallet({
+  name: "agent-treasury",
+  chainType: "evm",
+  chains: ["eip155:8453", "eip155:1"],
+  accountCount: 3,
+  password: process.env.LWS_PASSWORD,
+});
+
+// wallet.id          =&gt; "3198bc9c-6672-5ab3-d995-4942343ae5b6"
+// wallet.accounts    =&gt; [{ accountId: "eip155:8453:0xab16...", ... }, ...]
+// wallet.mnemonic    =&gt; undefined (never returned after creation)</pre>
+
+      <h4>Internal Flow</h4>
+      <p>When <code>createWallet</code> is called, the following steps execute inside the key-isolation enclave:</p>
+      <ol>
+        <li><strong>Generate entropy</strong> &mdash; 128 bits (12-word mnemonic) or 256 bits (24-word mnemonic) from a cryptographically secure random source (<code>crypto.getRandomValues</code>).</li>
+        <li><strong>Encode mnemonic</strong> &mdash; Convert entropy to a BIP-39 mnemonic phrase with checksum.</li>
+        <li><strong>Derive master seed</strong> &mdash; Apply PBKDF2-HMAC-SHA512 with the mnemonic and optional passphrase to produce a 512-bit master seed.</li>
+        <li><strong>Derive account keys</strong> &mdash; For each requested account index, derive the private key using the chain plugin's derivation path (e.g., <code>m/44'/60'/0'/0/0</code>).</li>
+        <li><strong>Derive addresses</strong> &mdash; Call the chain plugin's <code>deriveAddress()</code> with each public key.</li>
+        <li><strong>Encrypt mnemonic</strong> &mdash; Encrypt the mnemonic entropy with AES-256-GCM using a key derived from the password via scrypt.</li>
+        <li><strong>Write wallet file</strong> &mdash; Persist the encrypted wallet JSON to <code>~/.lws/wallets/&lt;wallet-id&gt;.json</code> with <code>0600</code> permissions.</li>
+        <li><strong>Clear sensitive memory</strong> &mdash; Zero out mnemonic, seed, and private key buffers. Return only the public wallet descriptor.</li>
+      </ol>
+
+      <h3>Create from Existing Private Key</h3>
+      <p>For importing a single private key (e.g., from an existing setup):</p>
+
+      <h4>CLI</h4>
+<pre>lws wallet create \
+  --name "imported-key" \
+  --chain evm \
+  --private-key-env PRIVATE_KEY \
+  --password-env LWS_PASSWORD</pre>
+
+      <h4>TypeScript API</h4>
+<pre>const wallet = await lws.createWallet({
+  name: "imported-key",
+  chainType: "evm",
+  privateKey: process.env.PRIVATE_KEY,
+  password: process.env.LWS_PASSWORD,
+});
+
+// wallet.keyType =&gt; "private_key" (not "mnemonic")</pre>
+      <p>When created from a private key, the wallet's <code>key_type</code> is set to <code>"private_key"</code>. This wallet can only derive a single account and cannot be extended to other chains or additional accounts.</p>
+
+      <h2>Import</h2>
+      <p>LWS supports importing wallets from multiple external formats.</p>
+
+      <h3>Keystore v3</h3>
+      <p>Import a standard Ethereum Keystore v3 JSON file:</p>
+<pre>lws wallet import \
+  --format keystore-v3 \
+  --file /path/to/keystore.json \
+  --source-password "original-password" \
+  --password-env LWS_PASSWORD</pre>
+      <p>The wallet is decrypted with the source password, then re-encrypted with the LWS vault password using AES-256-GCM. The original keystore file is not modified.</p>
+
+      <h3>BIP-39 Mnemonic</h3>
+      <p>Import an existing mnemonic phrase:</p>
+<pre>lws wallet import \
+  --format mnemonic \
+  --chain evm \
+  --chains eip155:8453,eip155:1 \
+  --accounts 5 \
+  --password-env LWS_PASSWORD</pre>
+      <p>The CLI will prompt interactively for the mnemonic phrase via a secure input (no echo). The phrase is validated against the BIP-39 wordlist and checksum before proceeding.</p>
+
+      <h3>WIF (Bitcoin)</h3>
+      <p>Import a Bitcoin private key in Wallet Import Format:</p>
+<pre>lws wallet import \
+  --format wif \
+  --chain bitcoin \
+  --wif-env BTC_WIF \
+  --password-env LWS_PASSWORD</pre>
+
+      <h3>Solana Keypair JSON</h3>
+      <p>Import a Solana CLI keypair file (the 64-byte JSON array format used by <code>solana-keygen</code>):</p>
+<pre>lws wallet import \
+  --format solana-keypair \
+  --file ~/.config/solana/id.json \
+  --password-env LWS_PASSWORD</pre>
+      <p>The 64-byte array is split into the 32-byte private key and 32-byte public key. The public key is verified to match the derived address before storing.</p>
+
+      <h2>Export</h2>
+      <p>LWS supports exporting wallet key material in several formats. All export operations require password authentication and produce audit log entries.</p>
+
+      <h3>Mnemonic Export</h3>
+      <p><strong>Warning:</strong> Exporting a mnemonic exposes the master key material for all accounts across all chains derived from this wallet. Handle with extreme care.</p>
+
+      <h4>CLI</h4>
+<pre>lws wallet export \
+  --wallet-id 3198bc9c-... \
+  --format mnemonic \
+  --password-env LWS_PASSWORD
+
+# Output (to stdout):
+# abandon abandon abandon abandon abandon abandon
+# abandon abandon abandon abandon abandon about</pre>
+
+      <h4>TypeScript API</h4>
+<pre>const mnemonic = await lws.exportWallet({
+  walletId: "3198bc9c-...",
+  format: "mnemonic",
+  password: process.env.LWS_PASSWORD,
+});
+
+// mnemonic =&gt; "abandon abandon abandon ..."
+// SECURITY: Clear this value from memory immediately after use</pre>
+      <p>Implementations MUST log a warning to both the console and the audit log when a mnemonic is exported. The audit log entry MUST NOT contain the mnemonic itself.</p>
+
+      <h3>Keystore v3 Export</h3>
+      <p>Export a wallet as a standard Ethereum Keystore v3 file, compatible with MetaMask, Geth, and other tools:</p>
+<pre>lws wallet export \
+  --wallet-id 3198bc9c-... \
+  --format keystore-v3 \
+  --output /path/to/exported-keystore.json \
+  --password-env LWS_PASSWORD \
+  --export-password-env EXPORT_PASSWORD</pre>
+      <p>The exported file uses the <code>EXPORT_PASSWORD</code> for encryption, which can differ from the vault password. Only single-key wallets (<code>key_type: "private_key"</code>) or the first derived key from a mnemonic wallet can be exported in this format.</p>
+
+      <h3>Raw Private Key Export</h3>
+      <p><strong>Warning:</strong> Raw private keys are the most dangerous export format. They are unencrypted and grant full control over the account.</p>
+<pre>lws wallet export \
+  --wallet-id 3198bc9c-... \
+  --format raw \
+  --account-index 0 \
+  --password-env LWS_PASSWORD
+
+# Output: 0x4c0883a69102937d623...</pre>
+      <p>Raw key export MUST require an explicit <code>--confirm-unsafe</code> flag or interactive confirmation. Implementations SHOULD refuse raw export over network interfaces (REST API, MCP) and restrict it to local CLI usage only.</p>
+
+      <h2>Backup</h2>
+      <p>LWS supports full vault backup for disaster recovery. Backups include all wallet files, policy definitions, and configuration &mdash; but NOT the audit log (which may be very large).</p>
+
+      <h3>Full Vault Backup</h3>
+<pre>lws vault backup \
+  --output /path/to/backup.lws.tar.gz.enc \
+  --password-env LWS_PASSWORD</pre>
+      <p>The backup process:</p>
+      <ol>
+        <li>Creates a tar.gz archive of <code>~/.lws/wallets/</code>, <code>~/.lws/policies/</code>, and <code>~/.lws/config.json</code>.</li>
+        <li>Encrypts the archive with AES-256-GCM using a key derived from the vault password.</li>
+        <li>Writes the encrypted archive to the specified output path.</li>
+        <li>Verifies the backup by performing a trial decryption.</li>
+      </ol>
+
+      <h3>Restore from Backup</h3>
+<pre>lws vault restore \
+  --input /path/to/backup.lws.tar.gz.enc \
+  --password-env LWS_PASSWORD \
+  --target ~/.lws</pre>
+      <p>Restore decrypts the archive and writes the wallet files, policies, and configuration to the target directory. If the target directory already contains wallets, the CLI will prompt for confirmation before overwriting. Existing wallets not present in the backup are preserved.</p>
+
+      <h3>Automated Backup</h3>
+      <p>For agent environments, automated periodic backups can be configured in <code>~/.lws/config.json</code>:</p>
+<pre>{
+  "backup": {
+    "enabled": true,
+    "schedule": "0 2 * * *",
+    "destination": "/mnt/secure-backup/lws/",
+    "retention": {
+      "daily": 7,
+      "weekly": 4,
+      "monthly": 6
+    },
+    "encryption": {
+      "method": "aes-256-gcm",
+      "keySource": "vault-password"
+    },
+    "notify": {
+      "onSuccess": false,
+      "onFailure": true,
+      "webhook": "https://hooks.example.com/backup-alerts"
+    }
+  }
+}</pre>
+
+      <h2>Recovery</h2>
+
+      <h3>From Mnemonic</h3>
+      <p>A wallet can be fully recovered from its BIP-39 mnemonic. The recovery process re-derives all accounts and scans the blockchain for activity:</p>
+<pre>lws wallet recover \
+  --chain evm \
+  --chains eip155:8453,eip155:1 \
+  --gap-limit 20 \
+  --password-env LWS_PASSWORD</pre>
+      <p>The CLI prompts for the mnemonic phrase via secure input. Recovery uses a <strong>gap limit</strong> (default: 20) &mdash; it derives consecutive account addresses and scans for on-chain activity. If 20 consecutive addresses show no transactions, scanning stops. All accounts with activity are added to the recovered wallet.</p>
+
+      <h3>From Backup</h3>
+      <p>Vault-level recovery uses the <code>lws vault restore</code> command described in the Backup section above. This is the preferred recovery method for agent wallets, as it restores not just keys but also policies, configuration, and plugin settings.</p>
+
+      <h2>Deletion</h2>
+      <p>Wallets can be permanently deleted from the vault:</p>
+<pre>lws wallet delete \
+  --wallet-id 3198bc9c-... \
+  --password-env LWS_PASSWORD \
+  --confirm</pre>
+      <p>The deletion process:</p>
+      <ol>
+        <li><strong>Authenticate</strong> &mdash; Verify the password against the wallet's encryption.</li>
+        <li><strong>Check balances</strong> &mdash; Query all accounts for remaining balances. If non-zero balances are found, display a warning and require <code>--force</code> or interactive confirmation.</li>
+        <li><strong>Remove policy bindings</strong> &mdash; Detach any policies that reference this wallet.</li>
+        <li><strong>Secure delete</strong> &mdash; Overwrite the wallet file with random bytes, then delete it. On supported filesystems, use <code>shred</code> or equivalent.</li>
+        <li><strong>Audit log</strong> &mdash; Record the deletion event (wallet ID, timestamp, account addresses) in the audit log. The audit entry persists even after the wallet file is gone.</li>
+      </ol>
+      <p>Deletion is <strong>irreversible</strong>. If the mnemonic or a backup is not available, all keys in the wallet are permanently lost. Implementations MUST make this clear to the user before proceeding.</p>
+
+      <h2>Key Rotation</h2>
+      <p>LWS provides a convenience command to rotate keys by creating a new wallet and optionally transferring assets from the old wallet:</p>
+<pre>lws wallet rotate \
+  --wallet-id 3198bc9c-... \
+  --password-env LWS_PASSWORD \
+  --transfer-assets \
+  --delete-old</pre>
+      <p>The rotation process:</p>
+      <ol>
+        <li><strong>Create a new wallet</strong> with the same chain type and account structure as the old one.</li>
+        <li><strong>Query balances</strong> on all accounts of the old wallet.</li>
+        <li><strong>Build transfer transactions</strong> from each old account to the corresponding new account (same index). For ERC-20 tokens, the plugin enumerates known token balances.</li>
+        <li><strong>Execute transfers</strong> with policy checks and simulation.</li>
+        <li><strong>Delete the old wallet</strong> (if <code>--delete-old</code> is specified) after all transfers are confirmed.</li>
+      </ol>
+      <p>Key rotation is not atomic across chains. If a transfer fails on one chain, the process halts and reports which transfers succeeded and which need manual intervention. The old wallet is NOT deleted if any transfer fails.</p>
+
+      <h2>Wallet Discovery</h2>
+      <p>Agents and CLI users can discover wallets in the vault by querying with various criteria:</p>
+
+      <h4>TypeScript API</h4>
+<pre>// List all wallets
+const all = await lws.listWallets();
+
+// Find wallets by chain type
+const evmWallets = await lws.listWallets({
+  chainType: "evm",
+});
+
+// Find wallets with a specific account on Base
+const baseWallets = await lws.listWallets({
+  chainId: "eip155:8453",
+});
+
+// Find wallet by name
+const treasury = await lws.listWallets({
+  name: "agent-treasury",
+});
+
+// Get full wallet descriptor (without key material)
+const wallet = await lws.getWallet("3198bc9c-...");
+
+// wallet =&gt; {
+//   id: "3198bc9c-...",
+//   name: "agent-treasury",
+//   chainType: "evm",
+//   createdAt: "2026-02-27T10:30:00Z",
+//   accounts: [...],
+//   policyIds: ["spending-limit-01"],
+//   keyType: "mnemonic",
+//   metadata: {}
+// }</pre>
+
+      <h4>CLI</h4>
+<pre># List all wallets
+lws wallet list
+
+# Filter by chain
+lws wallet list --chain evm
+
+# Show detailed info for a specific wallet
+lws wallet info --wallet-id 3198bc9c-...
+
+# Output:
+# Wallet: agent-treasury (3198bc9c-...)
+# Chain:  evm
+# Type:   mnemonic
+# Created: 2026-02-27T10:30:00Z
+# Accounts:
+#   [0] eip155:8453:0xab16a96D...  (Base)
+#   [1] eip155:1:0xab16a96D...     (Ethereum)
+#   [2] eip155:42161:0xab16a96D... (Arbitrum)
+# Policies: spending-limit-01</pre>
+
+      <h2>Lifecycle State Diagram</h2>
+      <p>Every wallet in LWS exists in one of four states:</p>
+
+<pre>                    +------------------+
+                    |                  |
+        +-----------+   Create (new)   |
+        |           |                  |
+        |           +------------------+
+        |
+        |           +------------------+
+        |           |                  |
+        +-----------+ Import (existing)|
+        |           |                  |
+        |           +------------------+
+        |
+        |           +------------------+
+        |           |                  |
+        +-----------+ Recover (mnemonic|
+        |           |   or backup)     |
+        |           +------------------+
+        |
+        v
+  +------------+        lock         +------------+
+  |            | ------------------&gt; |            |
+  |   Active   |                     |   Locked   |
+  |            | &lt;------------------ |            |
+  +------------+       unlock        +------------+
+        |                                   |
+        |   +------------+                  |
+        +--&gt;|            |                  |
+        |   |   Export   |                  |
+        |   |   Backup   |                  |
+        |   +------------+                  |
+        |                                   |
+        v                                   v
+  +------------+                     +------------+
+  |            |                     |            |
+  |  Deleted   |                     |  Deleted   |
+  |            |                     |            |
+  +------------+                     +------------+</pre>
+
+      <ul>
+        <li><strong>Active</strong> &mdash; The wallet is decrypted in the enclave and available for signing operations. This is the normal operating state.</li>
+        <li><strong>Locked</strong> &mdash; The wallet file exists but no decrypted key material is held in memory. The wallet must be unlocked (password provided) before any signing operation. Wallets enter this state on startup or after an inactivity timeout.</li>
+        <li><strong>Export / Backup</strong> &mdash; A side operation that can be performed from the Active state. The wallet remains active after export or backup.</li>
+        <li><strong>Deleted</strong> &mdash; The wallet file has been securely erased. This state is terminal and irreversible.</li>
+      </ul>
+
+      <h2>References</h2>
+      <ul>
+        <li><a href="https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki">BIP-39: Mnemonic Code for Generating Deterministic Keys</a></li>
+        <li><a href="https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki">BIP-44: Multi-Account Hierarchy for Deterministic Wallets</a></li>
+        <li><a href="https://ethereum.org/developers/docs/data-structures-and-encoding/web3-secret-storage">Ethereum Keystore v3 (Web3 Secret Storage Definition)</a></li>
+        <li><a href="https://docs.privy.io/">Privy &mdash; Embedded Wallet Lifecycle</a></li>
+        <li><a href="https://www.w3.org/TR/universal-wallet-2020/">W3C Universal Wallet 2020</a></li>
+        <li><a href="https://docs.solanalabs.com/cli/wallets/file-system">Solana CLI &mdash; File System Wallet</a></li>
+      </ul>
+
+      <div class="docs-nav">
+        <a href="07-multi-chain-support.html">
+          <span class="label">Previous</span>
+          <span class="title">&larr; 07 &mdash; Multi-Chain</span>
+        </a>
+        <div></div>
+      </div>
+    </main>
+  </div>
+  <script src="../js/main.js"></script>
+</body>
+</html>

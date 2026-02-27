@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LWS - Local Wallet Standard</title>
+  <meta name="description" content="An open standard for secure local wallet storage and agent access. One interface for all chains, all agents, all tools.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-inner">
+      <a href="/" class="header-logo">LWS</a>
+      <nav class="header-nav" id="nav">
+        <a href="#principles">Principles</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#spec">Specification</a>
+        <a href="#prior-art">Prior Art</a>
+      </nav>
+      <div class="header-actions">
+        <a href="docs/" class="btn btn-outline">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2h7l3 3v9H3V2z"/><path d="M10 2v3h3"/><path d="M5 9h6M5 11.5h4"/></svg>
+          Docs
+        </a>
+        <a href="https://github.com" class="btn btn-primary">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          GitHub
+        </a>
+      </div>
+      <button class="mobile-menu-btn" onclick="document.getElementById('nav').classList.toggle('active')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-badge">
+      <span class="dot"></span>
+      Open Standard v0.1
+    </div>
+    <h1 class="hero-title">LWS</h1>
+    <p class="hero-subtitle">Local Wallet Standard</p>
+    <p class="hero-description">
+      An open, neutral standard for secure local wallet storage and agent access.
+      One vault, one interface, every chain. Agents sign transactions without ever
+      touching private keys. LWS exists to give every AI agent a wallet it can
+      trust&mdash;and every user a wallet they control.
+    </p>
+    <div class="hero-actions">
+      <a href="docs/" class="btn btn-primary btn-large">Read the Spec</a>
+      <a href="#quickstart" class="btn btn-outline btn-large">Quick Start</a>
+    </div>
+
+    <!-- Code Example -->
+    <div class="code-block-wrapper" style="margin-top: 3rem;">
+      <div class="code-block-header">
+        <span class="code-block-title">Sign a transaction with one call</span>
+        <button class="code-block-copy" onclick="copyCode(this)">Copy</button>
+      </div>
+      <div class="code-block">
+<pre><span class="keyword">const</span> result = <span class="keyword">await</span> lws.signAndSend({
+  walletId: <span class="string">"agent-treasury"</span>,
+  chainId:  <span class="string">"eip155:8453"</span>,        <span class="comment">// Base</span>
+  transaction: {
+    to:    <span class="string">"0x4B08...4D2dB"</span>,
+    value: <span class="string">"10000000000000000"</span>,  <span class="comment">// 0.01 ETH</span>
+  }
+});
+<span class="comment">// Policy engine evaluates -> Simulation runs -> Key signs in enclave</span>
+<span class="comment">// => { transactionHash: "0xabc...", status: "confirmed" }</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Principles -->
+  <section class="section-full section-alt" id="principles">
+    <div class="section-full-inner">
+      <span class="section-label">Design Principles</span>
+      <h2 class="section-title">Built for the agent era</h2>
+      <p class="section-description">
+        Five principles that make LWS different from every wallet SDK, cloud API, and ad-hoc keystore that came before it.
+      </p>
+
+      <div class="principles">
+        <div class="principle">
+          <span class="principle-number">01</span>
+          <div>
+            <h3>Keys never leave the vault</h3>
+            <p>Private keys are encrypted at rest and decrypted only inside an isolated signing process. They are never exposed to agent prompts, LLM contexts, or parent processes.</p>
+          </div>
+        </div>
+        <div class="principle">
+          <span class="principle-number">02</span>
+          <div>
+            <h3>Chain-agnostic by default</h3>
+            <p>CAIP-2 chain identifiers and CAIP-10 account identifiers. EVM, Solana, Tron, Cosmos, Bitcoin&mdash;all first-class citizens. No chain is special.</p>
+          </div>
+        </div>
+        <div class="principle">
+          <span class="principle-number">03</span>
+          <div>
+            <h3>Policy before signing</h3>
+            <p>Every transaction passes through a policy engine before key material is touched. Spending limits, contract allowlists, mandatory simulation&mdash;enforced at the vault level, not the app level.</p>
+          </div>
+        </div>
+        <div class="principle">
+          <span class="principle-number">04</span>
+          <div>
+            <h3>One interface, any consumer</h3>
+            <p>CLI tools, MCP servers, REST APIs, and library imports all use the same abstract interface. A wallet created by one tool is usable by any other.</p>
+          </div>
+        </div>
+        <div class="principle">
+          <span class="principle-number">05</span>
+          <div>
+            <h3>Open and forkable</h3>
+            <p>Permissionlessly extensible. New chains, policy types, and storage backends are added via plugins, not core spec changes. CC0 licensed. No vendor lock-in.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture -->
+  <section class="section" id="architecture">
+    <span class="section-label">Architecture</span>
+    <h2 class="section-title">How it works</h2>
+    <p class="section-description">
+      Agents talk to the Access Layer. The Access Layer enforces policies, delegates signing to an isolated enclave, and never exposes key material upstream.
+    </p>
+
+    <div class="architecture">
+<pre>
+ Agent / CLI / App                        Signing Flow
+ (Claude, dawn-cli, custom)
+        │                            1. Agent calls lws.sign()
+        │ LWS Interface             2. Policy engine evaluates
+        ▼                            3. Simulation runs (optional)
+ ┌─────────────────────┐             4. Enclave decrypts key
+ │    Access Layer      │             5. Transaction signed
+ │  MCP │ REST │ SDK    │             6. Key wiped from memory
+ │      │      │        │             7. Signature returned
+ │  ┌───┴──────┴──────┐ │
+ │  │  Policy Engine   │ │            The agent NEVER sees
+ │  │  (pre-signing)   │ │            the private key.
+ │  └────────┬────────┘ │
+ │  ┌────────▼────────┐ │            Chain plugins handle
+ │  │ Signing Enclave  │ │            serialization, signing,
+ │  │ (isolated proc)  │ │            broadcasting, and
+ │  └────────┬────────┘ │            simulation per-chain.
+ │  ┌────────▼────────┐ │
+ │  │  Wallet Vault    │ │
+ │  │ ~/.lws/wallets/  │ │
+ │  └─────────────────┘ │
+ └─────────────────────┘
+</pre>
+    </div>
+
+    <!-- Flow Steps -->
+    <div class="flow">
+      <div class="flow-step">
+        <div class="flow-step-number">Step 1</div>
+        <h4>Request</h4>
+        <p>Agent calls <code>lws_sign_and_send</code> via MCP, REST, or SDK with a chain ID and transaction object.</p>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="flow-step-number">Step 2</div>
+        <h4>Policy Check</h4>
+        <p>Spending limits, allowlists, chain restrictions, and simulation requirements are evaluated before any key is touched.</p>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="flow-step-number">Step 3</div>
+        <h4>Simulate</h4>
+        <p>Transaction is simulated on-chain to verify it will succeed and preview state changes. Reverts are caught here.</p>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-step">
+        <div class="flow-step-number">Step 4</div>
+        <h4>Sign &amp; Send</h4>
+        <p>Key is decrypted in the isolated enclave, transaction signed, key wiped. Signed tx is broadcast and confirmed.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="section-full section-alt">
+    <div class="section-full-inner">
+      <span class="section-label">Why LWS</span>
+      <h2 class="section-title">Zero compromise wallet access</h2>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">&#128274;</div>
+          <h3>Zero key exposure</h3>
+          <p>Private keys are decrypted only inside an isolated subprocess. Agents, LLMs, and parent processes never see raw key material. Following the Privy/Turnkey enclave model&mdash;locally.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#9939;</div>
+          <h3>Zero chain lock-in</h3>
+          <p>CAIP-2 chain identifiers work for every chain. EVM, Solana, Cosmos, Bitcoin, Tron&mdash;and any future chain via the plugin system. Same interface, same vault, same policies.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128737;</div>
+          <h3>Zero trust required</h3>
+          <p>No cloud accounts, no API keys, no network dependency. Everything runs on your machine. Wallets are encrypted with scrypt + AES-256-GCM and stored at <code>~/.lws/</code>.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#9881;</div>
+          <h3>Zero integration friction</h3>
+          <p>MCP server for AI agents (Claude, GPT, LangChain). REST API on localhost for scripts. Library SDK for embedding. All three share one implementation.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128220;</div>
+          <h3>Zero unaudited actions</h3>
+          <p>Every signing operation is logged to an append-only audit trail. Policy evaluations, simulation results, transaction hashes&mdash;all recorded in <code>~/.lws/logs/audit.jsonl</code>.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">&#128268;</div>
+          <h3>Zero vendor lock-in</h3>
+          <p>Built on open standards: Keystore v3, BIP-39/44, CAIP-2/10, MCP. Import from MetaMask, export to any wallet. CC0 licensed&mdash;use it, fork it, extend it.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quick Start -->
+  <section class="section" id="quickstart">
+    <span class="section-label">Get Started</span>
+    <h2 class="section-title">From zero to signing in 60 seconds</h2>
+    <p class="section-description">
+      Install the CLI, create a wallet, attach a policy, and start signing. Works with any agent that supports MCP.
+    </p>
+
+    <div class="code-block-wrapper" style="max-width: 100%;">
+      <div class="code-block-header">
+        <span class="code-block-title">Terminal</span>
+        <button class="code-block-copy" onclick="copyCode(this)">Copy</button>
+      </div>
+      <div class="code-block">
+<pre><span class="comment"># Install</span>
+npm install -g @lws/cli
+
+<span class="comment"># Create a wallet</span>
+lws wallet create --name "agent-treasury" --chain evm
+<span class="comment"># => Created wallet 3198bc9c-... with account eip155:8453:0xab16...</span>
+
+<span class="comment"># Attach a safety policy</span>
+lws policy create --name "safe-agent" \
+  --rule <span class="string">'max_value:eip155:8453:native:1.0:daily'</span> \
+  --rule <span class="string">'require_simulation'</span>
+lws policy attach --wallet agent-treasury --policy safe-agent
+
+<span class="comment"># Start the MCP server (agents connect here)</span>
+lws serve --mcp
+
+<span class="comment"># Or start the REST API</span>
+lws serve --rest --port 8402
+
+<span class="comment"># Sign a transaction directly</span>
+lws tx sign --wallet agent-treasury \
+  --chain eip155:8453 \
+  --to 0x4B0897b0513fdC7C541B6d9D7E929C4e5364D2dB \
+  --value 0.01</pre>
+      </div>
+    </div>
+
+    <!-- MCP Config -->
+    <div class="code-block-wrapper" style="max-width: 100%; margin-top: 1.5rem;">
+      <div class="code-block-header">
+        <span class="code-block-title">claude_code_config.json — Connect Claude to LWS</span>
+        <button class="code-block-copy" onclick="copyCode(this)">Copy</button>
+      </div>
+      <div class="code-block">
+<pre>{
+  <span class="string">"mcpServers"</span>: {
+    <span class="string">"lws"</span>: {
+      <span class="string">"command"</span>: <span class="string">"lws"</span>,
+      <span class="string">"args"</span>: [<span class="string">"serve"</span>, <span class="string">"--mcp"</span>]
+    }
+  }
+}</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Specification -->
+  <section class="section-full section-alt" id="spec">
+    <div class="section-full-inner">
+      <span class="section-label">Specification</span>
+      <h2 class="section-title">Modular by design</h2>
+      <p class="section-description">
+        Eight sub-specifications, each covering a distinct concern. Add a new chain without touching the signing interface. Change the policy engine without touching storage.
+      </p>
+
+      <div class="spec-grid">
+        <a href="docs/01-storage-format.html" class="spec-card">
+          <div class="spec-card-number">Spec 01</div>
+          <h3>Storage Format</h3>
+          <p>Encrypted keystore format, vault directory structure, filesystem permissions, and audit logging.</p>
+        </a>
+        <a href="docs/02-chain-agnostic-addressing.html" class="spec-card">
+          <div class="spec-card-number">Spec 02</div>
+          <h3>Chain-Agnostic Addressing</h3>
+          <p>CAIP-2 chain IDs, CAIP-10 account IDs, asset identification, and method invocation routing.</p>
+        </a>
+        <a href="docs/03-signing-interface.html" class="spec-card">
+          <div class="spec-card-number">Spec 03</div>
+          <h3>Signing Interface</h3>
+          <p>The core sign, signAndSend, signMessage, and simulate operations with error handling.</p>
+        </a>
+        <a href="docs/04-policy-engine.html" class="spec-card">
+          <div class="spec-card-number">Spec 04</div>
+          <h3>Policy Engine</h3>
+          <p>Spending limits, allowlists, denylists, simulation requirements, time restrictions, and custom rules.</p>
+        </a>
+        <a href="docs/05-key-isolation.html" class="spec-card">
+          <div class="spec-card-number">Spec 05</div>
+          <h3>Key Isolation</h3>
+          <p>Process-level isolation, enclave protocol, passphrase handling, threat model, and defense in depth.</p>
+        </a>
+        <a href="docs/06-agent-access-layer.html" class="spec-card">
+          <div class="spec-card-number">Spec 06</div>
+          <h3>Agent Access Layer</h3>
+          <p>MCP server tools, REST API endpoints, library SDK, and authentication for agent access.</p>
+        </a>
+        <a href="docs/07-multi-chain-support.html" class="spec-card">
+          <div class="spec-card-number">Spec 07</div>
+          <h3>Multi-Chain Support</h3>
+          <p>Chain plugin interface, HD derivation, first-party plugins for EVM/Solana/Cosmos/Bitcoin/Tron.</p>
+        </a>
+        <a href="docs/08-wallet-lifecycle.html" class="spec-card">
+          <div class="spec-card-number">Spec 08</div>
+          <h3>Wallet Lifecycle</h3>
+          <p>Creation, import, export, backup, recovery, key rotation, and wallet discovery.</p>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Comparison -->
+  <section class="section">
+    <span class="section-label">Landscape</span>
+    <h2 class="section-title">How LWS compares</h2>
+    <p class="section-description">
+      Existing solutions are cloud-first. LWS is local-first with an upgrade path to TEEs.
+    </p>
+
+    <div style="overflow-x: auto;">
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>LWS</th>
+            <th>Privy</th>
+            <th>Turnkey</th>
+            <th>Coinbase CDP</th>
+            <th>Lit Protocol</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Local-first</strong></td>
+            <td style="color: var(--green); font-weight: 600;">Yes</td>
+            <td>No (cloud)</td>
+            <td>No (cloud)</td>
+            <td>No (cloud)</td>
+            <td>No (network)</td>
+          </tr>
+          <tr>
+            <td><strong>Key isolation</strong></td>
+            <td>OS process</td>
+            <td>TEE + SSS</td>
+            <td>AWS Nitro</td>
+            <td>TEE</td>
+            <td>DKG threshold</td>
+          </tr>
+          <tr>
+            <td><strong>Multi-chain</strong></td>
+            <td>Plugin system</td>
+            <td>Tiered support</td>
+            <td>Curve primitives</td>
+            <td>EVM + Solana</td>
+            <td>ECDSA chains</td>
+          </tr>
+          <tr>
+            <td><strong>Policy engine</strong></td>
+            <td>Pre-signing</td>
+            <td>Pre-signing</td>
+            <td>API-level</td>
+            <td>Session caps</td>
+            <td>On-chain</td>
+          </tr>
+          <tr>
+            <td><strong>Agent interface</strong></td>
+            <td>MCP + REST</td>
+            <td>REST + SDK</td>
+            <td>REST</td>
+            <td>AgentKit</td>
+            <td>Vincent SDK</td>
+          </tr>
+          <tr>
+            <td><strong>Open standard</strong></td>
+            <td style="color: var(--green); font-weight: 600;">CC0</td>
+            <td>Proprietary</td>
+            <td>Proprietary</td>
+            <td>Partial (x402)</td>
+            <td>Open source</td>
+          </tr>
+          <tr>
+            <td><strong>Network required</strong></td>
+            <td style="color: var(--green); font-weight: 600;">No*</td>
+            <td>Yes</td>
+            <td>Yes</td>
+            <td>Yes</td>
+            <td>Yes</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size: 0.8125rem; color: var(--gray-400); margin-top: 0.5rem;">
+      * Network required only for transaction broadcasting and balance queries, not for signing.
+    </p>
+  </section>
+
+  <!-- Prior Art -->
+  <section class="section-full section-alt" id="prior-art">
+    <div class="section-full-inner">
+      <span class="section-label">Prior Art</span>
+      <h2 class="section-title">Standing on the shoulders of</h2>
+      <p class="section-description">
+        LWS synthesizes ideas from the best wallet infrastructure in the industry.
+      </p>
+
+      <div class="prior-art-grid">
+        <div class="prior-art-item">
+          <div>
+            <h4>x402</h4>
+            <p>Spec structure, scheme/network/transport separation, contribution templates</p>
+          </div>
+        </div>
+        <div class="prior-art-item">
+          <div>
+            <h4>Privy</h4>
+            <p>Policy engine design, key sharding concepts, CAIP-2 chain identifiers</p>
+          </div>
+        </div>
+        <div class="prior-art-item">
+          <div>
+            <h4>Coinbase AgentKit</h4>
+            <p>ActionProvider/WalletProvider pattern, MCP tool exposure</p>
+          </div>
+        </div>
+        <div class="prior-art-item">
+          <div>
+            <h4>Keystore v3</h4>
+            <p>Proven encrypted storage format since 2015</p>
+          </div>
+        </div>
+        <div class="prior-art-item">
+          <div>
+            <h4>CAIP Standards</h4>
+            <p>Chain-agnostic identifiers for chains, accounts, and methods</p>
+          </div>
+        </div>
+        <div class="prior-art-item">
+          <div>
+            <h4>ERC-4337</h4>
+            <p>Session keys, programmable validation, paymaster sponsorship</p>
+          </div>
+        </div>
+        <div class="prior-art-item">
+          <div>
+            <h4>Turnkey</h4>
+            <p>TEE-based signing, sub-100ms latency targets</p>
+          </div>
+        </div>
+        <div class="prior-art-item">
+          <div>
+            <h4>W3C Universal Wallet</h4>
+            <p>lock/unlock/import/export interface patterns</p>
+          </div>
+        </div>
+        <div class="prior-art-item">
+          <div>
+            <h4>Solana Wallet Standard</h4>
+            <p>Feature-based capability registration</p>
+          </div>
+        </div>
+        <div class="prior-art-item">
+          <div>
+            <h4>Crossmint</h4>
+            <p>Dual-key model, on-chain policy enforcement</p>
+          </div>
+        </div>
+        <div class="prior-art-item">
+          <div>
+            <h4>Lit Protocol</h4>
+            <p>Decentralized key management, IPFS-published policies</p>
+          </div>
+        </div>
+        <div class="prior-art-item">
+          <div>
+            <h4>WalletConnect v2</h4>
+            <p>Session authorization model, relay architecture</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="section-full section-dark">
+    <div class="section-full-inner" style="text-align: center; padding: 4rem 0;">
+      <h2 class="section-title" style="color: var(--white); margin-bottom: 1rem;">Every agent deserves a wallet.<br>Every wallet deserves a standard.</h2>
+      <p class="section-description" style="margin: 0 auto 2rem; color: var(--gray-400);">
+        Read the spec. Build an implementation. Join the standard.
+      </p>
+      <div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
+        <a href="docs/" class="btn btn-primary btn-large" style="background: var(--white); color: var(--black);">Read the Specification</a>
+        <a href="https://github.com" class="btn btn-outline btn-large" style="border-color: var(--gray-600); color: var(--gray-300);">View on GitHub</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <div>
+        <div class="footer-brand">LWS</div>
+        <p class="footer-description">
+          The Local Wallet Standard. An open specification for secure local wallet storage and agent access. CC0 licensed.
+        </p>
+      </div>
+      <div class="footer-col">
+        <h4>Specification</h4>
+        <a href="docs/">Overview</a>
+        <a href="docs/01-storage-format.html">Storage Format</a>
+        <a href="docs/03-signing-interface.html">Signing Interface</a>
+        <a href="docs/04-policy-engine.html">Policy Engine</a>
+      </div>
+      <div class="footer-col">
+        <h4>Architecture</h4>
+        <a href="docs/05-key-isolation.html">Key Isolation</a>
+        <a href="docs/06-agent-access-layer.html">Agent Access</a>
+        <a href="docs/07-multi-chain-support.html">Multi-Chain</a>
+        <a href="docs/08-wallet-lifecycle.html">Lifecycle</a>
+      </div>
+      <div class="footer-col">
+        <h4>Community</h4>
+        <a href="https://github.com">GitHub</a>
+        <a href="#">Discord</a>
+        <a href="#">Contributing</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>CC0 1.0 Universal &mdash; Public Domain</span>
+      <span>Local Wallet Standard v0.1</span>
+    </div>
+  </footer>
+
+  <script src="js/main.js"></script>
+</body>
+</html>

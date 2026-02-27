@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Policy Engine - LWS Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <a href="../" class="header-logo">LWS</a>
+      <nav class="header-nav" id="nav">
+        <a href="../#principles">Principles</a>
+        <a href="../#architecture">Architecture</a>
+        <a href="../#spec">Specification</a>
+        <a href="./">Docs</a>
+      </nav>
+      <div class="header-actions">
+        <a href="./" class="btn btn-outline">Docs</a>
+        <a href="https://github.com" class="btn btn-primary">GitHub</a>
+      </div>
+      <button class="mobile-menu-btn" onclick="document.getElementById('nav').classList.toggle('active')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Specification</div>
+      <a href="./">Overview</a>
+      <a href="01-storage-format.html">01 &mdash; Storage Format</a>
+      <a href="02-chain-agnostic-addressing.html">02 &mdash; Addressing</a>
+      <a href="03-signing-interface.html">03 &mdash; Signing Interface</a>
+      <a href="04-policy-engine.html" class="active">04 &mdash; Policy Engine</a>
+      <a href="05-key-isolation.html">05 &mdash; Key Isolation</a>
+      <a href="06-agent-access-layer.html">06 &mdash; Agent Access</a>
+      <a href="07-multi-chain-support.html">07 &mdash; Multi-Chain</a>
+      <a href="08-wallet-lifecycle.html">08 &mdash; Wallet Lifecycle</a>
+    </aside>
+
+    <main class="docs-content">
+      <h1>04 &mdash; Policy Engine</h1>
+      <p class="subtitle">How transaction policies are defined, evaluated, and enforced before any key material is touched.</p>
+
+      <h2>Design Decision</h2>
+      <p><strong>LWS enforces all policy checks before decrypting key material. The policy engine acts as a pre-signing gate &mdash; if a transaction violates any rule, the signing process never begins and the private key is never loaded into memory.</strong></p>
+
+      <h3>Why This Approach</h3>
+      <table>
+        <thead><tr><th>Approach</th><th>Pros</th><th>Cons</th></tr></thead>
+        <tbody>
+          <tr><td>Application-layer checks (SDK validation)</td><td>Simple to implement</td><td>Bypassable; no enforcement guarantee; keys already decrypted</td></tr>
+          <tr><td>Smart contract guards (on-chain)</td><td>Tamper-proof; verifiable</td><td>Gas costs; chain-specific; cannot prevent signing itself</td></tr>
+          <tr><td><strong>Pre-signing gate (policy engine)</strong></td><td>Keys never touched if denied; chain-agnostic; auditable</td><td>Must trust the local runtime</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Policy Structure</h2>
+      <p>A policy is a JSON document containing an array of rules. Each rule is evaluated independently, and all rules must pass for the transaction to proceed.</p>
+<pre>{
+  "id": "spending-limit-01",
+  "name": "Agent Treasury Policy",
+  "rules": [
+    {
+      "type": "max_value",
+      "chainId": "eip155:8453",
+      "asset": "native",
+      "maxAmount": "1000000000000000000",
+      "period": "24h"
+    },
+    {
+      "type": "contract_allowlist",
+      "contracts": [
+        "eip155:8453:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "eip155:8453:0x4200000000000000000000000000000000000006"
+      ]
+    },
+    {
+      "type": "require_simulation"
+    },
+    {
+      "type": "chain_restriction",
+      "allowedChains": [
+        "eip155:8453",
+        "eip155:1"
+      ]
+    }
+  ],
+  "action": "deny"
+}</pre>
+
+      <h2>Rule Types</h2>
+
+      <h3><code>max_value</code> &mdash; Spending Limits</h3>
+      <p>Limits the total value that can be sent within a rolling time period. The <code>maxAmount</code> is denominated in the asset's smallest unit (wei for ETH, lamports for SOL).</p>
+<pre>{
+  "type": "max_value",
+  "chainId": "eip155:8453",
+  "asset": "native",
+  "maxAmount": "1000000000000000000",
+  "period": "24h"
+}</pre>
+      <p>Supported period values: <code>"1h"</code>, <code>"24h"</code>, <code>"7d"</code>, <code>"30d"</code>. If <code>period</code> is omitted, the limit applies as a lifetime cap. The implementation tracks cumulative spending in a local state file (see <strong>Spending State</strong> below).</p>
+
+      <h3><code>allowlist</code> &mdash; Allowed Addresses</h3>
+      <p>Only permits transactions to addresses in the list. If the <code>to</code> address is not in the allowlist, the transaction is denied.</p>
+<pre>{
+  "type": "allowlist",
+  "addresses": [
+    "0x4B0897b0513fdC7C541B6d9D7E929C4e5364D2dB",
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+  ]
+}</pre>
+
+      <h3><code>denylist</code> &mdash; Blocked Addresses</h3>
+      <p>Blocks transactions to any address in the list. If the <code>to</code> address is in the denylist, the transaction is denied immediately.</p>
+<pre>{
+  "type": "denylist",
+  "addresses": [
+    "0xKnownScamAddress...",
+    "0xSanctionedAddress..."
+  ]
+}</pre>
+
+      <h3><code>chain_restriction</code> &mdash; Allowed Chains</h3>
+      <p>Restricts the wallet to only operate on specified chains. Any transaction targeting a chain not in the list is denied.</p>
+<pre>{
+  "type": "chain_restriction",
+  "allowedChains": [
+    "eip155:8453",
+    "eip155:1",
+    "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+  ]
+}</pre>
+
+      <h3><code>contract_allowlist</code> &mdash; Allowed Contracts</h3>
+      <p>Limits contract interactions to a known set of verified contracts. Uses CAIP asset identifiers to scope contracts to specific chains.</p>
+<pre>{
+  "type": "contract_allowlist",
+  "contracts": [
+    "eip155:8453:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "eip155:8453:0x4200000000000000000000000000000000000006",
+    "eip155:1:0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+  ]
+}</pre>
+
+      <h3><code>require_simulation</code> &mdash; Mandatory Simulation</h3>
+      <p>Forces every transaction to be simulated before signing. If simulation fails or returns warnings, the transaction is denied.</p>
+<pre>{
+  "type": "require_simulation"
+}</pre>
+
+      <h3><code>time_restriction</code> &mdash; Time-Based Access</h3>
+      <p>Restricts signing operations to specific hours of the day. Useful for limiting agent activity to business hours.</p>
+<pre>{
+  "type": "time_restriction",
+  "allowedHours": {
+    "start": 9,
+    "end": 17,
+    "timezone": "America/New_York"
+  }
+}</pre>
+
+      <h3><code>custom</code> &mdash; Custom Evaluator</h3>
+      <p>Allows arbitrary policy logic via a custom evaluator function. The evaluator receives the full transaction context and returns an allow/deny decision.</p>
+<pre>{
+  "type": "custom",
+  "evaluator": "~/.lws/plugins/custom-policy.js"
+}</pre>
+      <p>The evaluator module MUST export a function with the following signature:</p>
+<pre>type PolicyEvaluator = (context: PolicyContext) =&gt; Promise&lt;PolicyResult&gt;;
+
+interface PolicyContext {
+  walletId: string;
+  chainId: string;                   // CAIP-2
+  transaction: SerializedTransaction;
+  simulation?: SimulationResult;
+  spendingHistory: SpendingRecord[];
+  timestamp: string;                 // ISO 8601
+}
+
+interface PolicyResult {
+  allowed: boolean;
+  reason?: string;
+  warnings?: string[];
+}</pre>
+      <p>Custom evaluators run in a sandboxed context with no network access and no access to key material. They MUST return within 5 seconds or the evaluation times out and the transaction is denied.</p>
+
+      <h2>Evaluation Order</h2>
+      <p>Rules are evaluated in a fixed order, regardless of their position in the policy's <code>rules</code> array. This ensures consistent, predictable behavior:</p>
+      <ol>
+        <li><strong>Chain restriction</strong> &mdash; reject if the chain is not allowed.</li>
+        <li><strong>Denylist</strong> &mdash; reject if the target address is blocked.</li>
+        <li><strong>Allowlist</strong> &mdash; reject if the target address is not in the allowed set.</li>
+        <li><strong>Contract allowlist</strong> &mdash; reject if the contract is not in the allowed set.</li>
+        <li><strong>Require simulation</strong> &mdash; run simulation and reject if it fails.</li>
+        <li><strong>Max value</strong> &mdash; reject if cumulative spending exceeds the limit.</li>
+        <li><strong>Time restriction</strong> &mdash; reject if outside allowed hours.</li>
+        <li><strong>Custom</strong> &mdash; run custom evaluator(s) last.</li>
+      </ol>
+      <p>Evaluation is short-circuiting: if any rule denies the transaction, subsequent rules are not evaluated.</p>
+
+      <h2>Policy Actions</h2>
+      <p>Each policy specifies an <code>action</code> that determines what happens when a rule is violated:</p>
+      <table>
+        <thead><tr><th>Action</th><th>Behavior</th><th>Use Case</th></tr></thead>
+        <tbody>
+          <tr><td><code>deny</code></td><td>Transaction is blocked. The signing process does not begin. An <code>LwsError</code> with code <code>POLICY_DENIED</code> is returned.</td><td>Production policies, spending limits, security restrictions</td></tr>
+          <tr><td><code>warn</code></td><td>Transaction proceeds but a warning is logged to the audit log and returned in the response. The agent or user can decide whether to continue.</td><td>Monitoring, soft limits during development, gradual policy rollout</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Policy Attachment</h2>
+      <p>Policies are attached to wallets. Each wallet can have one active policy. Policies are stored as separate JSON files in <code>~/.lws/policies/</code> and referenced by ID in the wallet file.</p>
+
+      <h3>CLI</h3>
+<pre># Create a policy
+lws policy create --name "Agent Treasury Policy" --file policy.json
+
+# Attach a policy to a wallet
+lws policy attach --wallet agent-treasury --policy spending-limit-01
+
+# View the active policy for a wallet
+lws policy show --wallet agent-treasury
+
+# Detach a policy
+lws policy detach --wallet agent-treasury</pre>
+
+      <h3>Programmatic</h3>
+<pre>// Attach a policy to a wallet
+await lws.attachPolicy({
+  walletId: "3198bc9c-6672-5ab3-d995-4942343ae5b6",
+  policyId: "spending-limit-01"
+});
+
+// Create and attach inline
+await lws.createPolicy({
+  name: "Quick Limit",
+  rules: [
+    { type: "max_value", chainId: "eip155:8453", asset: "native",
+      maxAmount: "500000000000000000", period: "24h" }
+  ],
+  action: "deny"
+});</pre>
+
+      <h2>Spending State</h2>
+      <p>The policy engine tracks cumulative spending in a local state file at <code>~/.lws/spending.json</code>. This file is updated after every successful signing operation:</p>
+<pre>{
+  "wallet:3198bc9c-6672-5ab3-d995-4942343ae5b6": {
+    "eip155:8453:native": {
+      "total": "450000000000000000",
+      "entries": [
+        {
+          "amount": "200000000000000000",
+          "timestamp": "2026-02-27T10:35:22Z",
+          "txHash": "0xabc123..."
+        },
+        {
+          "amount": "250000000000000000",
+          "timestamp": "2026-02-27T14:12:08Z",
+          "txHash": "0xdef456..."
+        }
+      ]
+    }
+  }
+}</pre>
+      <p>Entries older than the policy's <code>period</code> are pruned on each evaluation. The spending state file uses the same filesystem permissions as wallet files (<code>600</code>) and MUST NOT be world-readable.</p>
+
+      <h2>References</h2>
+      <ul>
+        <li><a href="https://docs.privy.io/guide/react/wallets/smart-wallets/policies">Privy Policy Engine</a></li>
+        <li><a href="https://docs.crossmint.com/">Crossmint Documentation</a></li>
+        <li><a href="https://eips.ethereum.org/EIPS/eip-4337">ERC-4337: Account Abstraction</a></li>
+        <li><a href="https://docs.litprotocol.com/">Lit Protocol / Vincent</a></li>
+        <li><a href="https://docs.turnkey.com/">Turnkey Documentation</a></li>
+        <li><a href="https://docs.cdp.coinbase.com/">Coinbase Developer Platform</a></li>
+      </ul>
+
+      <div class="docs-nav">
+        <a href="03-signing-interface.html">
+          <span class="label">Previous</span>
+          <span class="title">&larr; 03 &mdash; Signing Interface</span>
+        </a>
+        <a href="05-key-isolation.html" class="next">
+          <span class="label">Next</span>
+          <span class="title">05 &mdash; Key Isolation &rarr;</span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../js/main.js"></script>
+</body>
+</html>

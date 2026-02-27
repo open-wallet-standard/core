@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.privy.io)",
+      "WebFetch(domain:www.x402.org)",
+      "WebFetch(domain:privy.io)",
+      "WebFetch(domain:docs.cdp.coinbase.com)",
+      "WebFetch(domain:openclawcash.com)",
+      "WebFetch(domain:docs.crossmint.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:blog.crossmint.com)",
+      "WebFetch(domain:www.turnkey.com)",
+      "WebFetch(domain:ppaolo.substack.com)",
+      "WebFetch(domain:w3c-ccg.github.io)",
+      "WebFetch(domain:ethereum.org)",
+      "WebFetch(domain:thedefiant.io)",
+      "WebFetch(domain:build.avax.network)",
+      "WebFetch(domain:specs.walletconnect.com)",
+      "WebFetch(domain:blog.quicknode.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:spark.litprotocol.com)",
+      "WebFetch(domain:blog.thirdweb.com)",
+      "WebFetch(domain:lobehub.com)"
+    ]
+  }
+}

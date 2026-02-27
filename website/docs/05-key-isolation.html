@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>05 — Key Isolation - LWS Docs</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <a href="../" class="header-logo">LWS</a>
+      <nav class="header-nav" id="nav">
+        <a href="../#principles">Principles</a>
+        <a href="../#architecture">Architecture</a>
+        <a href="../#spec">Specification</a>
+        <a href="./">Docs</a>
+      </nav>
+      <div class="header-actions">
+        <a href="./" class="btn btn-outline">Docs</a>
+        <a href="https://github.com" class="btn btn-primary">GitHub</a>
+      </div>
+      <button class="mobile-menu-btn" onclick="document.getElementById('nav').classList.toggle('active')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar">
+      <div class="docs-sidebar-title">Specification</div>
+      <a href="./">Overview</a>
+      <a href="01-storage-format.html">01 &mdash; Storage Format</a>
+      <a href="02-chain-agnostic-addressing.html">02 &mdash; Addressing</a>
+      <a href="03-signing-interface.html">03 &mdash; Signing Interface</a>
+      <a href="04-policy-engine.html">04 &mdash; Policy Engine</a>
+      <a href="05-key-isolation.html" class="active">05 &mdash; Key Isolation</a>
+      <a href="06-agent-access-layer.html">06 &mdash; Agent Access</a>
+      <a href="07-multi-chain-support.html">07 &mdash; Multi-Chain</a>
+      <a href="08-wallet-lifecycle.html">08 &mdash; Wallet Lifecycle</a>
+    </aside>
+
+    <main class="docs-content">
+      <h1>05 &mdash; Key Isolation</h1>
+      <p class="subtitle">How LWS prevents private keys from leaking to agents, LLMs, logs, or parent processes.</p>
+
+      <h2>Design Decision</h2>
+      <p><strong>LWS uses subprocess isolation: a dedicated signing enclave process holds decrypted key material, and the parent process (agent, CLI, app) communicates with it exclusively over a Unix domain socket. The parent never sees the private key.</strong></p>
+
+      <h3>Isolation Approach Comparison</h3>
+      <table>
+        <thead>
+          <tr><th>Approach</th><th>Security</th><th>Performance</th><th>Complexity</th><th>Used By</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>In-process (key in memory)</td>
+            <td>Low &mdash; any library or LLM context can read the key</td>
+            <td>Fastest</td>
+            <td>Trivial</td>
+            <td>ethers.js Wallet, viem Account</td>
+          </tr>
+          <tr>
+            <td>TEE enclaves (SGX, TrustZone)</td>
+            <td>Very high &mdash; hardware-attested isolation</td>
+            <td>Near-native</td>
+            <td>Very high &mdash; requires specific hardware, attestation infra</td>
+            <td>Privy, Phala, Turnkey</td>
+          </tr>
+          <tr>
+            <td>MPC / threshold signing</td>
+            <td>High &mdash; no single party holds full key</td>
+            <td>Slow (multi-round)</td>
+            <td>Very high &mdash; distributed protocol, key resharing</td>
+            <td>Lit Protocol, Fireblocks</td>
+          </tr>
+          <tr>
+            <td><strong>Subprocess isolation</strong></td>
+            <td>High &mdash; OS process boundary, no shared memory</td>
+            <td>Fast (~1ms IPC overhead)</td>
+            <td>Low &mdash; standard OS primitives</td>
+            <td><strong>LWS</strong>, ssh-agent, gpg-agent</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>Subprocess isolation provides strong security guarantees using only standard OS primitives. It requires no special hardware, no network connectivity, and no multi-party coordination. The same model has been proven in production by <code>ssh-agent</code> and <code>gpg-agent</code> for decades.</p>
+
+      <h2>Architecture</h2>
+<pre>
+┌──────────────────────────┐         ┌──────────────────────────┐
+│                          │         │                          │
+│   Agent / CLI / App      │         │   Signing Enclave        │
+│   (parent process)       │         │   (child process)        │
+│                          │         │                          │
+│   ┌──────────────────┐   │         │   ┌──────────────────┐   │
+│   │ Has:             │   │  JSON   │   │ Has:             │   │
+│   │ - wallet IDs     │   │  -RPC   │   │ - decrypted keys │   │
+│   │ - public addrs   │◄──┼────────►│   │ - signing logic  │   │
+│   │ - policy engine  │   │  over   │   │ - KDF state      │   │
+│   │ - chain RPCs     │   │  Unix   │   │ - mlock'd memory │   │
+│   │                  │   │ Socket  │   │                  │   │
+│   │ Does NOT have:   │   │         │   │ Does NOT have:   │   │
+│   │ - private keys   │   │         │   │ - network access │   │
+│   │ - seed phrases   │   │         │   │ - filesystem I/O │   │
+│   │ - KDF state      │   │         │   │ - LLM context    │   │
+│   └──────────────────┘   │         │   └──────────────────┘   │
+│                          │         │                          │
+└──────────────────────────┘         └──────────────────────────┘
+</pre>
+
+      <p>The parent process spawns the signing enclave as a child process at startup. The enclave:</p>
+      <ol>
+        <li>Creates a Unix domain socket at a randomized path under <code>/tmp/lws-&lt;random&gt;/enclave.sock</code></li>
+        <li>Sets socket permissions to <code>0600</code> (owner-only)</li>
+        <li>Drops all capabilities except signing</li>
+        <li>Optionally applies <code>seccomp</code> or <code>pledge</code> filters to block network, filesystem, and <code>exec</code> syscalls</li>
+      </ol>
+
+      <h2>Enclave Protocol</h2>
+      <p>Communication between the parent and enclave uses JSON-RPC 2.0 over a Unix domain socket. The protocol is deliberately minimal.</p>
+
+      <h3>Request Format</h3>
+<pre>{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "sign",
+  "params": {
+    "wallet_id": "3198bc9c-6672-5ab3-d995-4942343ae5b6",
+    "chain_id": "eip155:8453",
+    "payload": "0x02f87083014a34...",
+    "encoding": "hex"
+  }
+}</pre>
+
+      <h3>Response Format</h3>
+<pre>{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "signature": "0x3045022100...",
+    "public_key": "0x04a1b2c3d4...",
+    "encoding": "hex"
+  }
+}</pre>
+
+      <h3>Error Response</h3>
+<pre>{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32001,
+    "message": "wallet is locked",
+    "data": { "wallet_id": "3198bc9c-..." }
+  }
+}</pre>
+
+      <h3>Enclave Methods</h3>
+      <table>
+        <thead>
+          <tr><th>Method</th><th>Description</th><th>Parameters</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>sign</code></td>
+            <td>Sign a transaction payload</td>
+            <td><code>wallet_id</code>, <code>chain_id</code>, <code>payload</code>, <code>encoding</code></td>
+          </tr>
+          <tr>
+            <td><code>sign_message</code></td>
+            <td>Sign an arbitrary message</td>
+            <td><code>wallet_id</code>, <code>chain_id</code>, <code>message</code>, <code>encoding</code></td>
+          </tr>
+          <tr>
+            <td><code>unlock</code></td>
+            <td>Decrypt a wallet&rsquo;s key material into memory</td>
+            <td><code>wallet_id</code>, <code>passphrase</code></td>
+          </tr>
+          <tr>
+            <td><code>lock</code></td>
+            <td>Zero and release a wallet&rsquo;s decrypted key material</td>
+            <td><code>wallet_id</code></td>
+          </tr>
+          <tr>
+            <td><code>status</code></td>
+            <td>Return the lock state of all wallets</td>
+            <td><em>(none)</em></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Key Lifecycle Within the Enclave</h2>
+      <p>The enclave follows a strict sequence for handling key material:</p>
+      <ol>
+        <li><strong>Receive request</strong> &mdash; The enclave receives a JSON-RPC <code>sign</code> or <code>sign_message</code> request over the Unix socket.</li>
+        <li><strong>Verify wallet is unlocked</strong> &mdash; Check that the requested <code>wallet_id</code> has been previously unlocked. If not, return error code <code>-32001</code>.</li>
+        <li><strong>Retrieve key from mlock&rsquo;d region</strong> &mdash; The decrypted key material is held in memory pages locked with <code>mlock(2)</code> to prevent swapping to disk.</li>
+        <li><strong>Derive signing key</strong> &mdash; If the wallet stores a mnemonic, derive the chain-specific private key using the appropriate BIP-44 derivation path.</li>
+        <li><strong>Hash the payload</strong> &mdash; Apply the chain-appropriate hashing algorithm (e.g., Keccak-256 for EVM, SHA-256 for Bitcoin).</li>
+        <li><strong>Produce signature</strong> &mdash; Sign the hash using the chain-appropriate algorithm (e.g., ECDSA secp256k1 for EVM, Ed25519 for Solana).</li>
+        <li><strong>Zero derived key immediately</strong> &mdash; If a derived key was created in step 4, it is overwritten with zeros and freed immediately after signing. Only the master key/mnemonic persists in the mlock&rsquo;d region.</li>
+        <li><strong>Return signature</strong> &mdash; The signature and public key are returned to the parent. No key material ever crosses the socket boundary.</li>
+      </ol>
+
+      <h2>Passphrase Handling</h2>
+      <p>The <code>unlock</code> method requires a passphrase to decrypt the wallet. LWS supports three delivery methods:</p>
+
+      <h3>1. Interactive Prompt</h3>
+      <p>The default method. The enclave opens <code>/dev/tty</code> directly and reads the passphrase, bypassing stdin entirely. This ensures the passphrase never flows through the parent process.</p>
+<pre>$ lws unlock agent-treasury
+Enter passphrase for agent-treasury: ********
+Wallet unlocked.</pre>
+
+      <h3>2. Environment Variable</h3>
+      <p>For automated environments, the passphrase can be passed via an environment variable set <em>only</em> on the enclave process:</p>
+<pre>// Parent spawns enclave with passphrase in env
+spawn("lws-enclave", {
+  env: { LWS_PASSPHRASE: passphrase }
+})
+// Parent immediately clears its own copy
+passphrase = undefined;</pre>
+      <p>The enclave reads <code>LWS_PASSPHRASE</code>, copies it to mlock&rsquo;d memory, and immediately overwrites the environment variable.</p>
+
+      <h3>3. File Descriptor</h3>
+      <p>The most secure automated method. The parent writes the passphrase to a pipe, and the enclave reads it from the inherited file descriptor:</p>
+<pre>// Parent creates pipe and passes read-end FD to enclave
+const [readFd, writeFd] = pipe();
+spawn("lws-enclave", { stdio: ["pipe", "pipe", "pipe", readFd] });
+write(writeFd, passphrase);
+close(writeFd);
+// Passphrase only exists momentarily in kernel pipe buffer</pre>
+
+      <h2>Threat Model</h2>
+      <table>
+        <thead>
+          <tr><th>Threat</th><th>Mitigation</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Agent exfiltration &mdash; LLM or agent code attempts to read private keys</td>
+            <td>Keys exist only in the enclave process. The parent (where agents run) has no access to key memory.</td>
+          </tr>
+          <tr>
+            <td>Parent memory read &mdash; attacker reads parent process memory</td>
+            <td>No key material exists in parent memory. Only wallet IDs, public addresses, and signatures.</td>
+          </tr>
+          <tr>
+            <td>Logging / LLM context leak &mdash; keys accidentally logged or sent to LLM</td>
+            <td>Keys never enter the parent process, so they cannot be logged or included in LLM prompts.</td>
+          </tr>
+          <tr>
+            <td>Core dump &mdash; crash produces memory dump containing keys</td>
+            <td>Enclave disables core dumps via <code>prctl(PR_SET_DUMPABLE, 0)</code> on Linux. On macOS, <code>PT_DENY_ATTACH</code> is used.</td>
+          </tr>
+          <tr>
+            <td>Swap to disk &mdash; OS swaps key-containing pages to disk</td>
+            <td>All key material is held in <code>mlock(2)</code>&rsquo;d pages that the OS cannot swap.</td>
+          </tr>
+          <tr>
+            <td>Cold boot attack &mdash; attacker reads RAM after power loss</td>
+            <td>Partially mitigated by zeroing keys on lock. Full mitigation requires hardware (TEE) or encrypted RAM.</td>
+          </tr>
+          <tr>
+            <td>Compromised enclave binary &mdash; attacker replaces the signing binary</td>
+            <td>Binary integrity checks on startup. Implementations SHOULD verify the enclave binary hash against a known value.</td>
+          </tr>
+          <tr>
+            <td>Brute-force passphrase &mdash; attacker tries passphrases offline</td>
+            <td>scrypt with N=262144, r=8, p=1 makes brute-force extremely expensive (~1 second per attempt on modern hardware).</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Defense in Depth</h2>
+      <p>Subprocess isolation is the baseline. LWS defines extension points for additional security layers, all communicating through the same enclave protocol:</p>
+
+      <h3>1. OS-Level Sandboxing</h3>
+      <p>On supported platforms, the enclave restricts its own syscalls:</p>
+      <ul>
+        <li><strong>Linux:</strong> <code>seccomp-bpf</code> &mdash; allow only <code>read</code>, <code>write</code>, <code>mmap</code>, <code>mlock</code>, <code>munlock</code>, <code>close</code>, <code>exit_group</code>, and crypto-related syscalls.</li>
+        <li><strong>OpenBSD:</strong> <code>pledge("stdio")</code> &mdash; restrict to standard I/O only.</li>
+        <li><strong>macOS:</strong> <code>sandbox-exec</code> profile denying network and filesystem access.</li>
+      </ul>
+
+      <h3>2. TEE Backends</h3>
+      <p>On systems with Trusted Execution Environments, the enclave can run inside a TEE:</p>
+      <ul>
+        <li><strong>Intel SGX:</strong> Enclave runs in an SGX enclave with remote attestation.</li>
+        <li><strong>ARM TrustZone:</strong> Key material stored in the secure world, inaccessible from the normal world.</li>
+        <li><strong>Apple Secure Enclave:</strong> Key generation and signing delegated to the Secure Enclave Processor (SEP).</li>
+      </ul>
+
+      <h3>3. Hardware Wallet Delegation</h3>
+      <p>The enclave can delegate signing to an external hardware wallet:</p>
+      <ul>
+        <li><strong>Ledger / Trezor:</strong> The enclave forwards the sign request to the connected hardware wallet via USB/HID. The hardware wallet holds the key and produces the signature.</li>
+        <li>The enclave protocol remains identical &mdash; the parent process does not know or care whether signing happens in software or hardware.</li>
+      </ul>
+
+      <h3>4. Key Sharding (Shamir&rsquo;s Secret Sharing)</h3>
+      <p>For high-value wallets, the encrypted key can be split into <em>n</em> shares with a threshold of <em>k</em>:</p>
+      <ul>
+        <li>Shares can be distributed across multiple machines, USB drives, or trusted parties.</li>
+        <li>The enclave reconstructs the key from <em>k</em> shares at unlock time, then immediately discards the individual shares.</li>
+        <li>This adds offline redundancy without requiring MPC infrastructure.</li>
+      </ul>
+
+      <h2>Industry Comparison</h2>
+      <table>
+        <thead>
+          <tr><th>Provider</th><th>Isolation Model</th><th>Key Storage</th><th>Local-First?</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Privy</td>
+            <td>TEE + Shamir&rsquo;s Secret Sharing</td>
+            <td>Three-share split (device, auth, recovery)</td>
+            <td>No &mdash; requires Privy servers</td>
+          </tr>
+          <tr>
+            <td>Turnkey</td>
+            <td>AWS Nitro Enclaves</td>
+            <td>Encrypted in Nitro TEE</td>
+            <td>No &mdash; requires AWS infrastructure</td>
+          </tr>
+          <tr>
+            <td>Coinbase (CDP)</td>
+            <td>TEE-based MPC</td>
+            <td>Split across Coinbase and developer TEEs</td>
+            <td>No &mdash; requires Coinbase API</td>
+          </tr>
+          <tr>
+            <td>Lit Protocol</td>
+            <td>Distributed Key Generation (DKG)</td>
+            <td>Shares across Lit node operators</td>
+            <td>No &mdash; requires Lit network</td>
+          </tr>
+          <tr>
+            <td>Crossmint</td>
+            <td>Dual-key + TEE</td>
+            <td>User key + custodial key</td>
+            <td>No &mdash; requires Crossmint API</td>
+          </tr>
+          <tr>
+            <td>Phala Network</td>
+            <td>Intel SGX enclaves</td>
+            <td>Inside SGX enclave on Phala workers</td>
+            <td>No &mdash; requires Phala workers</td>
+          </tr>
+          <tr>
+            <td><strong>LWS</strong></td>
+            <td><strong>OS process isolation</strong></td>
+            <td><strong>Encrypted on local filesystem</strong></td>
+            <td><strong>Yes &mdash; fully offline capable</strong></td>
+          </tr>
+        </tbody>
+      </table>
+      <p>LWS is the only approach that provides strong key isolation without requiring network connectivity, cloud infrastructure, or specialized hardware. When hardware is available (TEEs, hardware wallets), LWS can leverage it as an additional layer.</p>
+
+      <h2>References</h2>
+      <ul>
+        <li><a href="https://man.openbsd.org/ssh-agent">ssh-agent(1) &mdash; OpenBSD Manual</a></li>
+        <li><a href="https://www.gnupg.org/documentation/manuals/gnupg/Agent-Protocol.html">GnuPG Agent Protocol</a></li>
+        <li><a href="https://man7.org/linux/man-pages/man2/mlock.2.html">mlock(2) &mdash; Linux Manual</a></li>
+        <li><a href="https://man7.org/linux/man-pages/man2/seccomp.2.html">seccomp(2) &mdash; Linux Manual</a></li>
+        <li><a href="https://www.jsonrpc.org/specification">JSON-RPC 2.0 Specification</a></li>
+        <li><a href="https://en.wikipedia.org/wiki/Shamir%27s_secret_sharing">Shamir&rsquo;s Secret Sharing</a></li>
+      </ul>
+
+      <div class="docs-nav">
+        <a href="04-policy-engine.html">
+          <span class="label">Previous</span>
+          <span class="title">&larr; 04 &mdash; Policy Engine</span>
+        </a>
+        <a href="06-agent-access-layer.html" class="next">
+          <span class="label">Next</span>
+          <span class="title">06 &mdash; Agent Access &rarr;</span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <script src="../js/main.js"></script>
+</body>
+</html>
