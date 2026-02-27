@@ -18,21 +18,22 @@ var isFirstBlockquote = true;
 marked.use({
   renderer: {
     blockquote: function (token) {
+      var body = this.parser.parse(token.tokens);
       if (isFirstBlockquote) {
         isFirstBlockquote = false;
-        // body is already-parsed HTML; strip wrapping <p> tags for subtitle
-        var inner = token.body.replace(/^<p>/, '').replace(/<\/p>\n?$/, '');
+        var inner = body.replace(/^<p>/, '').replace(/<\/p>\n?$/, '');
         return '<p class="subtitle">' + inner + '</p>\n';
       }
-      return '<blockquote>' + token.body + '</blockquote>\n';
+      return '<blockquote>' + body + '</blockquote>\n';
     },
 
     heading: function (token) {
+      var text = this.parser.parseInline(token.tokens);
       var id = token.text.toLowerCase()
         .replace(/<[^>]+>/g, '')
         .replace(/[^\w]+/g, '-')
         .replace(/(^-|-$)/g, '');
-      return '<h' + token.depth + ' id="' + id + '">' + token.text + '</h' + token.depth + '>\n';
+      return '<h' + token.depth + ' id="' + id + '">' + text + '</h' + token.depth + '>\n';
     },
 
     code: function (token) {
