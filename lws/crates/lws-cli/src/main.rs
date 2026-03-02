@@ -23,11 +23,8 @@ enum Commands {
         #[arg(long, default_value = "12")]
         words: u32,
     },
-    /// Derive an address from a mnemonic
+    /// Derive an address from a mnemonic (reads from LWS_MNEMONIC env or stdin)
     Derive {
-        /// BIP-39 mnemonic phrase
-        #[arg(long)]
-        mnemonic: String,
         /// Chain type (evm, solana, bitcoin, cosmos, tron)
         #[arg(long)]
         chain: String,
@@ -35,11 +32,8 @@ enum Commands {
         #[arg(long, default_value = "0")]
         index: u32,
     },
-    /// Sign a message with a mnemonic-derived key
+    /// Sign a message with a mnemonic-derived key (reads from LWS_MNEMONIC env or stdin)
     Sign {
-        /// BIP-39 mnemonic phrase
-        #[arg(long)]
-        mnemonic: String,
         /// Chain type (evm, solana, bitcoin, cosmos, tron)
         #[arg(long)]
         chain: String,
@@ -129,17 +123,12 @@ fn main() {
 fn run(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         Commands::Generate { words } => commands::generate::run(words),
-        Commands::Derive {
-            mnemonic,
-            chain,
-            index,
-        } => commands::derive::run(&mnemonic, &chain, index),
+        Commands::Derive { chain, index } => commands::derive::run(&chain, index),
         Commands::Sign {
-            mnemonic,
             chain,
             message,
             index,
-        } => commands::sign::run(&mnemonic, &chain, &message, index),
+        } => commands::sign::run(&chain, &message, index),
         Commands::Info => commands::info::run(),
         Commands::CreateWallet {
             name,
