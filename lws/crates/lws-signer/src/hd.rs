@@ -42,6 +42,41 @@ impl HdDeriver {
         Self::derive(seed.expose(), path, curve)
     }
 
+    /// Like `derive_from_mnemonic`, but checks the global key cache first.
+    /// On cache miss, derives the key and inserts it into the cache.
+    pub fn derive_from_mnemonic_cached(
+        mnemonic: &Mnemonic,
+        passphrase: &str,
+        path: &str,
+        curve: Curve,
+    ) -> Result<SecretBytes, HdError> {
+        use digest::Digest;
+
+        // Build a cache key by hashing all inputs (avoids storing sensitive material in the key).
+        let phrase = mnemonic.phrase();
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(phrase.expose());
+        hasher.update(b":");
+        hasher.update(passphrase.as_bytes());
+        hasher.update(b":");
+        hasher.update(path.as_bytes());
+        hasher.update(b":");
+        hasher.update(match curve {
+            Curve::Secp256k1 => b"secp256k1" as &[u8],
+            Curve::Ed25519 => b"ed25519",
+        });
+        let cache_key = hex::encode(hasher.finalize());
+
+        let cache = crate::global_key_cache();
+        if let Some(cached) = cache.get(&cache_key) {
+            return Ok(cached);
+        }
+
+        let key = Self::derive_from_mnemonic(mnemonic, passphrase, path, curve)?;
+        cache.insert(&cache_key, key.clone());
+        Ok(key)
+    }
+
     /// Validate a derivation path. Must start with "m/" and contain valid indices.
     pub fn validate_path(path: &str) -> Result<(), HdError> {
         if !path.starts_with("m/") && path != "m" {
@@ -92,6 +127,8 @@ impl HdDeriver {
 
     /// SLIP-10 derivation for ed25519 (hardened-only, HMAC-SHA512 chain).
     fn derive_ed25519(seed: &[u8], path: &str) -> Result<SecretBytes, HdError> {
+        use zeroize::Zeroize;
+
         // Parse path components
         let components = if path == "m" {
             vec![]
@@ -122,8 +159,11 @@ impl HdDeriver {
         let mut chain_code = result[32..].to_vec();
 
         // Derive each component (hardened only)
+        let mut data = Vec::new();
         for index in components {
-            let mut data = vec![0u8]; // 0x00 prefix for private key derivation
+            data.zeroize();
+            data.clear();
+            data.push(0u8); // 0x00 prefix for private key derivation
             data.extend_from_slice(&key);
             data.extend_from_slice(&(index + 0x80000000u32).to_be_bytes());
 
@@ -132,10 +172,14 @@ impl HdDeriver {
             mac.update(&data);
             let result = mac.finalize().into_bytes();
 
+            key.zeroize();
+            chain_code.zeroize();
             key = result[..32].to_vec();
             chain_code = result[32..].to_vec();
         }
 
+        data.zeroize();
+        chain_code.zeroize();
         Ok(SecretBytes::new(key))
     }
 }

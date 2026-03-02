@@ -104,11 +104,26 @@ fn parse_chain(s: &str) -> Result<ChainType, CliError> {
 }
 
 fn main() {
+    lws_signer::process_hardening::harden_process();
+
+    // Eagerly initialize the global key cache and register it for zeroization
+    // on termination signals (SIGTERM, SIGINT, SIGHUP).
+    let cache = lws_signer::global_key_cache();
+    lws_signer::process_hardening::register_cleanup(move || cache.clear());
+    lws_signer::process_hardening::install_signal_handlers();
+
     let cli = Cli::parse();
-    if let Err(e) = run(cli) {
-        eprintln!("error: {e}");
-        std::process::exit(1);
-    }
+    let code = match run(cli) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    };
+
+    // Explicitly zeroize all cached key material before exiting.
+    lws_signer::global_key_cache().clear();
+    std::process::exit(code);
 }
 
 fn run(cli: Cli) -> Result<(), CliError> {

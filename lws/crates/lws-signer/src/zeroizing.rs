@@ -1,10 +1,12 @@
+use crate::process_hardening::{mlock_slice, munlock_slice};
 use zeroize::Zeroize;
 
 /// A byte buffer that is zeroed on drop.
 ///
 /// This is the primary type used to hold sensitive key material.
 /// It ensures that the underlying bytes are securely wiped from memory
-/// when the value is dropped.
+/// when the value is dropped. On Unix, the buffer is mlocked to prevent
+/// swapping to disk.
 pub struct SecretBytes {
     inner: Vec<u8>,
 }
@@ -12,14 +14,19 @@ pub struct SecretBytes {
 impl SecretBytes {
     /// Create from an owned Vec.
     pub fn new(data: Vec<u8>) -> Self {
+        if !data.is_empty() {
+            mlock_slice(data.as_ptr(), data.len());
+        }
         SecretBytes { inner: data }
     }
 
     /// Create from a byte slice (copies the data).
     pub fn from_slice(data: &[u8]) -> Self {
-        SecretBytes {
-            inner: data.to_vec(),
+        let inner = data.to_vec();
+        if !inner.is_empty() {
+            mlock_slice(inner.as_ptr(), inner.len());
         }
+        SecretBytes { inner }
     }
 
     /// Expose the underlying bytes. Use with care.
@@ -40,15 +47,16 @@ impl SecretBytes {
 
 impl Clone for SecretBytes {
     fn clone(&self) -> Self {
-        SecretBytes {
-            inner: self.inner.clone(),
-        }
+        SecretBytes::from_slice(&self.inner)
     }
 }
 
 impl Drop for SecretBytes {
     fn drop(&mut self) {
+        let ptr = self.inner.as_ptr();
+        let len = self.inner.len();
         self.inner.zeroize();
+        munlock_slice(ptr, len);
     }
 }
 

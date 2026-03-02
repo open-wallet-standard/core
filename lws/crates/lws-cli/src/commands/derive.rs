@@ -9,7 +9,7 @@ pub fn run(mnemonic_phrase: &str, chain_str: &str, index: u32) -> Result<(), Cli
     let path = signer.default_derivation_path(index);
     let curve = signer.curve();
 
-    let key = HdDeriver::derive_from_mnemonic(&mnemonic, "", &path, curve)?;
+    let key = HdDeriver::derive_from_mnemonic_cached(&mnemonic, "", &path, curve)?;
     let address = signer.derive_address(key.expose())?;
 
     println!("{address}");

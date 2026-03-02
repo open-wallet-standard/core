@@ -1,7 +1,9 @@
 pub mod chains;
 pub mod curve;
 pub mod hd;
+pub mod key_cache;
 pub mod mnemonic;
+pub mod process_hardening;
 pub mod traits;
 pub mod zeroizing;
 
@@ -11,6 +13,17 @@ pub use hd::HdDeriver;
 pub use mnemonic::{Mnemonic, MnemonicStrength};
 pub use traits::{ChainSigner, SignOutput, SignerError};
 pub use zeroizing::SecretBytes;
+
+use key_cache::KeyCache;
+use std::sync::OnceLock;
+use std::time::Duration;
+
+static GLOBAL_KEY_CACHE: OnceLock<KeyCache> = OnceLock::new();
+
+/// Returns the process-wide key cache (5s TTL, max 32 entries).
+pub fn global_key_cache() -> &'static KeyCache {
+    GLOBAL_KEY_CACHE.get_or_init(|| KeyCache::new(Duration::from_secs(5), 32))
+}
 
 #[cfg(test)]
 mod integration_tests {
