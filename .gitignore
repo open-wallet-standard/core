@@ -10,3 +10,10 @@ __pycache__/
 # TypeScript SDK
 sdks/typescript/node_modules/
 sdks/typescript/dist/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
