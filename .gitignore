@@ -1,2 +1,12 @@
 website/docs/md/
 lws/target/
+
+# Python SDK
+sdks/python/.venv/
+sdks/python/.pytest_cache/
+sdks/python/src/*.egg-info/
+__pycache__/
+
+# TypeScript SDK
+sdks/typescript/node_modules/
+sdks/typescript/dist/

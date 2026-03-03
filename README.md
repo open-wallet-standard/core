@@ -31,6 +31,10 @@ LWS addresses this gap. It defines a minimal, chain-agnostic standard for wallet
 │       ├── lws-core/                # Core types, CAIP parsing, config (zero crypto deps)
 │       └── lws-signer/             # Signing, HD derivation, chain-specific implementations
 │
+├── sdks/                        # Client SDKs for the LWS REST API
+│   ├── python/                      # Python SDK (async + sync, httpx)
+│   └── typescript/                  # TypeScript SDK (@lws/sdk, native fetch)
+│
 └── website/                     # Documentation site (localwalletstandard.org)
 ```
 
@@ -51,6 +55,61 @@ cd lws
 cargo build --workspace --release
 cargo test --workspace
 ```
+
+## SDKs
+
+LWS provides client SDKs that wrap the REST API (`http://127.0.0.1:8402`) with full type safety.
+
+### Python
+
+```bash
+pip install lws
+```
+
+```python
+from lws import LWSClient, ChainType
+
+async with LWSClient(api_key="lws_key_...") as client:
+    wallets = await client.list_wallets()
+    result = await client.sign_and_send(
+        wallet_id=wallets[0].id,
+        chain_id="eip155:8453",
+        transaction={"to": "0x...", "value": "1000000000000000"},
+    )
+    print(result.tx_hash)
+```
+
+A synchronous client is also available:
+
+```python
+from lws import LWSClientSync
+
+with LWSClientSync(api_key="lws_key_...") as client:
+    wallets = client.list_wallets()
+```
+
+### TypeScript
+
+```bash
+npm install @lws/sdk
+```
+
+```typescript
+import { LWSClient } from "@lws/sdk";
+
+const client = new LWSClient({ apiKey: "lws_key_..." });
+
+const wallets = await client.listWallets();
+const result = await client.signAndSend({
+  wallet_id: wallets[0].id,
+  chain: "eip155:8453",
+  transaction: { to: "0x...", value: "1000000000000000" },
+});
+
+console.log(result.tx_hash);
+```
+
+Both SDKs require Node 18+ (TypeScript) or Python 3.10+ (Python). See the full API in `sdks/python/` and `sdks/typescript/`.
 
 ## License
 
