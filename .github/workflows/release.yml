@@ -31,6 +31,7 @@ jobs:
           git push
 
   build:
+    needs: bump-version
     strategy:
       matrix:
         include:
@@ -91,6 +92,7 @@ jobs:
           path: lws/${{ matrix.asset }}
 
   python-wheels:
+    needs: bump-version
     strategy:
       matrix:
         include:
@@ -138,7 +140,7 @@ jobs:
           path: bindings/python/dist/*.whl
 
   publish-pypi:
-    needs: [python-wheels, bump-version]
+    needs: python-wheels
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -155,6 +157,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
 
   node-addons:
+    needs: bump-version
     strategy:
       matrix:
         include:
@@ -223,7 +226,7 @@ jobs:
             bindings/node/index.d.ts
 
   publish-npm:
-    needs: [node-addons, build, bump-version]
+    needs: [node-addons, build]
     runs-on: ubuntu-latest
     environment: release
 
@@ -303,7 +306,7 @@ jobs:
         run: npm publish --access public --ignore-scripts
 
   release:
-    needs: [build, bump-version]
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
