@@ -115,7 +115,7 @@ Agent / CLI / App
 
 ## Specification
 
-The full spec lives in [`docs/`](docs/) and at [localwalletstandard.org](https://localwalletstandard.org):
+The full spec lives in [`docs/`](docs/) and at [openwallet.sh](https://openwallet.sh):
 
 1. [Storage Format](docs/01-storage-format.md) — Vault layout, Keystore v3, filesystem permissions
 2. [Chain-Agnostic Addressing](docs/02-chain-agnostic-addressing.md) — CAIP-2/CAIP-10 standards
