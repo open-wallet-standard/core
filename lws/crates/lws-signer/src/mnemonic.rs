@@ -59,8 +59,11 @@ impl Mnemonic {
 
     /// Returns the number of words in this mnemonic.
     pub fn word_count(&self) -> usize {
-        let phrase = self.inner.to_phrase();
-        phrase.split_whitespace().count()
+        let mut phrase = self.inner.to_phrase();
+        let count = phrase.split_whitespace().count();
+        // Zeroize the temporary string to prevent mnemonic leaking in memory.
+        zeroize::Zeroize::zeroize(unsafe { phrase.as_mut_vec() });
+        count
     }
 }
 

@@ -9,7 +9,8 @@
   ],
   "main": "lws-node.linux-x64-gnu.node",
   "files": [
-    "lws-node.linux-x64-gnu.node"
+    "lws-node.linux-x64-gnu.node",
+    "lws"
   ],
   "license": "MIT"
 }

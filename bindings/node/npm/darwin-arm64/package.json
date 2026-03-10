@@ -9,7 +9,8 @@
   ],
   "main": "lws-node.darwin-arm64.node",
   "files": [
-    "lws-node.darwin-arm64.node"
+    "lws-node.darwin-arm64.node",
+    "lws"
   ],
   "license": "MIT"
 }

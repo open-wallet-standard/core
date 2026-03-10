@@ -58,9 +58,18 @@ fn derive_all_accounts(mnemonic: &Mnemonic, index: u32) -> Result<Vec<WalletAcco
 }
 
 /// A key pair: one key per curve.
+/// Private key material is zeroized on drop.
 struct KeyPair {
     secp256k1: Vec<u8>,
     ed25519: Vec<u8>,
+}
+
+impl Drop for KeyPair {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.secp256k1.zeroize();
+        self.ed25519.zeroize();
+    }
 }
 
 impl KeyPair {
@@ -496,10 +505,11 @@ fn decrypt_signing_key(
 
     match wallet.key_type {
         KeyType::Mnemonic => {
-            let phrase = String::from_utf8(secret.expose().to_vec()).map_err(|_| {
+            // Use the SecretBytes directly as a &str to avoid un-zeroized String copies.
+            let phrase = std::str::from_utf8(secret.expose()).map_err(|_| {
                 LwsLibError::InvalidInput("wallet contains invalid UTF-8 mnemonic".into())
             })?;
-            let mnemonic = Mnemonic::from_phrase(&phrase)?;
+            let mnemonic = Mnemonic::from_phrase(phrase)?;
             let signer = signer_for_chain(chain_type);
             let path = signer.default_derivation_path(index.unwrap_or(0));
             let curve = signer.curve();
@@ -890,10 +900,22 @@ mod tests {
         let vault = dir.path();
         create_wallet("tx-sign", None, None, Some(vault)).unwrap();
 
-        let tx_hex = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        let generic_tx_hex = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        // Solana requires a properly formatted serialized transaction:
+        // [0x01 num_sigs] [64 zero bytes for sig slot] [message bytes...]
+        let mut solana_tx = vec![0x01u8]; // 1 signature slot
+        solana_tx.extend_from_slice(&[0u8; 64]); // placeholder signature
+        solana_tx.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // message payload
+        let solana_tx_hex = hex::encode(&solana_tx);
+
         let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton"];
         for chain in &chains {
-            let result = sign_transaction("tx-sign", chain, tx_hex, None, None, Some(vault));
+            let tx = if *chain == "solana" {
+                &solana_tx_hex
+            } else {
+                generic_tx_hex
+            };
+            let result = sign_transaction("tx-sign", chain, tx, None, None, Some(vault));
             assert!(
                 result.is_ok(),
                 "sign_transaction should work for {chain}: {:?}",

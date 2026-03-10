@@ -108,7 +108,39 @@ pub fn decrypt(envelope: &CryptoEnvelope, passphrase: &str) -> Result<SecretByte
     let auth_tag =
         hex::decode(&envelope.auth_tag).map_err(|e| CryptoError::InvalidParams(e.to_string()))?;
 
-    let log_n = (envelope.kdfparams.n as f64).log2() as u8;
+    // Validate KDF parameters to prevent downgrade attacks.
+    // Reject envelopes with weakened parameters that would make brute-forcing trivial.
+    let n = envelope.kdfparams.n;
+    if n == 0 || (n & (n - 1)) != 0 {
+        return Err(CryptoError::InvalidParams(format!(
+            "scrypt N must be a power of 2, got {n}"
+        )));
+    }
+    if n < KDF_N {
+        return Err(CryptoError::InvalidParams(format!(
+            "scrypt N={n} is below minimum {KDF_N} — possible downgrade attack"
+        )));
+    }
+    if envelope.kdfparams.r < KDF_R {
+        return Err(CryptoError::InvalidParams(format!(
+            "scrypt r={} is below minimum {KDF_R} — possible downgrade attack",
+            envelope.kdfparams.r
+        )));
+    }
+    if envelope.kdfparams.p < KDF_P {
+        return Err(CryptoError::InvalidParams(format!(
+            "scrypt p={} is below minimum {KDF_P} — possible downgrade attack",
+            envelope.kdfparams.p
+        )));
+    }
+    if envelope.kdfparams.dklen < KDF_DKLEN {
+        return Err(CryptoError::InvalidParams(format!(
+            "dklen={} is below minimum {KDF_DKLEN}",
+            envelope.kdfparams.dklen
+        )));
+    }
+
+    let log_n = n.trailing_zeros() as u8;
     let params = ScryptParams::new(
         log_n,
         envelope.kdfparams.r,

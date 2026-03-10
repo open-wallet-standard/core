@@ -4,6 +4,9 @@
   "description": "Node.js native bindings for the Lightweight Wallet Signer",
   "main": "index.js",
   "types": "index.d.ts",
+  "bin": {
+    "lws": "bin/lws"
+  },
   "napi": {
     "name": "lws-node",
     "triples": {
@@ -36,6 +39,7 @@
   "license": "MIT",
   "files": [
     "index.js",
-    "index.d.ts"
+    "index.d.ts",
+    "bin/lws"
   ]
 }

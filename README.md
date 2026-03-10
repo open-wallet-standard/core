@@ -24,12 +24,13 @@ curl -fsSL https://openwallet.sh/install.sh | bash
 Or install only what you need:
 
 ```bash
-npm install @local-wallet-standard/node    # Node.js
+npm install @local-wallet-standard/node    # Node.js SDK
+npm install -g @local-wallet-standard/node # Node.js SDK + CLI (provides `lws` command)
 pip install local-wallet-standard           # Python
 cd lws && cargo build --workspace --release # From source
 ```
 
-The language bindings are **fully self-contained** — they embed the Rust core via native FFI. No CLI required.
+The language bindings are **fully self-contained** — they embed the Rust core via native FFI. Installing globally with `-g` also provides the `lws` CLI.
 
 ## Quick Start
 

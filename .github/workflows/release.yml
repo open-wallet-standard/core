@@ -229,7 +229,7 @@ jobs:
             bindings/node/index.d.ts
 
   publish-npm:
-    needs: node-addons
+    needs: [node-addons, build]
     runs-on: ubuntu-latest
     environment: release
 
@@ -281,6 +281,20 @@ jobs:
             echo "ERROR: index.js or index.d.ts missing — npm package would be broken"
             exit 1
           fi
+
+      - name: Download CLI binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: lws-*
+          merge-multiple: true
+          path: bindings/node/cli-binaries
+
+      - name: Copy CLI binaries into platform packages
+        run: |
+          cp cli-binaries/lws-darwin-aarch64 npm/darwin-arm64/lws   && chmod +x npm/darwin-arm64/lws
+          cp cli-binaries/lws-darwin-x86_64  npm/darwin-x64/lws     && chmod +x npm/darwin-x64/lws
+          cp cli-binaries/lws-linux-x86_64   npm/linux-x64-gnu/lws  && chmod +x npm/linux-x64-gnu/lws
+          cp cli-binaries/lws-linux-aarch64  npm/linux-arm64-gnu/lws && chmod +x npm/linux-arm64-gnu/lws
 
       - name: Publish platform packages
         env:
