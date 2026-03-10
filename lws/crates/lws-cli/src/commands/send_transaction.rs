@@ -100,6 +100,7 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         ChainType::Bitcoin => broadcast_bitcoin(rpc_url, signed_bytes),
         ChainType::Cosmos => broadcast_cosmos(rpc_url, signed_bytes),
         ChainType::Tron => broadcast_tron(rpc_url, signed_bytes),
+        ChainType::Ton => broadcast_ton(rpc_url, signed_bytes),
     }
 }
 
@@ -184,6 +185,23 @@ fn broadcast_tron(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, CliError
     let body = serde_json::json!({ "transaction": hex_tx });
     let resp = curl_post_json(&url, &body.to_string())?;
     extract_json_field(&resp, "txid")
+}
+
+fn broadcast_ton(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, CliError> {
+    use base64::Engine;
+    let b64_boc = base64::engine::general_purpose::STANDARD.encode(signed_bytes);
+    let url = format!(
+        "{}/sendBoc",
+        rpc_url.trim_end_matches('/')
+    );
+    let body = serde_json::json!({ "boc": b64_boc });
+    let resp = curl_post_json(&url, &body.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_str(&resp)
+        .map_err(|e| CliError::InvalidArgs(format!("invalid JSON response: {e}")))?;
+    parsed["result"]["hash"]
+        .as_str()
+        .map(|s: &str| s.to_string())
+        .ok_or_else(|| CliError::InvalidArgs(format!("no hash in response: {resp}")))
 }
 
 /// POST JSON via curl and return the response body.

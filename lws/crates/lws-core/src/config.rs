@@ -39,6 +39,7 @@ impl Config {
         rpc.insert("bip122:000000000019d6689c085ae165831e93".into(), "https://mempool.space/api".into());
         rpc.insert("cosmos:cosmoshub-4".into(), "https://cosmos-rest.publicnode.com".into());
         rpc.insert("tron:mainnet".into(), "https://api.trongrid.io".into());
+        rpc.insert("ton:mainnet".into(), "https://toncenter.com/api/v2".into());
         rpc
     }
 }
@@ -165,6 +166,7 @@ mod tests {
             Some("https://cosmos-rest.publicnode.com")
         );
         assert_eq!(config.rpc_url("tron:mainnet"), Some("https://api.trongrid.io"));
+        assert_eq!(config.rpc_url("ton:mainnet"), Some("https://toncenter.com/api/v2"));
     }
 
     #[test]
@@ -207,7 +209,7 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 11);
+        assert_eq!(config.rpc.len(), 12);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
     }
 

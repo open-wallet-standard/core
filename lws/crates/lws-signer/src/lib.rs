@@ -89,6 +89,14 @@ mod integration_tests {
     }
 
     #[test]
+    fn test_full_pipeline_ton() {
+        let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
+        let address = derive_address_for_chain(&mnemonic, ChainType::Ton);
+        assert!(address.starts_with("EQ"), "TON bounceable address should start with EQ, got: {}", address);
+        assert_eq!(address.len(), 48);
+    }
+
+    #[test]
     fn test_cross_chain_different_addresses() {
         let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
 
@@ -97,9 +105,10 @@ mod integration_tests {
         let btc_addr = derive_address_for_chain(&mnemonic, ChainType::Bitcoin);
         let cosmos_addr = derive_address_for_chain(&mnemonic, ChainType::Cosmos);
         let tron_addr = derive_address_for_chain(&mnemonic, ChainType::Tron);
+        let ton_addr = derive_address_for_chain(&mnemonic, ChainType::Ton);
 
         // All addresses should be different
-        let addrs = vec![&evm_addr, &sol_addr, &btc_addr, &cosmos_addr, &tron_addr];
+        let addrs = vec![&evm_addr, &sol_addr, &btc_addr, &cosmos_addr, &tron_addr, &ton_addr];
         for i in 0..addrs.len() {
             for j in (i + 1)..addrs.len() {
                 assert_ne!(addrs[i], addrs[j], "addresses should differ");
@@ -134,17 +143,19 @@ mod integration_tests {
     }
 
     #[test]
-    fn test_sign_roundtrip_solana() {
+    fn test_sign_roundtrip_ed25519_chains() {
         let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
 
-        let signer = signer_for_chain(ChainType::Solana);
-        let path = signer.default_derivation_path(0);
-        let key =
-            HdDeriver::derive_from_mnemonic(&mnemonic, "", &path, Curve::Ed25519).unwrap();
+        for chain in [ChainType::Solana, ChainType::Ton] {
+            let signer = signer_for_chain(chain);
+            let path = signer.default_derivation_path(0);
+            let key =
+                HdDeriver::derive_from_mnemonic(&mnemonic, "", &path, Curve::Ed25519).unwrap();
 
-        let result = signer.sign(key.expose(), b"test message").unwrap();
-        assert_eq!(result.signature.len(), 64);
-        assert!(result.recovery_id.is_none());
+            let result = signer.sign(key.expose(), b"test message").unwrap();
+            assert_eq!(result.signature.len(), 64);
+            assert!(result.recovery_id.is_none());
+        }
     }
 
     #[test]
@@ -156,6 +167,7 @@ mod integration_tests {
             ChainType::Bitcoin,
             ChainType::Cosmos,
             ChainType::Tron,
+            ChainType::Ton,
         ] {
             let signer = signer_for_chain(chain);
             assert_eq!(signer.chain_type(), chain);

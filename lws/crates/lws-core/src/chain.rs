@@ -10,15 +10,17 @@ pub enum ChainType {
     Cosmos,
     Bitcoin,
     Tron,
+    Ton,
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 5] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 6] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
     ChainType::Cosmos,
     ChainType::Tron,
+    ChainType::Ton,
 ];
 
 /// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
@@ -42,6 +44,7 @@ pub const KNOWN_CHAINS: &[Chain] = &[
     Chain { name: "bitcoin",   chain_type: ChainType::Bitcoin, chain_id: "bip122:000000000019d6689c085ae165831e93" },
     Chain { name: "cosmos",    chain_type: ChainType::Cosmos,  chain_id: "cosmos:cosmoshub-4" },
     Chain { name: "tron",      chain_type: ChainType::Tron,    chain_id: "tron:mainnet" },
+    Chain { name: "ton",       chain_type: ChainType::Ton,     chain_id: "ton:mainnet" },
 ];
 
 /// Parse a chain string into a `Chain`. Accepts:
@@ -87,6 +90,7 @@ impl ChainType {
             ChainType::Cosmos => "cosmos",
             ChainType::Bitcoin => "bip122",
             ChainType::Tron => "tron",
+            ChainType::Ton => "ton",
         }
     }
 
@@ -98,6 +102,7 @@ impl ChainType {
             ChainType::Cosmos => 118,
             ChainType::Bitcoin => 0,
             ChainType::Tron => 195,
+            ChainType::Ton => 607,
         }
     }
 
@@ -109,6 +114,7 @@ impl ChainType {
             "cosmos" => Some(ChainType::Cosmos),
             "bip122" => Some(ChainType::Bitcoin),
             "tron" => Some(ChainType::Tron),
+            "ton" => Some(ChainType::Ton),
             _ => None,
         }
     }
@@ -122,6 +128,7 @@ impl fmt::Display for ChainType {
             ChainType::Cosmos => "cosmos",
             ChainType::Bitcoin => "bitcoin",
             ChainType::Tron => "tron",
+            ChainType::Ton => "ton",
         };
         write!(f, "{}", s)
     }
@@ -137,6 +144,7 @@ impl FromStr for ChainType {
             "cosmos" => Ok(ChainType::Cosmos),
             "bitcoin" => Ok(ChainType::Bitcoin),
             "tron" => Ok(ChainType::Tron),
+            "ton" => Ok(ChainType::Ton),
             _ => Err(format!("unknown chain type: {}", s)),
         }
     }
@@ -163,6 +171,7 @@ mod tests {
             (ChainType::Cosmos, "\"cosmos\""),
             (ChainType::Bitcoin, "\"bitcoin\""),
             (ChainType::Tron, "\"tron\""),
+            (ChainType::Ton, "\"ton\""),
         ] {
             let json = serde_json::to_string(&chain).unwrap();
             assert_eq!(json, expected);
@@ -178,6 +187,7 @@ mod tests {
         assert_eq!(ChainType::Cosmos.namespace(), "cosmos");
         assert_eq!(ChainType::Bitcoin.namespace(), "bip122");
         assert_eq!(ChainType::Tron.namespace(), "tron");
+        assert_eq!(ChainType::Ton.namespace(), "ton");
     }
 
     #[test]
@@ -187,6 +197,7 @@ mod tests {
         assert_eq!(ChainType::Cosmos.default_coin_type(), 118);
         assert_eq!(ChainType::Bitcoin.default_coin_type(), 0);
         assert_eq!(ChainType::Tron.default_coin_type(), 195);
+        assert_eq!(ChainType::Ton.default_coin_type(), 607);
     }
 
     #[test]
@@ -199,6 +210,7 @@ mod tests {
             Some(ChainType::Bitcoin)
         );
         assert_eq!(ChainType::from_namespace("tron"), Some(ChainType::Tron));
+        assert_eq!(ChainType::from_namespace("ton"), Some(ChainType::Ton));
         assert_eq!(ChainType::from_namespace("unknown"), None);
     }
 
@@ -250,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 5);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 6);
     }
 
     #[test]

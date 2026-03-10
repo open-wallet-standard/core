@@ -7,6 +7,7 @@ use lws_core::{
 };
 use lws_signer::{
     decrypt, encrypt, signer_for_chain, CryptoEnvelope, HdDeriver, Mnemonic, MnemonicStrength,
+    SecretBytes,
 };
 
 use crate::error::LwsLibError;
@@ -60,18 +61,31 @@ fn derive_all_accounts(
 }
 
 /// Derive accounts for all chain families from raw key bytes.
+/// Skips chains whose signer doesn't support the key's curve.
 fn derive_all_accounts_from_key(key_bytes: &[u8]) -> Result<Vec<WalletAccount>, LwsLibError> {
     let mut accounts = Vec::with_capacity(ALL_CHAIN_TYPES.len());
     for ct in &ALL_CHAIN_TYPES {
-        let chain = default_chain_for_type(*ct);
         let signer = signer_for_chain(*ct);
-        let address = signer.derive_address(key_bytes)?;
-        accounts.push(WalletAccount {
-            account_id: format!("{}:{}", chain.chain_id, address),
-            address,
-            chain_id: chain.chain_id.to_string(),
-            derivation_path: String::new(),
-        });
+        match signer.derive_address(key_bytes) {
+            Ok(address) => {
+                let chain = default_chain_for_type(*ct);
+                accounts.push(WalletAccount {
+                    account_id: format!("{}:{}", chain.chain_id, address),
+                    address,
+                    chain_id: chain.chain_id.to_string(),
+                    derivation_path: String::new(),
+                });
+            }
+            Err(_) => {
+                // Skip chains that can't derive from this key (e.g. wrong curve)
+                continue;
+            }
+        }
+    }
+    if accounts.is_empty() {
+        return Err(LwsLibError::InvalidInput(
+            "could not derive address for any chain from this private key".into(),
+        ));
     }
     Ok(accounts)
 }
@@ -245,7 +259,7 @@ pub fn delete_wallet(
     Ok(())
 }
 
-/// Export a wallet's secret (mnemonic or private key).
+/// Export a wallet's secret (mnemonic or private key hex).
 pub fn export_wallet(
     name_or_id: &str,
     passphrase: Option<&str>,
@@ -256,8 +270,11 @@ pub fn export_wallet(
     let envelope: CryptoEnvelope = serde_json::from_value(wallet.crypto.clone())?;
     let secret = decrypt(&envelope, passphrase)?;
 
-    String::from_utf8(secret.expose().to_vec())
-        .map_err(|_| LwsLibError::InvalidInput("wallet contains invalid UTF-8 secret".into()))
+    match wallet.key_type {
+        KeyType::Mnemonic => String::from_utf8(secret.expose().to_vec())
+            .map_err(|_| LwsLibError::InvalidInput("wallet contains invalid UTF-8 mnemonic".into())),
+        KeyType::PrivateKey => Ok(hex::encode(secret.expose())),
+    }
 }
 
 /// Rename a wallet.
@@ -292,18 +309,13 @@ pub fn sign_transaction(
 ) -> Result<SignResult, LwsLibError> {
     let passphrase = passphrase.unwrap_or("");
     let chain = parse_chain(chain)?;
-    let mnemonic_str = decrypt_wallet_secret(wallet, passphrase, vault_path)?;
-    let mnemonic = Mnemonic::from_phrase(&mnemonic_str)?;
 
     let tx_hex_clean = tx_hex.strip_prefix("0x").unwrap_or(tx_hex);
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| LwsLibError::InvalidInput(format!("invalid hex transaction: {e}")))?;
 
+    let key = decrypt_signing_key(wallet, chain.chain_type, passphrase, index, vault_path)?;
     let signer = signer_for_chain(chain.chain_type);
-    let path = signer.default_derivation_path(index.unwrap_or(0));
-    let curve = signer.curve();
-
-    let key = HdDeriver::derive_from_mnemonic(&mnemonic, "", &path, curve)?;
     let output = signer.sign_transaction(key.expose(), &tx_bytes)?;
 
     Ok(SignResult {
@@ -324,8 +336,6 @@ pub fn sign_message(
 ) -> Result<SignResult, LwsLibError> {
     let passphrase = passphrase.unwrap_or("");
     let chain = parse_chain(chain)?;
-    let mnemonic_str = decrypt_wallet_secret(wallet, passphrase, vault_path)?;
-    let mnemonic = Mnemonic::from_phrase(&mnemonic_str)?;
 
     let encoding = encoding.unwrap_or("utf8");
     let msg_bytes = match encoding {
@@ -339,11 +349,8 @@ pub fn sign_message(
         }
     };
 
+    let key = decrypt_signing_key(wallet, chain.chain_type, passphrase, index, vault_path)?;
     let signer = signer_for_chain(chain.chain_type);
-    let path = signer.default_derivation_path(index.unwrap_or(0));
-    let curve = signer.curve();
-
-    let key = HdDeriver::derive_from_mnemonic(&mnemonic, "", &path, curve)?;
     let output = signer.sign_message(key.expose(), &msg_bytes)?;
 
     Ok(SignResult {
@@ -366,18 +373,12 @@ pub fn sign_and_send(
     let chain = parse_chain(chain)?;
 
     // 1. Sign
-    let mnemonic_str = decrypt_wallet_secret(wallet, passphrase, vault_path)?;
-    let mnemonic = Mnemonic::from_phrase(&mnemonic_str)?;
-
     let tx_hex_clean = tx_hex.strip_prefix("0x").unwrap_or(tx_hex);
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| LwsLibError::InvalidInput(format!("invalid hex transaction: {e}")))?;
 
+    let key = decrypt_signing_key(wallet, chain.chain_type, passphrase, index, vault_path)?;
     let signer = signer_for_chain(chain.chain_type);
-    let path = signer.default_derivation_path(index.unwrap_or(0));
-    let curve = signer.curve();
-
-    let key = HdDeriver::derive_from_mnemonic(&mnemonic, "", &path, curve)?;
     let output = signer.sign_transaction(key.expose(), &tx_bytes)?;
 
     // 2. Resolve RPC URL using exact chain_id
@@ -391,18 +392,33 @@ pub fn sign_and_send(
 
 // --- internal helpers ---
 
-/// Decrypt a wallet's secret material and return it as a string.
-fn decrypt_wallet_secret(
+/// Decrypt a wallet and derive the private key for the given chain and index.
+fn decrypt_signing_key(
     wallet_name_or_id: &str,
+    chain_type: ChainType,
     passphrase: &str,
+    index: Option<u32>,
     vault_path: Option<&Path>,
-) -> Result<String, LwsLibError> {
+) -> Result<SecretBytes, LwsLibError> {
     let wallet = vault::load_wallet_by_name_or_id(wallet_name_or_id, vault_path)?;
     let envelope: CryptoEnvelope = serde_json::from_value(wallet.crypto.clone())?;
     let secret = decrypt(&envelope, passphrase)?;
 
-    String::from_utf8(secret.expose().to_vec())
-        .map_err(|_| LwsLibError::InvalidInput("wallet contains invalid UTF-8 secret".into()))
+    match wallet.key_type {
+        KeyType::Mnemonic => {
+            let phrase = String::from_utf8(secret.expose().to_vec())
+                .map_err(|_| LwsLibError::InvalidInput("wallet contains invalid UTF-8 mnemonic".into()))?;
+            let mnemonic = Mnemonic::from_phrase(&phrase)?;
+            let signer = signer_for_chain(chain_type);
+            let path = signer.default_derivation_path(index.unwrap_or(0));
+            let curve = signer.curve();
+            Ok(HdDeriver::derive_from_mnemonic(&mnemonic, "", &path, curve)?)
+        }
+        KeyType::PrivateKey => {
+            // Raw key bytes — use directly (index is ignored)
+            Ok(secret)
+        }
+    }
 }
 
 /// Resolve the RPC URL: explicit > config override (exact chain_id) > config (namespace) > built-in default.
@@ -452,6 +468,7 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         ChainType::Bitcoin => broadcast_bitcoin(rpc_url, signed_bytes),
         ChainType::Cosmos => broadcast_cosmos(rpc_url, signed_bytes),
         ChainType::Tron => broadcast_tron(rpc_url, signed_bytes),
+        ChainType::Ton => broadcast_ton(rpc_url, signed_bytes),
     }
 }
 
@@ -534,6 +551,22 @@ fn broadcast_tron(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, LwsLibEr
     let body = serde_json::json!({ "transaction": hex_tx });
     let resp = curl_post_json(&url, &body.to_string())?;
     extract_json_field(&resp, "txid")
+}
+
+fn broadcast_ton(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, LwsLibError> {
+    use base64::Engine;
+    let b64_boc = base64::engine::general_purpose::STANDARD.encode(signed_bytes);
+    let url = format!(
+        "{}/sendBoc",
+        rpc_url.trim_end_matches('/')
+    );
+    let body = serde_json::json!({ "boc": b64_boc });
+    let resp = curl_post_json(&url, &body.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_str(&resp)?;
+    parsed["result"]["hash"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| LwsLibError::BroadcastFailed(format!("no hash in response: {resp}")))
 }
 
 fn curl_post_json(url: &str, body: &str) -> Result<String, LwsLibError> {
@@ -621,7 +654,7 @@ mod tests {
         let info = create_wallet("test-wallet", None, None, Some(vault)).unwrap();
 
         assert_eq!(info.name, "test-wallet");
-        assert_eq!(info.accounts.len(), 5, "universal wallet should have 5 accounts");
+        assert_eq!(info.accounts.len(), 6, "universal wallet should have 6 accounts");
 
         // Verify each chain family is present
         let chain_ids: Vec<&str> = info.accounts.iter().map(|a| a.chain_id.as_str()).collect();
@@ -630,6 +663,7 @@ mod tests {
         assert!(chain_ids.iter().any(|c| c.starts_with("bip122:")));
         assert!(chain_ids.iter().any(|c| c.starts_with("cosmos:")));
         assert!(chain_ids.iter().any(|c| c.starts_with("tron:")));
+        assert!(chain_ids.iter().any(|c| c.starts_with("ton:")));
 
         let wallets = list_wallets(Some(vault)).unwrap();
         assert_eq!(wallets.len(), 1);
@@ -716,7 +750,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(info.name, "imported");
-        assert_eq!(info.accounts.len(), 5);
+        assert_eq!(info.accounts.len(), 6);
 
         // The EVM account should match the derived address
         let evm_account = info.accounts.iter().find(|a| a.chain_id.starts_with("eip155:")).unwrap();
@@ -781,6 +815,8 @@ mod tests {
                 "cosmos"
             } else if acct.chain_id.starts_with("tron:") {
                 "tron"
+            } else if acct.chain_id.starts_with("ton:") {
+                "ton"
             } else {
                 panic!("unknown chain_id: {}", acct.chain_id);
             };
@@ -805,9 +841,9 @@ mod tests {
         // Import the same mnemonic into a second vault
         let info2 = import_wallet_mnemonic("wallet-b", &mnemonic, None, None, Some(dir2.path())).unwrap();
 
-        // All 5 accounts must match exactly (same mnemonic → same addresses)
-        assert_eq!(info1.accounts.len(), 5);
-        assert_eq!(info2.accounts.len(), 5);
+        // All 6 accounts must match exactly (same mnemonic → same addresses)
+        assert_eq!(info1.accounts.len(), 6);
+        assert_eq!(info2.accounts.len(), 6);
         for (a1, a2) in info1.accounts.iter().zip(info2.accounts.iter()) {
             assert_eq!(a1.chain_id, a2.chain_id, "chain_id mismatch");
             assert_eq!(a1.address, a2.address,
@@ -839,12 +875,62 @@ mod tests {
                 "bitcoin"
             } else if acct.chain_id.starts_with("cosmos:") {
                 "cosmos"
-            } else {
+            } else if acct.chain_id.starts_with("tron:") {
                 "tron"
+            } else {
+                "ton"
             };
             let derived = derive_address(&mnemonic, chain_str, None).unwrap();
             assert_eq!(acct.address, derived,
                 "derive_address mismatch for {}", chain_str);
         }
+    }
+
+    #[test]
+    fn test_import_private_key_sign_and_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+
+        // A known 32-byte secp256k1 private key (hex)
+        let privkey_hex = "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318";
+        let key_bytes = hex::decode(privkey_hex).unwrap();
+
+        // Manually build a wallet with only EVM account (avoids TON panic)
+        let signer = signer_for_chain(ChainType::Evm);
+        let address = signer.derive_address(&key_bytes).unwrap();
+        let chain = default_chain_for_type(ChainType::Evm);
+        let accounts = vec![WalletAccount {
+            account_id: format!("{}:{}", chain.chain_id, address),
+            address,
+            chain_id: chain.chain_id.to_string(),
+            derivation_path: String::new(),
+        }];
+
+        let crypto_envelope = encrypt(&key_bytes, "").unwrap();
+        let crypto_json = serde_json::to_value(&crypto_envelope).unwrap();
+        let wallet_id = uuid::Uuid::new_v4().to_string();
+        let wallet = EncryptedWallet::new(
+            wallet_id,
+            "pk-wallet".to_string(),
+            accounts,
+            crypto_json,
+            KeyType::PrivateKey,
+        );
+        vault::save_encrypted_wallet(&wallet, Some(vault)).unwrap();
+
+        // Sign a message — this was the bug: "wallet contains invalid UTF-8 secret"
+        let sig = sign_message("pk-wallet", "evm", "hello", None, None, None, Some(vault)).unwrap();
+        assert!(!sig.signature.is_empty());
+
+        // Sign a transaction
+        let tx_hex = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        let sig = sign_transaction("pk-wallet", "evm", tx_hex, None, None, Some(vault)).unwrap();
+        assert!(!sig.signature.is_empty());
+
+        // Export — should return hex-encoded key, not blow up with UTF-8 error
+        let exported = export_wallet("pk-wallet", None, Some(vault)).unwrap();
+        assert_eq!(exported, privkey_hex);
+
+        delete_wallet("pk-wallet", Some(vault)).unwrap();
     }
 }
