@@ -1,6 +1,6 @@
 [package]
 name = "lws-python"
-version = "0.2.24"
+version = "0.2.25"
 edition = "2021"
 description = "Python native bindings for the Lightweight Wallet Signer"
 
