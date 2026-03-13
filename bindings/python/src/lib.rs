@@ -6,7 +6,7 @@ fn vault_path(p: Option<String>) -> Option<PathBuf> {
     p.map(PathBuf::from)
 }
 
-fn map_err(e: lws_lib::LwsLibError) -> PyErr {
+fn map_err(e: ows_lib::OwsLibError) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
 }
 
@@ -14,14 +14,14 @@ fn map_err(e: lws_lib::LwsLibError) -> PyErr {
 #[pyfunction]
 #[pyo3(signature = (words=12))]
 fn generate_mnemonic(words: u32) -> PyResult<String> {
-    lws_lib::generate_mnemonic(words).map_err(map_err)
+    ows_lib::generate_mnemonic(words).map_err(map_err)
 }
 
 /// Derive an address from a mnemonic for the given chain.
 #[pyfunction]
 #[pyo3(signature = (mnemonic, chain, index=None))]
 fn derive_address(mnemonic: &str, chain: &str, index: Option<u32>) -> PyResult<String> {
-    lws_lib::derive_address(mnemonic, chain, index).map_err(map_err)
+    ows_lib::derive_address(mnemonic, chain, index).map_err(map_err)
 }
 
 /// Create a new universal wallet (derives addresses for all chains).
@@ -33,7 +33,7 @@ fn create_wallet(
     words: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> PyResult<PyObject> {
-    let info = lws_lib::create_wallet(name, words, passphrase, vault_path(vault_path_opt).as_deref())
+    let info = ows_lib::create_wallet(name, words, passphrase, vault_path(vault_path_opt).as_deref())
         .map_err(map_err)?;
     Python::with_gil(|py| wallet_info_to_dict(py, &info))
 }
@@ -48,7 +48,7 @@ fn import_wallet_mnemonic(
     index: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> PyResult<PyObject> {
-    let info = lws_lib::import_wallet_mnemonic(
+    let info = ows_lib::import_wallet_mnemonic(
         name, mnemonic, passphrase, index, vault_path(vault_path_opt).as_deref(),
     )
     .map_err(map_err)?;
@@ -68,7 +68,7 @@ fn import_wallet_private_key(
     secp256k1_key: Option<&str>,
     ed25519_key: Option<&str>,
 ) -> PyResult<PyObject> {
-    let info = lws_lib::import_wallet_private_key(
+    let info = ows_lib::import_wallet_private_key(
         name,
         private_key_hex,
         chain,
@@ -85,7 +85,7 @@ fn import_wallet_private_key(
 #[pyfunction]
 #[pyo3(signature = (vault_path_opt=None))]
 fn list_wallets(vault_path_opt: Option<String>) -> PyResult<PyObject> {
-    let wallets = lws_lib::list_wallets(vault_path(vault_path_opt).as_deref()).map_err(map_err)?;
+    let wallets = ows_lib::list_wallets(vault_path(vault_path_opt).as_deref()).map_err(map_err)?;
     Python::with_gil(|py| {
         let list = pyo3::types::PyList::empty_bound(py);
         for w in &wallets {
@@ -100,7 +100,7 @@ fn list_wallets(vault_path_opt: Option<String>) -> PyResult<PyObject> {
 #[pyfunction]
 #[pyo3(signature = (name_or_id, vault_path_opt=None))]
 fn get_wallet(name_or_id: &str, vault_path_opt: Option<String>) -> PyResult<PyObject> {
-    let info = lws_lib::get_wallet(name_or_id, vault_path(vault_path_opt).as_deref())
+    let info = ows_lib::get_wallet(name_or_id, vault_path(vault_path_opt).as_deref())
         .map_err(map_err)?;
     Python::with_gil(|py| wallet_info_to_dict(py, &info))
 }
@@ -109,7 +109,7 @@ fn get_wallet(name_or_id: &str, vault_path_opt: Option<String>) -> PyResult<PyOb
 #[pyfunction]
 #[pyo3(signature = (name_or_id, vault_path_opt=None))]
 fn delete_wallet(name_or_id: &str, vault_path_opt: Option<String>) -> PyResult<()> {
-    lws_lib::delete_wallet(name_or_id, vault_path(vault_path_opt).as_deref()).map_err(map_err)
+    ows_lib::delete_wallet(name_or_id, vault_path(vault_path_opt).as_deref()).map_err(map_err)
 }
 
 /// Export a wallet's secret (mnemonic or private key).
@@ -120,7 +120,7 @@ fn export_wallet(
     passphrase: Option<&str>,
     vault_path_opt: Option<String>,
 ) -> PyResult<String> {
-    lws_lib::export_wallet(name_or_id, passphrase, vault_path(vault_path_opt).as_deref())
+    ows_lib::export_wallet(name_or_id, passphrase, vault_path(vault_path_opt).as_deref())
         .map_err(map_err)
 }
 
@@ -132,7 +132,7 @@ fn rename_wallet(
     new_name: &str,
     vault_path_opt: Option<String>,
 ) -> PyResult<()> {
-    lws_lib::rename_wallet(name_or_id, new_name, vault_path(vault_path_opt).as_deref())
+    ows_lib::rename_wallet(name_or_id, new_name, vault_path(vault_path_opt).as_deref())
         .map_err(map_err)
 }
 
@@ -147,7 +147,7 @@ fn sign_transaction(
     index: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> PyResult<PyObject> {
-    let result = lws_lib::sign_transaction(
+    let result = ows_lib::sign_transaction(
         wallet, chain, tx_hex, passphrase, index, vault_path(vault_path_opt).as_deref(),
     )
     .map_err(map_err)?;
@@ -172,7 +172,7 @@ fn sign_message(
     index: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> PyResult<PyObject> {
-    let result = lws_lib::sign_message(
+    let result = ows_lib::sign_message(
         wallet, chain, message, passphrase, encoding, index,
         vault_path(vault_path_opt).as_deref(),
     )
@@ -198,7 +198,7 @@ fn sign_and_send(
     rpc_url: Option<&str>,
     vault_path_opt: Option<String>,
 ) -> PyResult<PyObject> {
-    let result = lws_lib::sign_and_send(
+    let result = ows_lib::sign_and_send(
         wallet, chain, tx_hex, passphrase, index, rpc_url,
         vault_path(vault_path_opt).as_deref(),
     )
@@ -211,14 +211,14 @@ fn sign_and_send(
     })
 }
 
-fn wallet_info_to_dict(py: Python<'_>, info: &lws_lib::WalletInfo) -> PyResult<PyObject> {
+fn wallet_info_to_dict(py: Python<'_>, info: &ows_lib::WalletInfo) -> PyResult<PyObject> {
     let dict = wallet_info_to_dict_inner(py, info)?;
     Ok(dict.to_object(py))
 }
 
 fn wallet_info_to_dict_inner<'py>(
     py: Python<'py>,
-    info: &lws_lib::WalletInfo,
+    info: &ows_lib::WalletInfo,
 ) -> PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
     let dict = pyo3::types::PyDict::new_bound(py);
     dict.set_item("id", &info.id)?;

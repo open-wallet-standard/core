@@ -13,7 +13,7 @@ Closes #
 - [ ] `cargo test --workspace` passes
 - [ ] `cargo clippy --workspace -- -D warnings` is clean
 - [ ] `npm test` passes (if Node bindings changed)
-- [ ] Tested manually with `lws` CLI
+- [ ] Tested manually with `ows` CLI
 
 ## Notes
 

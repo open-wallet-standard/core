@@ -1,3 +1,0 @@
-[workspace]
-resolver = "2"
-members = ["crates/lws-core", "crates/lws-signer", "crates/lws-lib", "crates/lws-cli"]

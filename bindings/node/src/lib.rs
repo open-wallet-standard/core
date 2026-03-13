@@ -6,7 +6,7 @@ fn vault_path(p: Option<String>) -> Option<PathBuf> {
     p.map(PathBuf::from)
 }
 
-fn map_err(e: lws_lib::LwsLibError) -> napi::Error {
+fn map_err(e: ows_lib::OwsLibError) -> napi::Error {
     napi::Error::from_reason(e.to_string())
 }
 
@@ -27,8 +27,8 @@ pub struct WalletInfo {
     pub created_at: String,
 }
 
-impl From<lws_lib::WalletInfo> for WalletInfo {
-    fn from(w: lws_lib::WalletInfo) -> Self {
+impl From<ows_lib::WalletInfo> for WalletInfo {
+    fn from(w: ows_lib::WalletInfo) -> Self {
         WalletInfo {
             id: w.id,
             name: w.name,
@@ -62,7 +62,7 @@ pub struct SendResult {
 /// Generate a new BIP-39 mnemonic phrase.
 #[napi]
 pub fn generate_mnemonic(words: Option<u32>) -> Result<String> {
-    lws_lib::generate_mnemonic(words.unwrap_or(12)).map_err(map_err)
+    ows_lib::generate_mnemonic(words.unwrap_or(12)).map_err(map_err)
 }
 
 /// Derive an address from a mnemonic for the given chain.
@@ -72,7 +72,7 @@ pub fn derive_address(
     chain: String,
     index: Option<u32>,
 ) -> Result<String> {
-    lws_lib::derive_address(&mnemonic, &chain, index).map_err(map_err)
+    ows_lib::derive_address(&mnemonic, &chain, index).map_err(map_err)
 }
 
 /// Create a new universal wallet (derives addresses for all chains).
@@ -83,7 +83,7 @@ pub fn create_wallet(
     words: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> Result<WalletInfo> {
-    lws_lib::create_wallet(
+    ows_lib::create_wallet(
         &name,
         words,
         passphrase.as_deref(),
@@ -102,7 +102,7 @@ pub fn import_wallet_mnemonic(
     index: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> Result<WalletInfo> {
-    lws_lib::import_wallet_mnemonic(
+    ows_lib::import_wallet_mnemonic(
         &name,
         &mnemonic,
         passphrase.as_deref(),
@@ -131,7 +131,7 @@ pub fn import_wallet_private_key(
     secp256k1_key: Option<String>,
     ed25519_key: Option<String>,
 ) -> Result<WalletInfo> {
-    lws_lib::import_wallet_private_key(
+    ows_lib::import_wallet_private_key(
         &name,
         &private_key_hex,
         chain.as_deref(),
@@ -147,7 +147,7 @@ pub fn import_wallet_private_key(
 /// List all wallets in the vault.
 #[napi]
 pub fn list_wallets(vault_path_opt: Option<String>) -> Result<Vec<WalletInfo>> {
-    lws_lib::list_wallets(vault_path(vault_path_opt).as_deref())
+    ows_lib::list_wallets(vault_path(vault_path_opt).as_deref())
         .map(|ws| ws.into_iter().map(WalletInfo::from).collect())
         .map_err(map_err)
 }
@@ -155,7 +155,7 @@ pub fn list_wallets(vault_path_opt: Option<String>) -> Result<Vec<WalletInfo>> {
 /// Get a single wallet by name or ID.
 #[napi]
 pub fn get_wallet(name_or_id: String, vault_path_opt: Option<String>) -> Result<WalletInfo> {
-    lws_lib::get_wallet(&name_or_id, vault_path(vault_path_opt).as_deref())
+    ows_lib::get_wallet(&name_or_id, vault_path(vault_path_opt).as_deref())
         .map(WalletInfo::from)
         .map_err(map_err)
 }
@@ -163,7 +163,7 @@ pub fn get_wallet(name_or_id: String, vault_path_opt: Option<String>) -> Result<
 /// Delete a wallet from the vault.
 #[napi]
 pub fn delete_wallet(name_or_id: String, vault_path_opt: Option<String>) -> Result<()> {
-    lws_lib::delete_wallet(&name_or_id, vault_path(vault_path_opt).as_deref()).map_err(map_err)
+    ows_lib::delete_wallet(&name_or_id, vault_path(vault_path_opt).as_deref()).map_err(map_err)
 }
 
 /// Export a wallet's secret (mnemonic or private key).
@@ -173,7 +173,7 @@ pub fn export_wallet(
     passphrase: Option<String>,
     vault_path_opt: Option<String>,
 ) -> Result<String> {
-    lws_lib::export_wallet(
+    ows_lib::export_wallet(
         &name_or_id,
         passphrase.as_deref(),
         vault_path(vault_path_opt).as_deref(),
@@ -188,7 +188,7 @@ pub fn rename_wallet(
     new_name: String,
     vault_path_opt: Option<String>,
 ) -> Result<()> {
-    lws_lib::rename_wallet(
+    ows_lib::rename_wallet(
         &name_or_id,
         &new_name,
         vault_path(vault_path_opt).as_deref(),
@@ -206,7 +206,7 @@ pub fn sign_transaction(
     index: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> Result<SignResult> {
-    lws_lib::sign_transaction(
+    ows_lib::sign_transaction(
         &wallet,
         &chain,
         &tx_hex,
@@ -232,7 +232,7 @@ pub fn sign_message(
     index: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> Result<SignResult> {
-    lws_lib::sign_message(
+    ows_lib::sign_message(
         &wallet,
         &chain,
         &message,
@@ -259,7 +259,7 @@ pub fn sign_and_send(
     rpc_url: Option<String>,
     vault_path_opt: Option<String>,
 ) -> Result<SendResult> {
-    lws_lib::sign_and_send(
+    ows_lib::sign_and_send(
         &wallet,
         &chain,
         &tx_hex,

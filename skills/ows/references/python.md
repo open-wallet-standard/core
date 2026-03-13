@@ -1,0 +1,115 @@
+# Python SDK — `open-wallet-standard`
+
+```bash
+pip install open-wallet-standard
+```
+
+Native PyO3 bindings — Rust core runs in-process, no subprocess or server. Prebuilt wheels for macOS and Linux, Python 3.9-3.13.
+
+## Return Types
+
+All functions return Python dicts:
+
+```python
+# WalletInfo
+{
+    "id": "3198bc9c-...",
+    "name": "my-wallet",
+    "created_at": "2026-03-09T...",
+    "accounts": [
+        {"chain_id": "eip155:1", "address": "0x...", "derivation_path": "m/44'/60'/0'/0/0"},
+        # ... one per supported chain
+    ],
+}
+
+# SignResult
+{"signature": "bea6b4ee...", "recovery_id": 0}  # recovery_id is None for non-EVM/Tron
+
+# SendResult
+{"tx_hash": "0xabc..."}
+```
+
+## Mnemonic
+
+```python
+from open_wallet_standard import generate_mnemonic, derive_address
+
+phrase = generate_mnemonic(12)         # or 24
+addr = derive_address(phrase, "evm")   # any chain: evm, solana, bitcoin, cosmos, tron, ton
+```
+
+## Wallet Management
+
+```python
+from open_wallet_standard import (
+    create_wallet,
+    import_wallet_mnemonic,
+    import_wallet_private_key,
+    list_wallets,
+    get_wallet,
+    delete_wallet,
+    rename_wallet,
+    export_wallet,
+)
+
+# Create
+wallet = create_wallet("my-wallet")
+# create_wallet(name, passphrase=None, words=12, vault_path=None)
+
+# Import from mnemonic
+w1 = import_wallet_mnemonic("imported", "goose puzzle ...")
+# import_wallet_mnemonic(name, mnemonic, passphrase=None, index=None, vault_path=None)
+
+# Import from private key (default: evm/secp256k1)
+w2 = import_wallet_private_key("from-evm", "4c0883a691...")
+
+# Import Ed25519 key (solana/ton)
+w3 = import_wallet_private_key("from-sol", "9d61b19d...", chain="solana")
+
+# Import explicit keys for both curves
+w4 = import_wallet_private_key("both", "", secp256k1_key="4c08...", ed25519_key="9d61...")
+# import_wallet_private_key(name, private_key_hex, chain=None, passphrase=None,
+#                           vault_path=None, secp256k1_key=None, ed25519_key=None)
+
+# List / get / delete / rename / export
+wallets = list_wallets()                    # list_wallets(vault_path=None)
+w = get_wallet("my-wallet")                 # get_wallet(name_or_id, vault_path=None)
+delete_wallet("my-wallet")                  # delete_wallet(name_or_id, vault_path=None)
+rename_wallet("old", "new")                 # rename_wallet(name_or_id, new_name, vault_path=None)
+secret = export_wallet("my-wallet")         # export_wallet(name_or_id, passphrase=None, vault_path=None)
+# Returns mnemonic string or JSON: {"secp256k1":"hex","ed25519":"hex"}
+```
+
+## Signing
+
+```python
+from open_wallet_standard import sign_message, sign_transaction, sign_and_send
+
+# Sign message
+sig = sign_message("my-wallet", "evm", "hello world")
+# sig["signature"] => hex string
+# sig["recovery_id"] => 0 or 1 (EVM/Tron only)
+# sign_message(wallet, chain, message, passphrase=None, encoding=None, index=None, vault_path=None)
+
+# Sign transaction
+tx_sig = sign_transaction("my-wallet", "evm", "02f8...")
+# sign_transaction(wallet, chain, tx_hex, passphrase=None, index=None, vault_path=None)
+
+# Sign and broadcast
+result = sign_and_send("my-wallet", "evm", "02f8...", rpc_url="https://rpc...")
+# result["tx_hash"] => "0x..."
+# sign_and_send(wallet, chain, tx_hex, passphrase=None, index=None, rpc_url=None, vault_path=None)
+```
+
+## Custom Vault Path
+
+Every function accepts `vault_path` for testing/isolation:
+
+```python
+import tempfile, shutil
+
+vault = tempfile.mkdtemp(prefix="ows-")
+wallet = create_wallet("test", vault_path=vault)
+# ...
+shutil.rmtree(vault)
+```

@@ -14,21 +14,21 @@
 | Import: Solana keypair JSON | Not started | |
 | Export: mnemonic / private key | Done | `export_wallet()` |
 | Export: Keystore v3 format | Not started | |
-| Backup: encrypted tar.gz (`lws backup`) | Not started | `BackupConfig` struct exists but unused |
-| Restore from backup (`lws restore`) | Not started | |
+| Backup: encrypted tar.gz (`ows backup`) | Not started | `BackupConfig` struct exists but unused |
+| Restore from backup (`ows restore`) | Not started | |
 | Automated backup scheduling | Not started | Config field exists but unused |
-| Recovery with BIP-44 gap limit scanning | Not started | No `lws wallet recover` command |
+| Recovery with BIP-44 gap limit scanning | Not started | No `ows wallet recover` command |
 | Deletion: basic file removal | Done | `delete_wallet()` |
 | Deletion: secure overwrite with random bytes before unlink | Not started | Uses plain `fs::remove_file()` |
 | Deletion: remove wallet from API key `wallet_ids` | Not started | No API key system |
-| Key rotation (`lws wallet rotate`) | Not started | |
+| Key rotation (`ows wallet rotate`) | Not started | |
 | Wallet discovery with glob/policy filtering | Not started | Basic `list_wallets()` only |
 | Rename wallet | Done | `rename_wallet()` |
 | `--confirm` flag for destructive operations | Done | CLI prompts for confirmation |
 
 ## Design Decision
 
-**LWS defines a complete wallet lifecycle with explicit operations for creation, import (from existing standards), export (to portable formats), backup, and recovery. All lifecycle operations maintain the same key isolation guarantees as signing — private key material is handled exclusively inside the signing enclave.**
+**OWS defines a complete wallet lifecycle with explicit operations for creation, import (from existing standards), export (to portable formats), backup, and recovery. All lifecycle operations maintain the same key isolation guarantees as signing — private key material is handled exclusively inside the signing enclave.**
 
 ### Why Lifecycle Matters for Agent Wallets
 
@@ -42,7 +42,7 @@ Agent wallets have different lifecycle needs than human wallets:
 | Migration | Rare (wallet switching) | Common (infra changes, key rotation) |
 | Deletion | Rare | Regular (agent decommissioning) |
 
-LWS must support both patterns.
+OWS must support both patterns.
 
 ## Creation
 
@@ -51,11 +51,11 @@ LWS must support both patterns.
 Generates a new BIP-39 mnemonic and derives initial accounts.
 
 ```bash
-lws wallet create --name "agent-treasury" --chain evm
+ows wallet create --name "agent-treasury" --chain evm
 ```
 
 ```typescript
-const wallet = await lws.createWallet({
+const wallet = await ows.createWallet({
   name: "agent-treasury",
   chainType: "evm",
   chains: ["eip155:8453"],           // derive accounts for these chains
@@ -71,7 +71,7 @@ const wallet = await lws.createWallet({
 3. Derive master seed via PBKDF2
 4. Derive accounts for each requested chain using BIP-44 paths
 5. Encrypt mnemonic with vault passphrase (scrypt + AES-256-GCM)
-6. Write encrypted wallet file to `~/.lws/wallets/<uuid>.json`
+6. Write encrypted wallet file to `~/.ows/wallets/<uuid>.json`
 7. Wipe mnemonic, seed, and private keys from memory
 8. Return only the `WalletDescriptor` (addresses, IDs, metadata)
 
@@ -82,11 +82,11 @@ The mnemonic NEVER leaves the enclave. The caller receives only public informati
 Import a raw private key (for single-chain wallets).
 
 ```bash
-echo "<private-key>" | lws wallet import --name "imported" --chain evm --format raw
+echo "<private-key>" | ows wallet import --name "imported" --chain evm --format raw
 ```
 
 ```typescript
-const wallet = await lws.importWallet({
+const wallet = await ows.importWallet({
   name: "imported",
   chainType: "evm",
   chains: ["eip155:8453"],
@@ -99,20 +99,20 @@ The key material is passed directly to the enclave, encrypted, and the input buf
 
 ## Import
 
-LWS supports importing from standard formats:
+OWS supports importing from standard formats:
 
 ### Ethereum Keystore v3
 
 ```bash
-lws wallet import --name "from-geth" --format keystore --file ~/keystore/UTC--2024-01-01T00-00-00.000Z--abc123
+ows wallet import --name "from-geth" --format keystore --file ~/keystore/UTC--2024-01-01T00-00-00.000Z--abc123
 ```
 
-The importer reads the v3 JSON, wraps it in the LWS envelope, and optionally re-encrypts with the vault passphrase. If the keystore uses a different passphrase than the vault, the user is prompted for both.
+The importer reads the v3 JSON, wraps it in the OWS envelope, and optionally re-encrypts with the vault passphrase. If the keystore uses a different passphrase than the vault, the user is prompted for both.
 
 ### BIP-39 Mnemonic
 
 ```bash
-lws wallet import --name "from-metamask" --format mnemonic --chain evm
+ows wallet import --name "from-metamask" --format mnemonic --chain evm
 # Prompts for mnemonic words interactively (never as a CLI argument)
 ```
 
@@ -121,13 +121,13 @@ The mnemonic is entered interactively to avoid shell history exposure. It is pas
 ### WIF (Bitcoin Wallet Import Format)
 
 ```bash
-echo "<wif-key>" | lws wallet import --name "btc-wallet" --format wif --chain bitcoin
+echo "<wif-key>" | ows wallet import --name "btc-wallet" --format wif --chain bitcoin
 ```
 
 ### Solana Keypair JSON
 
 ```bash
-lws wallet import --name "sol-wallet" --format solana-keypair --file ~/.config/solana/id.json
+ows wallet import --name "sol-wallet" --format solana-keypair --file ~/.config/solana/id.json
 ```
 
 Reads the 64-byte keypair JSON array format used by the Solana CLI.
@@ -139,13 +139,13 @@ Export operations extract key material for use with other wallet software. They 
 ### Export Mnemonic
 
 ```bash
-lws wallet export --id 3198bc9c-... --format mnemonic
+ows wallet export --id 3198bc9c-... --format mnemonic
 # Displays the 12/24 word mnemonic on screen
 # Warning: "This mnemonic provides full access to all accounts derived from this wallet."
 ```
 
 ```typescript
-const mnemonic = await lws.exportWallet("3198bc9c-...", {
+const mnemonic = await ows.exportWallet("3198bc9c-...", {
   format: "mnemonic"
 });
 // Returns string (12 or 24 words)
@@ -155,7 +155,7 @@ const mnemonic = await lws.exportWallet("3198bc9c-...", {
 ### Export Keystore v3
 
 ```bash
-lws wallet export --id 3198bc9c-... --format keystore --output ~/exported.json
+ows wallet export --id 3198bc9c-... --format keystore --output ~/exported.json
 ```
 
 Exports a standard Ethereum Keystore v3 file compatible with geth, MetaMask, etc. Only works for `key_type: "private_key"` or single-account EVM wallets.
@@ -163,7 +163,7 @@ Exports a standard Ethereum Keystore v3 file compatible with geth, MetaMask, etc
 ### Export Private Key (Raw)
 
 ```bash
-lws wallet export --id 3198bc9c-... --format raw --account eip155:8453:0xab16...
+ows wallet export --id 3198bc9c-... --format raw --account eip155:8453:0xab16...
 ```
 
 Exports a single account's private key as hex. For mnemonic-based wallets, the specific account's key is derived and exported (not the mnemonic itself).
@@ -173,10 +173,10 @@ Exports a single account's private key as hex. For mnemonic-based wallets, the s
 ### Full Vault Backup
 
 ```bash
-lws backup --output ~/lws-backup-2026-02-27.tar.gz.enc
+ows backup --output ~/ows-backup-2026-02-27.tar.gz.enc
 ```
 
-Creates an encrypted archive of the entire `~/.lws/` directory:
+Creates an encrypted archive of the entire `~/.ows/` directory:
 1. Tar the vault directory (excluding `logs/` and `state/`)
 2. Encrypt the tar with a backup passphrase (separate from vault passphrase)
 3. Write to the output path
@@ -186,23 +186,23 @@ The backup is self-contained — it includes wallet files, policies, plugins, an
 ### Restore from Backup
 
 ```bash
-lws restore --input ~/lws-backup-2026-02-27.tar.gz.enc
+ows restore --input ~/ows-backup-2026-02-27.tar.gz.enc
 ```
 
-Decrypts and extracts the backup to `~/.lws/`. If the vault directory already exists, the user is prompted to merge or overwrite.
+Decrypts and extracts the backup to `~/.ows/`. If the vault directory already exists, the user is prompted to merge or overwrite.
 
 ### Automated Backup
 
-In `~/.lws/config.json`:
+In `~/.ows/config.json`:
 
 ```json
 {
   "backup": {
     "enabled": true,
     "schedule": "daily",
-    "destination": "~/.lws/backups/",
+    "destination": "~/.ows/backups/",
     "retention": 30,
-    "passphrase_env": "LWS_BACKUP_PASSPHRASE"
+    "passphrase_env": "OWS_BACKUP_PASSPHRASE"
   }
 }
 ```
@@ -214,7 +214,7 @@ In `~/.lws/config.json`:
 If the vault is lost but the mnemonic is available:
 
 ```bash
-lws wallet recover --name "recovered" --chain evm --chains eip155:8453,eip155:1
+ows wallet recover --name "recovered" --chain evm --chains eip155:8453,eip155:1
 # Prompts for mnemonic interactively
 # Scans for accounts with balance using gap limit of 20
 ```
@@ -237,7 +237,7 @@ See "Import > Ethereum Keystore v3" above.
 ## Deletion
 
 ```bash
-lws wallet delete --id 3198bc9c-...
+ows wallet delete --id 3198bc9c-...
 # Warning: "This will permanently delete the encrypted wallet file.
 # Ensure you have exported the mnemonic or private key before proceeding."
 # Requires --confirm flag or interactive confirmation
@@ -252,10 +252,10 @@ Deletion:
 
 ## Key Rotation
 
-LWS supports creating a new wallet and migrating assets from an old one:
+OWS supports creating a new wallet and migrating assets from an old one:
 
 ```bash
-lws wallet rotate --from old-wallet --to new-wallet --chain eip155:8453
+ows wallet rotate --from old-wallet --to new-wallet --chain eip155:8453
 ```
 
 This is a convenience operation that:
@@ -269,11 +269,11 @@ Key rotation does NOT re-encrypt the old wallet — it transfers assets to a new
 
 ## Wallet Discovery
 
-For environments where multiple tools may create LWS wallets, a discovery mechanism helps avoid duplicate wallet creation:
+For environments where multiple tools may create OWS wallets, a discovery mechanism helps avoid duplicate wallet creation:
 
 ```typescript
 // Find wallets matching criteria
-const wallets = await lws.discoverWallets({
+const wallets = await ows.discoverWallets({
   chainType: "evm",
   chainId: "eip155:8453",
   name: "agent-*",                    // glob pattern
@@ -281,11 +281,11 @@ const wallets = await lws.discoverWallets({
 });
 ```
 
-The `lws wallet list` CLI command also supports filtering:
+The `ows wallet list` CLI command also supports filtering:
 
 ```bash
-lws wallet list --chain evm --with-policy
-lws wallet list --name "agent-*"
+ows wallet list --chain evm --with-policy
+ows wallet list --name "agent-*"
 ```
 
 ## Lifecycle State Diagram

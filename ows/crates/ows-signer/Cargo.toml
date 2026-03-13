@@ -1,0 +1,38 @@
+[package]
+name = "ows-signer"
+version = "0.2.27"
+edition = "2021"
+license = "MIT"
+description = "Cryptographic signing and key management for the Open Wallet Standard"
+repository = "https://github.com/open-wallet-standard/core"
+
+[features]
+default = []
+fast-kdf = []
+
+[dependencies]
+ows-core = { path = "../ows-core", version = "=0.2.27" }
+k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
+ed25519-dalek = { version = "2", features = ["hazmat"] }
+coins-bip32 = "0.11"
+coins-bip39 = "0.11"
+sha2 = "0.10"
+sha3 = "0.10"
+ripemd = "0.1"
+bech32 = "0.11"
+base64 = "0.22"
+bs58 = { version = "0.5", features = ["check"] }
+zeroize = { version = "1", features = ["derive"] }
+thiserror = "2"
+hex = "0.4"
+hmac = "0.12"
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aes-gcm = "0.10"
+scrypt = "0.11"
+digest = "0.10"
+libc = "0.2"
+signal-hook = "0.4"
+
+[dev-dependencies]

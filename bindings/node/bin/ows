@@ -1,0 +1,77 @@
+#!/usr/bin/env node
+
+const { execFileSync } = require("child_process");
+const { existsSync } = require("fs");
+const { join } = require("path");
+const { platform, arch } = process;
+
+const PLATFORM_MAP = {
+  "darwin-arm64": {
+    pkg: "@open-wallet-standard/node-darwin-arm64",
+    bin: "ows",
+  },
+  "darwin-x64": {
+    pkg: "@open-wallet-standard/node-darwin-x64",
+    bin: "ows",
+  },
+  "linux-x64": {
+    pkg: "@open-wallet-standard/node-linux-x64-gnu",
+    bin: "ows",
+  },
+  "linux-arm64": {
+    pkg: "@open-wallet-standard/node-linux-arm64-gnu",
+    bin: "ows",
+  },
+};
+
+const key = `${platform}-${arch}`;
+const entry = PLATFORM_MAP[key];
+
+if (!entry) {
+  console.error(
+    `ows: unsupported platform ${platform}-${arch}. ` +
+      `Install the CLI manually: https://openwallet.sh`
+  );
+  process.exit(1);
+}
+
+// Try to find the binary in the platform-specific optional dependency
+let binPath;
+
+// 1. Check inside node_modules (normal npm install)
+try {
+  const pkgDir = require.resolve(`${entry.pkg}/package.json`);
+  binPath = join(pkgDir, "..", entry.bin);
+} catch {}
+
+// 2. Check local npm/ directory (development / monorepo)
+if (!binPath || !existsSync(binPath)) {
+  const localDir = join(
+    __dirname,
+    "..",
+    "npm",
+    entry.pkg.split("/").pop(),
+    entry.bin
+  );
+  if (existsSync(localDir)) {
+    binPath = localDir;
+  }
+}
+
+if (!binPath || !existsSync(binPath)) {
+  console.error(
+    `ows: CLI binary not found for ${platform}-${arch}.\n` +
+      `The platform package ${entry.pkg} may not be installed.\n` +
+      `Install the CLI manually: https://openwallet.sh`
+  );
+  process.exit(1);
+}
+
+try {
+  execFileSync(binPath, process.argv.slice(2), { stdio: "inherit" });
+} catch (e) {
+  if (e.status !== undefined) {
+    process.exit(e.status);
+  }
+  throw e;
+}

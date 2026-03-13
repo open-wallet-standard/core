@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Publishes @local-wallet-standard/node packages to npm.
+ * Publishes @open-wallet-standard/node packages to npm.
  *
  * Builds the native module for the current platform, copies the binary
  * into the right npm/<platform> directory, and publishes both the
@@ -39,8 +39,8 @@ if (!nodeFile) {
   process.exit(1);
 }
 
-// e.g. "lws-node.darwin-arm64.node" → "darwin-arm64"
-const platform = nodeFile.replace('lws-node.', '').replace('.node', '');
+// e.g. "ows-node.darwin-arm64.node" → "darwin-arm64"
+const platform = nodeFile.replace('ows-node.', '').replace('.node', '');
 const platformDir = join(__dirname, 'npm', platform);
 
 if (!existsSync(platformDir)) {

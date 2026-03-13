@@ -1,6 +1,6 @@
-# Contributing to LWS
+# Contributing to OWS
 
-Thanks for your interest in contributing to the Local Wallet Standard! This guide will help you get started.
+Thanks for your interest in contributing to the Open Wallet Standard! This guide will help you get started.
 
 ## Development Setup
 
@@ -14,11 +14,11 @@ Thanks for your interest in contributing to the Local Wallet Standard! This guid
 
 ```bash
 # Clone the repo
-git clone https://github.com/dawnlabsai/lws.git
-cd lws
+git clone https://github.com/open-wallet-standard/core.git
+cd core
 
 # Build the Rust workspace
-cd lws && cargo build --workspace --release
+cd ows && cargo build --workspace --release
 
 # Build Node bindings
 cd bindings/node && npm install && npx napi build --platform --release
@@ -31,7 +31,7 @@ cd bindings/python && maturin develop --release
 
 ```bash
 # Rust tests
-cd lws && cargo test --workspace
+cd ows && cargo test --workspace
 
 # Node tests
 cd bindings/node && npm test
@@ -40,8 +40,8 @@ cd bindings/node && npm test
 ### Code Formatting
 
 ```bash
-cd lws && cargo fmt --all      # Format Rust code
-cd lws && cargo clippy --workspace -- -D warnings  # Lint
+cd ows && cargo fmt --all      # Format Rust code
+cd ows && cargo clippy --workspace -- -D warnings  # Lint
 ```
 
 ## Making Changes
@@ -61,26 +61,26 @@ cd lws && cargo clippy --workspace -- -D warnings  # Lint
 ## Project Structure
 
 ```
-lws/
-├── lws/crates/
-│   ├── lws-core/      # Types, CAIP parsing, errors
-│   ├── lws-signer/    # HD derivation, signing, address generation
-│   ├── lws-lib/       # FFI interface for language bindings
-│   └── lws-cli/       # CLI tool
+core/
+├── ows/crates/
+│   ├── ows-core/      # Types, CAIP parsing, errors
+│   ├── ows-signer/    # HD derivation, signing, address generation
+│   ├── ows-lib/       # FFI interface for language bindings
+│   └── ows-cli/       # CLI tool
 ├── bindings/
 │   ├── node/          # Node.js NAPI bindings
 │   └── python/        # Python (PyO3/Maturin) bindings
 ├── docs/              # Specification documents
-└── website/           # Static site (localwalletstandard.org)
+└── website/           # Static site (openwalletstandard.org)
 ```
 
 ## Reporting Bugs
 
-Open a [GitHub Issue](https://github.com/dawnlabsai/lws/issues) with:
+Open a [GitHub Issue](https://github.com/open-wallet-standard/core/issues) with:
 - Steps to reproduce
 - Expected vs actual behavior
-- OS, Rust version, and LWS version (`lws --version`)
+- OS, Rust version, and OWS version (`ows --version`)
 
 ## Questions?
 
-Open a [discussion](https://github.com/dawnlabsai/lws/discussions) or an issue — we're happy to help.
+Open a [discussion](https://github.com/open-wallet-standard/core/discussions) or an issue — we're happy to help.

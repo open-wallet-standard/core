@@ -9,7 +9,7 @@
 
 ## Reporting a Vulnerability
 
-LWS handles private keys and signing operations. We take security seriously.
+OWS handles private keys and signing operations. We take security seriously.
 
 **Do not open a public issue for security vulnerabilities.**
 
@@ -40,7 +40,7 @@ The following are in scope for security reports:
 
 ## Security Design
 
-For details on how LWS protects key material, see:
+For details on how OWS protects key material, see:
 
 - [Key Isolation](docs/05-key-isolation.md)
 - [Storage Format](docs/01-storage-format.md)

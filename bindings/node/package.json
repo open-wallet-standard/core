@@ -1,14 +1,14 @@
 {
-  "name": "@local-wallet-standard/node",
+  "name": "@open-wallet-standard/node",
   "version": "0.2.27",
-  "description": "Node.js native bindings for the Lightweight Wallet Signer",
+  "description": "Node.js native bindings for the Open Wallet Standard",
   "main": "index.js",
   "types": "index.d.ts",
   "bin": {
-    "lws": "bin/lws"
+    "ows": "bin/ows"
   },
   "napi": {
-    "name": "lws-node",
+    "name": "ows-node",
     "triples": {
       "defaults": false,
       "additional": [
@@ -31,15 +31,15 @@
     "@napi-rs/cli": "^2.18.0"
   },
   "optionalDependencies": {
-    "@local-wallet-standard/node-linux-x64-gnu": "0.2.27",
-    "@local-wallet-standard/node-linux-arm64-gnu": "0.2.27",
-    "@local-wallet-standard/node-darwin-x64": "0.2.27",
-    "@local-wallet-standard/node-darwin-arm64": "0.2.27"
+    "@open-wallet-standard/node-linux-x64-gnu": "0.2.27",
+    "@open-wallet-standard/node-linux-arm64-gnu": "0.2.27",
+    "@open-wallet-standard/node-darwin-x64": "0.2.27",
+    "@open-wallet-standard/node-darwin-arm64": "0.2.27"
   },
   "license": "MIT",
   "files": [
     "index.js",
     "index.d.ts",
-    "bin/lws"
+    "bin/ows"
   ]
 }

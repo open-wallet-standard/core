@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in LWS
+about: Report a bug in OWS
 title: ""
 labels: bug
 assignees: ""
@@ -11,7 +11,7 @@ A clear description of what the bug is.
 
 **To reproduce**
 Steps to reproduce the behavior:
-1. Run `lws ...`
+1. Run `ows ...`
 2. See error
 
 **Expected behavior**
@@ -19,7 +19,7 @@ What you expected to happen.
 
 **Environment**
 - OS: [e.g., macOS 15, Ubuntu 24.04]
-- LWS version: [e.g., 0.2.18]
+- OWS version: [e.g., 0.2.18]
 - Interface: [CLI / Node.js / Python]
 - Node/Python version (if applicable):
 

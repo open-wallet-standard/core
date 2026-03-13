@@ -1,18 +1,18 @@
 [package]
-name = "lws-node"
+name = "ows-node"
 version = "0.2.27"
 edition = "2021"
-description = "Node.js native bindings for the Lightweight Wallet Signer"
+description = "Node.js native bindings for the Open Wallet Standard"
 
 [lib]
 crate-type = ["cdylib"]
 
 [features]
 default = []
-fast-kdf = ["lws-lib/fast-kdf"]
+fast-kdf = ["ows-lib/fast-kdf"]
 
 [dependencies]
-lws-lib = { path = "../../lws/crates/lws-lib" }
+ows-lib = { path = "../../ows/crates/ows-lib" }
 napi = { version = "2", features = ["napi6", "serde-json"] }
 napi-derive = "2"
 

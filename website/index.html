@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LWS - Local Wallet Standard</title>
+  <title>OWS - Open Wallet Standard</title>
   <meta name="description" content="An open standard for secure local wallet storage and agent access. One interface for all chains, all agents, all tools.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -15,7 +15,7 @@
   <!-- Header -->
   <header class="header">
     <div class="header-inner">
-      <a href="/" class="header-logo">LWS</a>
+      <a href="/" class="header-logo">OWS</a>
       <nav class="header-nav" id="nav">
         <a href="#principles">Principles</a>
         <a href="#architecture">Architecture</a>
@@ -28,7 +28,7 @@
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2h7l3 3v9H3V2z"/><path d="M10 2v3h3"/><path d="M5 9h6M5 11.5h4"/></svg>
           Docs
         </a>
-        <a href="https://github.com/dawnlabsai/lws" class="btn btn-primary">
+        <a href="https://github.com/open-wallet-standard/core" class="btn btn-primary">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
           GitHub
         </a>
@@ -45,12 +45,12 @@
       <span class="dot"></span>
       Open Standard v0.1
     </div>
-    <h1 class="hero-title">LWS</h1>
-    <p class="hero-subtitle">Local Wallet Standard</p>
+    <h1 class="hero-title">OWS</h1>
+    <p class="hero-subtitle">Open Wallet Standard</p>
     <p class="hero-description">
       An open, neutral standard for secure local wallet storage and agent access.
       One vault, one interface, every chain. Agents sign transactions without ever
-      touching private keys. LWS exists to give every AI agent a wallet it can
+      touching private keys. OWS exists to give every AI agent a wallet it can
       trust&mdash;and every user a wallet they control.
     </p>
     <div class="hero-actions">
@@ -90,13 +90,13 @@
           </div>
         </div>
         <div class="problem-diagram">
-          <div class="problem-diagram-label">With LWS &mdash; one interface</div>
+          <div class="problem-diagram-label">With OWS &mdash; one interface</div>
           <div class="architecture" style="background: var(--gray-800); border-color: var(--gray-700);">
 <pre style="color: var(--gray-300);">
  dawn-cli ─────┐
  foundry  ─────┤
  hardhat  ─────┤
- solana-cli ───┼──── <span style="color: #22c55e; font-weight: 700;">LWS</span> ──── All chains
+ solana-cli ───┼──── <span style="color: #22c55e; font-weight: 700;">OWS</span> ──── All chains
  agent-x  ─────┤
  your-bot ─────┘
 
@@ -139,7 +139,7 @@
       <span class="section-label">Design Principles</span>
       <h2 class="section-title">Built for the agent era</h2>
       <p class="section-description">
-        Five principles that make LWS different from every wallet SDK, cloud API, and ad-hoc keystore that came before it.
+        Five principles that make OWS different from every wallet SDK, cloud API, and ad-hoc keystore that came before it.
       </p>
 
       <div class="principles">
@@ -194,8 +194,8 @@
 <pre>
  Agent / CLI / App                        Signing Flow
  (Claude, dawn-cli, custom)
-        │                            1. Agent calls lws.sign()
-        │ LWS Interface             2. Policy engine evaluates
+        │                            1. Agent calls ows.sign()
+        │ OWS Interface             2. Policy engine evaluates
         ▼                            3. Enclave decrypts key
  ┌─────────────────────┐             4. Transaction signed
  │    Access Layer      │             5. Key wiped from memory
@@ -211,7 +211,7 @@
  │  └────────┬────────┘ │            simulation per-chain.
  │  ┌────────▼────────┐ │
  │  │  Wallet Vault    │ │
- │  │ ~/.lws/wallets/  │ │
+ │  │ ~/.ows/wallets/  │ │
  │  └─────────────────┘ │
  └─────────────────────┘
 </pre>
@@ -222,7 +222,7 @@
       <div class="flow-step">
         <div class="flow-step-number">Step 1</div>
         <h4>Request</h4>
-        <p>Agent calls <code>lws_sign</code> via MCP, REST, or SDK with a chain ID and transaction object.</p>
+        <p>Agent calls <code>ows_sign</code> via MCP, REST, or SDK with a chain ID and transaction object.</p>
       </div>
       <div class="flow-arrow">&rarr;</div>
       <div class="flow-step">
@@ -248,7 +248,7 @@
   <!-- Features -->
   <section class="section-full section-alt">
     <div class="section-full-inner">
-      <span class="section-label">Why LWS</span>
+      <span class="section-label">Why OWS</span>
       <h2 class="section-title">Zero compromise wallet access</h2>
 
       <div class="features-grid">
@@ -265,7 +265,7 @@
         <div class="feature-card">
           <div class="feature-icon">&#128737;</div>
           <h3>Zero trust required</h3>
-          <p>No cloud accounts, no API keys, no network dependency. Everything runs on your machine. Wallets are encrypted with scrypt + AES-256-GCM and stored at <code>~/.lws/</code>.</p>
+          <p>No cloud accounts, no API keys, no network dependency. Everything runs on your machine. Wallets are encrypted with scrypt + AES-256-GCM and stored at <code>~/.ows/</code>.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">&#9881;</div>
@@ -275,7 +275,7 @@
         <div class="feature-card">
           <div class="feature-icon">&#128220;</div>
           <h3>Zero unaudited actions</h3>
-          <p>Every signing operation is logged to an append-only audit trail. Policy evaluations, simulation results, transaction hashes&mdash;all recorded in <code>~/.lws/logs/audit.jsonl</code>.</p>
+          <p>Every signing operation is logged to an append-only audit trail. Policy evaluations, simulation results, transaction hashes&mdash;all recorded in <code>~/.ows/logs/audit.jsonl</code>.</p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">&#128268;</div>
@@ -311,7 +311,7 @@
           <button class="code-block-copy" onclick="copyCode(this)">Copy</button>
         </div>
         <div class="code-block">
-<pre>npm install @local-wallet-standard/node</pre>
+<pre>npm install @open-wallet-standard/node</pre>
         </div>
       </div>
       <div class="code-block-wrapper" style="max-width: 100%;">
@@ -320,7 +320,7 @@
           <button class="code-block-copy" onclick="copyCode(this)">Copy</button>
         </div>
         <div class="code-block">
-<pre>pip install local-wallet-standard</pre>
+<pre>pip install open-wallet-standard</pre>
         </div>
       </div>
     </div>
@@ -329,12 +329,12 @@
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
       <div class="code-block-wrapper" style="max-width: 100%;">
         <div class="code-block-header">
-          <span class="code-block-title">Node.js &mdash; <a href="https://www.npmjs.com/package/@local-wallet-standard/node" style="color: var(--gray-400); text-decoration: underline;">npm</a></span>
+          <span class="code-block-title">Node.js &mdash; <a href="https://www.npmjs.com/package/@open-wallet-standard/node" style="color: var(--gray-400); text-decoration: underline;">npm</a></span>
           <button class="code-block-copy" onclick="copyCode(this)">Copy</button>
         </div>
         <div class="code-block">
 <pre><span class="keyword">import</span> { createWallet, signMessage }
-  <span class="keyword">from</span> <span class="string">"@local-wallet-standard/node"</span>;
+  <span class="keyword">from</span> <span class="string">"@open-wallet-standard/node"</span>;
 
 <span class="keyword">const</span> wallet = createWallet(<span class="string">"agent-treasury"</span>);
 <span class="comment">// => accounts for EVM, Solana, BTC, Cosmos, Tron, TON</span>
@@ -347,11 +347,11 @@ console.log(sig.signature);</pre>
       </div>
       <div class="code-block-wrapper" style="max-width: 100%;">
         <div class="code-block-header">
-          <span class="code-block-title">Python &mdash; <a href="https://pypi.org/project/local-wallet-standard/" style="color: var(--gray-400); text-decoration: underline;">PyPI</a></span>
+          <span class="code-block-title">Python &mdash; <a href="https://pypi.org/project/open-wallet-standard/" style="color: var(--gray-400); text-decoration: underline;">PyPI</a></span>
           <button class="code-block-copy" onclick="copyCode(this)">Copy</button>
         </div>
         <div class="code-block">
-<pre><span class="keyword">from</span> local_wallet_standard <span class="keyword">import</span> (
+<pre><span class="keyword">from</span> open_wallet_standard <span class="keyword">import</span> (
     create_wallet, sign_message
 )
 
@@ -374,7 +374,7 @@ print(sig[<span class="string">"signature"</span>])</pre>
       </div>
       <div class="code-block">
 <pre><span class="comment"># Create a wallet (derives addresses for all supported chains)</span>
-lws wallet create --name "agent-treasury"
+ows wallet create --name "agent-treasury"
 <span class="comment"># => Created wallet 3198bc9c-...</span>
 <span class="comment">#    eip155:1       0xab16...  m/44'/60'/0'/0/0</span>
 <span class="comment">#    solana:...     7Kz9...    m/44'/501'/0'/0'</span>
@@ -384,24 +384,24 @@ lws wallet create --name "agent-treasury"
 <span class="comment">#    ton:mainnet    EQCx...    m/44'/607'/0'/0'</span>
 
 <span class="comment"># Sign a message</span>
-lws sign message --wallet agent-treasury --chain evm --message <span class="string">"hello"</span>
+ows sign message --wallet agent-treasury --chain evm --message <span class="string">"hello"</span>
 
 <span class="comment"># Sign a transaction</span>
-lws sign tx --wallet agent-treasury --chain evm --tx-hex <span class="string">"deadbeef..."</span></pre>
+ows sign tx --wallet agent-treasury --chain evm --tx-hex <span class="string">"deadbeef..."</span></pre>
       </div>
     </div>
 
     <!-- MCP Config -->
     <div class="code-block-wrapper" style="max-width: 100%; margin-top: 1.5rem;">
       <div class="code-block-header">
-        <span class="code-block-title">claude_code_config.json — Connect Claude to LWS</span>
+        <span class="code-block-title">claude_code_config.json — Connect Claude to OWS</span>
         <button class="code-block-copy" onclick="copyCode(this)">Copy</button>
       </div>
       <div class="code-block">
 <pre>{
   <span class="string">"mcpServers"</span>: {
-    <span class="string">"lws"</span>: {
-      <span class="string">"command"</span>: <span class="string">"lws"</span>,
+    <span class="string">"ows"</span>: {
+      <span class="string">"command"</span>: <span class="string">"ows"</span>,
       <span class="string">"args"</span>: [<span class="string">"serve"</span>, <span class="string">"--mcp"</span>]
     }
   }
@@ -467,9 +467,9 @@ lws sign tx --wallet agent-treasury --chain evm --tx-hex <span class="string">"d
   <!-- Comparison -->
   <section class="section">
     <span class="section-label">Landscape</span>
-    <h2 class="section-title">How LWS compares</h2>
+    <h2 class="section-title">How OWS compares</h2>
     <p class="section-description">
-      Existing solutions are cloud-first. LWS is local-first with an upgrade path to TEEs.
+      Existing solutions are cloud-first. OWS is local-first with an upgrade path to TEEs.
     </p>
 
     <div style="overflow-x: auto;">
@@ -477,7 +477,7 @@ lws sign tx --wallet agent-treasury --chain evm --tx-hex <span class="string">"d
         <thead>
           <tr>
             <th>Feature</th>
-            <th>LWS</th>
+            <th>OWS</th>
             <th>Privy</th>
             <th>Turnkey</th>
             <th>Coinbase CDP</th>
@@ -555,7 +555,7 @@ lws sign tx --wallet agent-treasury --chain evm --tx-hex <span class="string">"d
       <span class="section-label">Prior Art</span>
       <h2 class="section-title">Standing on the shoulders of</h2>
       <p class="section-description">
-        LWS synthesizes ideas from the best wallet infrastructure in the industry.
+        OWS synthesizes ideas from the best wallet infrastructure in the industry.
       </p>
 
       <div class="prior-art-grid">
@@ -644,7 +644,7 @@ lws sign tx --wallet agent-treasury --chain evm --tx-hex <span class="string">"d
       </p>
       <div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
         <a href="docs/" class="btn btn-primary btn-large" style="background: var(--white); color: var(--black);">Read the Specification</a>
-        <a href="https://github.com/dawnlabsai/lws" class="btn btn-outline btn-large" style="border-color: var(--gray-600); color: var(--gray-300);">GitHub</a>
+        <a href="https://github.com/open-wallet-standard/core" class="btn btn-outline btn-large" style="border-color: var(--gray-600); color: var(--gray-300);">GitHub</a>
       </div>
     </div>
   </section>
@@ -653,9 +653,9 @@ lws sign tx --wallet agent-treasury --chain evm --tx-hex <span class="string">"d
   <footer class="footer">
     <div class="footer-inner">
       <div>
-        <div class="footer-brand">LWS</div>
+        <div class="footer-brand">OWS</div>
         <p class="footer-description">
-          The Local Wallet Standard. An open specification for secure local wallet storage and agent access. CC0 licensed.
+          The Open Wallet Standard. An open specification for secure local wallet storage and agent access. CC0 licensed.
         </p>
       </div>
       <div class="footer-col">
@@ -674,14 +674,14 @@ lws sign tx --wallet agent-treasury --chain evm --tx-hex <span class="string">"d
       </div>
       <div class="footer-col">
         <h4>Packages</h4>
-        <a href="https://www.npmjs.com/package/@local-wallet-standard/node">npm (Node.js)</a>
-        <a href="https://pypi.org/project/local-wallet-standard/">PyPI (Python)</a>
-        <a href="https://github.com/dawnlabsai/lws">GitHub</a>
+        <a href="https://www.npmjs.com/package/@open-wallet-standard/node">npm (Node.js)</a>
+        <a href="https://pypi.org/project/open-wallet-standard/">PyPI (Python)</a>
+        <a href="https://github.com/open-wallet-standard/core">GitHub</a>
       </div>
     </div>
     <div class="footer-bottom">
       <span>CC0 1.0 Universal &mdash; Public Domain</span>
-      <span>Local Wallet Standard v0.1</span>
+      <span>Open Wallet Standard v0.1</span>
     </div>
   </footer>
 

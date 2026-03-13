@@ -1,5 +1,5 @@
 {
-  "name": "@local-wallet-standard/node-darwin-arm64",
+  "name": "@open-wallet-standard/node-darwin-arm64",
   "version": "0.2.27",
   "os": [
     "darwin"
@@ -7,10 +7,10 @@
   "cpu": [
     "arm64"
   ],
-  "main": "lws-node.darwin-arm64.node",
+  "main": "ows-node.darwin-arm64.node",
   "files": [
-    "lws-node.darwin-arm64.node",
-    "lws"
+    "ows-node.darwin-arm64.node",
+    "ows"
   ],
   "license": "MIT"
 }

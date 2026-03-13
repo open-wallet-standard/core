@@ -37,22 +37,22 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            asset: lws-linux-x86_64
+            asset: ows-linux-x86_64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            asset: lws-linux-aarch64
+            asset: ows-linux-aarch64
           - target: x86_64-apple-darwin
             os: macos-latest
-            asset: lws-darwin-x86_64
+            asset: ows-darwin-x86_64
           - target: aarch64-apple-darwin
             os: macos-latest
-            asset: lws-darwin-aarch64
+            asset: ows-darwin-aarch64
 
     runs-on: ${{ matrix.os }}
 
     defaults:
       run:
-        working-directory: lws
+        working-directory: ows
 
     steps:
       - uses: actions/checkout@v5
@@ -83,13 +83,13 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Rename binary
-        run: cp target/${{ matrix.target }}/release/lws ${{ matrix.asset }}
+        run: cp target/${{ matrix.target }}/release/ows ${{ matrix.asset }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.asset }}
-          path: lws/${{ matrix.asset }}
+          path: ows/${{ matrix.asset }}
 
   python-wheels:
     needs: bump-version
@@ -273,16 +273,16 @@ jobs:
       - name: Download CLI binaries
         uses: actions/download-artifact@v5
         with:
-          pattern: lws-*
+          pattern: ows-*
           merge-multiple: true
           path: bindings/node/cli-binaries
 
       - name: Copy CLI binaries into platform packages
         run: |
-          cp cli-binaries/lws-darwin-aarch64 npm/darwin-arm64/lws   && chmod +x npm/darwin-arm64/lws
-          cp cli-binaries/lws-darwin-x86_64  npm/darwin-x64/lws     && chmod +x npm/darwin-x64/lws
-          cp cli-binaries/lws-linux-x86_64   npm/linux-x64-gnu/lws  && chmod +x npm/linux-x64-gnu/lws
-          cp cli-binaries/lws-linux-aarch64  npm/linux-arm64-gnu/lws && chmod +x npm/linux-arm64-gnu/lws
+          cp cli-binaries/ows-darwin-aarch64 npm/darwin-arm64/ows   && chmod +x npm/darwin-arm64/ows
+          cp cli-binaries/ows-darwin-x86_64  npm/darwin-x64/ows     && chmod +x npm/darwin-x64/ows
+          cp cli-binaries/ows-linux-x86_64   npm/linux-x64-gnu/ows  && chmod +x npm/linux-x64-gnu/ows
+          cp cli-binaries/ows-linux-aarch64  npm/linux-arm64-gnu/ows && chmod +x npm/linux-arm64-gnu/ows
 
       - name: Publish platform packages
         env:
@@ -312,7 +312,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: lws
+        working-directory: ows
 
     steps:
       - uses: actions/checkout@v5
@@ -327,23 +327,23 @@ jobs:
           V="${GITHUB_REF_NAME#v}"
           "$GITHUB_WORKSPACE/scripts/set-version.sh" "$V" --rust
 
-      - name: Publish lws-core
-        run: cargo publish -p lws-core
+      - name: Publish ows-core
+        run: cargo publish -p ows-core
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Publish lws-signer
-        run: cargo publish -p lws-signer
+      - name: Publish ows-signer
+        run: cargo publish -p ows-signer
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Publish lws-lib
-        run: cargo publish -p lws-lib
+      - name: Publish ows-lib
+        run: cargo publish -p ows-lib
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Publish lws-cli
-        run: cargo publish -p lws-cli
+      - name: Publish ows-cli
+        run: cargo publish -p ows-cli
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
@@ -360,4 +360,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: lws-*
+          files: ows-*

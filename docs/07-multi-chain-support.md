@@ -1,32 +1,32 @@
 # 07 - Multi-Chain Support
 
-> How LWS supports EVM, Solana, Cosmos, Bitcoin, Tron, and future chains through a plugin architecture.
+> How OWS supports EVM, Solana, Cosmos, Bitcoin, Tron, and future chains through a plugin architecture.
 
 ## Implementation Status
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `ChainSigner` trait (`deriveAddress`, `sign`, `signMessage`, `signTransaction`) | Done | `lws-signer/src/traits.rs` |
-| EVM plugin (secp256k1, coin 60, EIP-55 addresses) | Done | `lws-signer/src/chains/evm.rs` |
-| Solana plugin (ed25519, coin 501, base58 addresses) | Done | `lws-signer/src/chains/solana.rs` |
-| Bitcoin plugin (secp256k1, coin 0, bech32 addresses) | Done | `lws-signer/src/chains/bitcoin.rs` |
-| Cosmos plugin (secp256k1, coin 118, bech32 addresses) | Done | `lws-signer/src/chains/cosmos.rs` |
-| Tron plugin (secp256k1, coin 195, base58check addresses) | Done | `lws-signer/src/chains/tron.rs` |
-| HD derivation: BIP-32 (secp256k1) | Done | `lws-signer/src/hd.rs` |
-| HD derivation: SLIP-10 (ed25519) | Done | `lws-signer/src/hd.rs` |
-| Default RPC endpoints (11 chains) | Done | `lws-core/src/config.rs` |
+| `ChainSigner` trait (`deriveAddress`, `sign`, `signMessage`, `signTransaction`) | Done | `ows-signer/src/traits.rs` |
+| EVM plugin (secp256k1, coin 60, EIP-55 addresses) | Done | `ows-signer/src/chains/evm.rs` |
+| Solana plugin (ed25519, coin 501, base58 addresses) | Done | `ows-signer/src/chains/solana.rs` |
+| Bitcoin plugin (secp256k1, coin 0, bech32 addresses) | Done | `ows-signer/src/chains/bitcoin.rs` |
+| Cosmos plugin (secp256k1, coin 118, bech32 addresses) | Done | `ows-signer/src/chains/cosmos.rs` |
+| Tron plugin (secp256k1, coin 195, base58check addresses) | Done | `ows-signer/src/chains/tron.rs` |
+| HD derivation: BIP-32 (secp256k1) | Done | `ows-signer/src/hd.rs` |
+| HD derivation: SLIP-10 (ed25519) | Done | `ows-signer/src/hd.rs` |
+| Default RPC endpoints (11 chains) | Done | `ows-core/src/config.rs` |
 | User RPC overrides via config | Done | Merge semantics |
 | RPC resolution order (flag > config > default) | Done | CLI + config |
-| `lws config show` command | Done | Shows endpoints with (default)/(custom) |
+| `ows config show` command | Done | Shows endpoints with (default)/(custom) |
 | `buildTransaction()` method on plugins | Not started | Expects pre-built tx bytes |
 | `broadcast()` on `ChainSigner` trait | Not started | Broadcasting is in CLI, not trait |
-| External plugin discovery (npm `lws-plugin` keyword) | Not started | Chains are hardcoded in `signer_for_chain()` |
-| Plugin loading from `~/.lws/config.json` plugins field | Not started | Config field exists but unused |
+| External plugin discovery (npm `ows-plugin` keyword) | Not started | Chains are hardcoded in `signer_for_chain()` |
+| Plugin loading from `~/.ows/config.json` plugins field | Not started | Config field exists but unused |
 | Multi-chain account derivation from single mnemonic | Done | `derive_all_accounts()` |
 
 ## Design Decision
 
-**LWS uses a chain plugin system where each supported chain provides a signer and transaction builder that implement a standard interface. New chains are added by writing a plugin — no changes to the core spec or implementation are needed.**
+**OWS uses a chain plugin system where each supported chain provides a signer and transaction builder that implement a standard interface. New chains are added by writing a plugin — no changes to the core spec or implementation are needed.**
 
 This follows x402's scheme/network separation: the core protocol defines _how_ signing works; chain plugins define _what_ gets signed and how transactions are built for a specific network.
 
@@ -38,7 +38,7 @@ This follows x402's scheme/network separation: the core protocol defines _how_ s
 | **Plugin architecture** | Permissionless extension; core stays stable | Plugin discovery/loading complexity |
 | Chain-agnostic raw signing only | Simplest core | Useless without external tooling to build transactions |
 
-Privy takes the built-in approach (Tier 1/2/3 chain support with different capability levels). Turnkey takes the raw-signing approach (curve primitives only). LWS takes the middle path: a plugin system that ships with first-party plugins for major chains, while allowing anyone to add new chains.
+Privy takes the built-in approach (Tier 1/2/3 chain support with different capability levels). Turnkey takes the raw-signing approach (curve primitives only). OWS takes the middle path: a plugin system that ships with first-party plugins for major chains, while allowing anyone to add new chains.
 
 ## Plugin Interface
 
@@ -61,7 +61,7 @@ interface ChainPlugin {
   /** Derive a chain-specific address from a private key */
   deriveAddress(privateKey: Uint8Array): string;
 
-  /** Build and serialize a transaction from the LWS transaction object */
+  /** Build and serialize a transaction from the OWS transaction object */
   buildTransaction(
     tx: SerializedTransaction,
     chainId: ChainId,
@@ -93,7 +93,7 @@ interface ChainPlugin {
 
 ## First-Party Plugins
 
-### EVM (`@lws/plugin-evm`)
+### EVM (`@ows/plugin-evm`)
 
 Supports all EVM-compatible chains: Ethereum, Base, Polygon, Arbitrum, Optimism, Avalanche, BSC, etc.
 
@@ -120,7 +120,7 @@ Supports all EVM-compatible chains: Ethereum, Base, Polygon, Arbitrum, Optimism,
 }
 ```
 
-### Solana (`@lws/plugin-solana`)
+### Solana (`@ows/plugin-solana`)
 
 | Property | Value |
 |---|---|
@@ -149,9 +149,9 @@ Supports all EVM-compatible chains: Ethereum, Base, Polygon, Arbitrum, Optimism,
 }
 ```
 
-**Commitment mapping:** LWS `confirmations: 1` → Solana `"confirmed"`, `confirmations: 31` → Solana `"finalized"`.
+**Commitment mapping:** OWS `confirmations: 1` → Solana `"confirmed"`, `confirmations: 31` → Solana `"finalized"`.
 
-### Cosmos (`@lws/plugin-cosmos`)
+### Cosmos (`@ows/plugin-cosmos`)
 
 | Property | Value |
 |---|---|
@@ -162,7 +162,7 @@ Supports all EVM-compatible chains: Ethereum, Base, Polygon, Arbitrum, Optimism,
 | Transaction Library | @cosmjs/stargate |
 | RPC Protocol | Tendermint RPC + gRPC |
 
-### Bitcoin (`@lws/plugin-bitcoin`)
+### Bitcoin (`@ows/plugin-bitcoin`)
 
 | Property | Value |
 |---|---|
@@ -173,7 +173,7 @@ Supports all EVM-compatible chains: Ethereum, Base, Polygon, Arbitrum, Optimism,
 | Transaction Library | bitcoinjs-lib |
 | RPC Protocol | Bitcoin Core JSON-RPC / Electrum |
 
-### Tron (`@lws/plugin-tron`)
+### Tron (`@ows/plugin-tron`)
 
 | Property | Value |
 |---|---|
@@ -189,36 +189,36 @@ Supports all EVM-compatible chains: Ethereum, Base, Polygon, Arbitrum, Optimism,
 Plugins are discovered in two ways:
 
 ### 1. Built-In Plugins
-Shipped with the LWS reference implementation. Loaded automatically based on `chain_type` in wallet files.
+Shipped with the OWS reference implementation. Loaded automatically based on `chain_type` in wallet files.
 
 ### 2. External Plugins
-Installed as npm packages with a `lws-plugin` keyword in `package.json`:
+Installed as npm packages with a `ows-plugin` keyword in `package.json`:
 
 ```json
 {
-  "name": "@example/lws-plugin-sui",
-  "keywords": ["lws-plugin"],
+  "name": "@example/ows-plugin-sui",
+  "keywords": ["ows-plugin"],
   "main": "dist/index.js",
-  "lws": {
+  "ows": {
     "chainType": "sui",
     "chains": ["sui:35834a8a"]
   }
 }
 ```
 
-Registered in `~/.lws/config.json`:
+Registered in `~/.ows/config.json`:
 
 ```json
 {
   "plugins": {
-    "sui": "@example/lws-plugin-sui"
+    "sui": "@example/ows-plugin-sui"
   }
 }
 ```
 
 ## RPC Configuration
 
-LWS ships with built-in default RPC endpoints for well-known chains, so it works out of the box without any configuration:
+OWS ships with built-in default RPC endpoints for well-known chains, so it works out of the box without any configuration:
 
 | CAIP-2 Chain ID | Default RPC URL |
 |---|---|
@@ -234,7 +234,7 @@ LWS ships with built-in default RPC endpoints for well-known chains, so it works
 | `cosmos:cosmoshub-4` | `https://cosmos-rest.publicnode.com` |
 | `tron:mainnet` | `https://api.trongrid.io` |
 
-These defaults are public, rate-limited endpoints suitable for development and light usage. For production workloads, override them with your own RPC provider in `~/.lws/config.json`:
+These defaults are public, rate-limited endpoints suitable for development and light usage. For production workloads, override them with your own RPC provider in `~/.ows/config.json`:
 
 ```json
 {
@@ -253,17 +253,17 @@ User overrides are merged on top of built-in defaults — you only need to speci
 When broadcasting a transaction, the RPC URL is resolved in this order:
 
 1. **`--rpc-url` CLI flag** (or `rpcUrl` parameter in the API) — highest priority
-2. **`~/.lws/config.json`** user override for the chain
+2. **`~/.ows/config.json`** user override for the chain
 3. **Built-in default** for well-known chains
 
 ### Viewing Configuration
 
-Use `lws config show` to see the active configuration and all RPC endpoints:
+Use `ows config show` to see the active configuration and all RPC endpoints:
 
 ```
-$ lws config show
-Vault:  ~/.lws
-Config: ~/.lws/config.json (not found — using defaults)
+$ ows config show
+Vault:  ~/.ows
+Config: ~/.ows/config.json (not found — using defaults)
 
 RPC endpoints:
   bip122:000000000019d6689c085ae165831e93  https://mempool.space/api              (default)
@@ -277,7 +277,7 @@ Endpoints sourced from built-in defaults are annotated `(default)`; user overrid
 
 ## HD Derivation
 
-LWS uses BIP-39 mnemonics as the root key material, with BIP-32/BIP-44 derivation for all chains:
+OWS uses BIP-39 mnemonics as the root key material, with BIP-32/BIP-44 derivation for all chains:
 
 ```
 Mnemonic (BIP-39)
@@ -302,10 +302,10 @@ To add support for a new chain:
 1. Implement the `ChainPlugin` interface
 2. Register a CAIP-2 namespace (if not already registered at [chainagnostic.org](https://chainagnostic.org))
 3. Specify the BIP-44 coin type (from [SLIP-44](https://github.com/satoshilabs/slips/blob/master/slip-0044.md))
-4. Publish as an npm package with `lws-plugin` keyword
+4. Publish as an npm package with `ows-plugin` keyword
 5. Document the chain-specific transaction format
 
-No changes to LWS core, the signing interface, or the policy engine are needed.
+No changes to OWS core, the signing interface, or the policy engine are needed.
 
 ## References
 

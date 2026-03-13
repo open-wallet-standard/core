@@ -2,12 +2,12 @@
 
 > Native bindings for Node.js via NAPI. No CLI, no server, no subprocess &mdash; the Rust core runs in-process.
 
-[![npm](https://img.shields.io/npm/v/@local-wallet-standard/node)](https://www.npmjs.com/package/@local-wallet-standard/node)
+[![npm](https://img.shields.io/npm/v/@open-wallet-standard/node)](https://www.npmjs.com/package/@open-wallet-standard/node)
 
 ## Install
 
 ```bash
-npm install @local-wallet-standard/node
+npm install @open-wallet-standard/node
 ```
 
 The package includes prebuilt native binaries for macOS (arm64, x64) and Linux (x64, arm64). No Rust toolchain required.
@@ -21,7 +21,7 @@ import {
   listWallets,
   signMessage,
   deleteWallet,
-} from "@local-wallet-standard/node";
+} from "@open-wallet-standard/node";
 
 const mnemonic = generateMnemonic(12);
 const wallet = createWallet("my-wallet");
@@ -117,7 +117,7 @@ console.log(wallet.accounts);
 | `name` | `string` | &mdash; | Wallet name |
 | `passphrase` | `string` | `undefined` | Encryption passphrase |
 | `words` | `number` | `12` | Mnemonic word count |
-| `vaultPath` | `string` | `~/.lws/wallets` | Custom vault directory |
+| `vaultPath` | `string` | `~/.ows/wallets` | Custom vault directory |
 
 **Returns:** `WalletInfo`
 
@@ -223,7 +223,7 @@ console.log(wallet3.accounts.length); // => 6
 | `name` | `string` | &mdash; | Wallet name |
 | `privateKeyHex` | `string` | &mdash; | Hex-encoded private key (with or without `0x` prefix). Ignored when both curve keys are provided. |
 | `passphrase` | `string` | `undefined` | Encryption passphrase |
-| `vaultPath` | `string` | `~/.lws/wallets` | Custom vault directory |
+| `vaultPath` | `string` | `~/.ows/wallets` | Custom vault directory |
 | `chain` | `string` | `"evm"` | Source chain: `"evm"`, `"bitcoin"`, `"cosmos"`, `"tron"` (secp256k1) or `"solana"`, `"ton"` (Ed25519) |
 | `secp256k1Key` | `string` | `undefined` | Explicit secp256k1 private key (hex). Overrides random generation for secp256k1 chains. |
 | `ed25519Key` | `string` | `undefined` | Explicit Ed25519 private key (hex). Overrides random generation for Ed25519 chains. |
@@ -250,7 +250,7 @@ console.log(result.recoveryId); // 0 or 1
 | `passphrase` | `string` | `undefined` | Decryption passphrase |
 | `encoding` | `string` | `"utf8"` | `"utf8"` or `"hex"` |
 | `index` | `number` | `0` | Account index |
-| `vaultPath` | `string` | `~/.lws/wallets` | Custom vault directory |
+| `vaultPath` | `string` | `~/.ows/wallets` | Custom vault directory |
 
 **Returns:** `SignResult`
 
@@ -281,14 +281,14 @@ console.log(result.txHash);
 
 ## Custom Vault Path
 
-Every function accepts an optional `vaultPath` parameter. When omitted, the default vault at `~/.lws/wallets/` is used. This is useful for testing or running isolated environments:
+Every function accepts an optional `vaultPath` parameter. When omitted, the default vault at `~/.ows/wallets/` is used. This is useful for testing or running isolated environments:
 
 ```javascript
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const tmpVault = mkdtempSync(join(tmpdir(), "lws-test-"));
+const tmpVault = mkdtempSync(join(tmpdir(), "ows-test-"));
 
 const wallet = createWallet("test-wallet", undefined, 12, tmpVault);
 // ... use wallet ...

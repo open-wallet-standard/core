@@ -1,6 +1,6 @@
 {
   "framework": null,
-  "buildCommand": "mkdir -p website/docs/md && cp docs/*.md website/docs/md/ && cp lws/install.sh website/install.sh",
+  "buildCommand": "mkdir -p website/docs/md && cp docs/*.md website/docs/md/ && cp ows/install.sh website/install.sh",
   "outputDirectory": "website",
   "headers": [
     {

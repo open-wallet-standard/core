@@ -1,6 +1,6 @@
 # 06 - Agent Access Layer
 
-> How AI agents, CLI tools, and applications access LWS wallets through native language bindings.
+> How AI agents, CLI tools, and applications access OWS wallets through native language bindings.
 
 ## Implementation Status
 
@@ -28,18 +28,18 @@
 
 ## Design Decision
 
-**LWS exposes wallet operations through native language bindings backed by the core Rust implementation. Bindings call directly into the `lws-lib` crate via FFI — no HTTP server or subprocess is required. They are compiled native modules that run in-process.**
+**OWS exposes wallet operations through native language bindings backed by the core Rust implementation. Bindings call directly into the `ows-lib` crate via FFI — no HTTP server or subprocess is required. They are compiled native modules that run in-process.**
 
 ## Native Language Bindings
 
 ### Node.js (NAPI)
 
 ```bash
-npm install @lws/node
+npm install @ows/node
 ```
 
 ```typescript
-import { createWallet, listWallets, signMessage, signTransaction, signAndSend } from "@lws/node";
+import { createWallet, listWallets, signMessage, signTransaction, signAndSend } from "@ows/node";
 
 // Create a wallet
 const wallet = createWallet("agent-treasury", "evm", "my-passphrase");
@@ -60,11 +60,11 @@ const result = signAndSend("agent-treasury", "evm", "<tx-hex>", "my-passphrase")
 ### Python (PyO3)
 
 ```bash
-pip install lws
+pip install ows
 ```
 
 ```python
-from lws import create_wallet, list_wallets, sign_message, sign_transaction, sign_and_send
+from ows import create_wallet, list_wallets, sign_message, sign_transaction, sign_and_send
 
 # Create a wallet
 wallet = create_wallet("agent-treasury", "evm", "my-passphrase")
@@ -102,13 +102,13 @@ Both bindings expose the same 13 functions:
 | `sign_message(wallet, chain, message, passphrase, encoding?, index?, vault_path?)` | Sign a message |
 | `sign_and_send(wallet, chain, tx_hex, passphrase, index?, rpc_url?, vault_path?)` | Sign and broadcast a transaction |
 
-All functions operate on the default vault (`~/.lws/`) unless a custom `vault_path` is provided. The passphrase is used to decrypt wallet key material for signing operations.
+All functions operate on the default vault (`~/.ows/`) unless a custom `vault_path` is provided. The passphrase is used to decrypt wallet key material for signing operations.
 
-> **Note:** Because the bindings run in-process, key material is decrypted within the application's address space. For use cases where key isolation is critical, consider running LWS in a separate subprocess.
+> **Note:** Because the bindings run in-process, key material is decrypted within the application's address space. For use cases where key isolation is critical, consider running OWS in a separate subprocess.
 
 ## Agent Interaction Example
 
-Here's how an AI agent interacts with LWS through the bindings using an API key. The API key scopes the agent to specific wallets and policies.
+Here's how an AI agent interacts with OWS through the bindings using an API key. The API key scopes the agent to specific wallets and policies.
 
 ```
 Agent: "I need to send 0.01 ETH to 0x4B08... on Base"

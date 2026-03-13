@@ -1,13 +1,13 @@
 # 02 - Chain-Agnostic Addressing
 
-> How LWS identifies chains, accounts, and assets without being locked to any single ecosystem.
+> How OWS identifies chains, accounts, and assets without being locked to any single ecosystem.
 
 ## Implementation Status
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| CAIP-2 chain ID parsing (`namespace:reference`) | Done | `lws-core/src/caip.rs` |
-| Registered namespaces (eip155, solana, cosmos, bip122, tron) | Done | `lws-core/src/chain.rs` |
+| CAIP-2 chain ID parsing (`namespace:reference`) | Done | `ows-core/src/caip.rs` |
+| Registered namespaces (eip155, solana, cosmos, bip122, tron) | Done | `ows-core/src/chain.rs` |
 | CAIP-10 account IDs (`chain_id:address`) | Done | Stored in wallet `account_id` field |
 | CAIP-27 method invocation routing | Not started | Not used in CLI or bindings |
 | Asset identification (`chain_id:contract` / `native`) | Not started | No asset ID scheme |
@@ -15,7 +15,7 @@
 
 ## Design Decision
 
-**LWS uses CAIP (Chain Agnostic Improvement Proposals) identifiers as the canonical addressing scheme for all chains, accounts, and method invocations.**
+**OWS uses CAIP (Chain Agnostic Improvement Proposals) identifiers as the canonical addressing scheme for all chains, accounts, and method invocations.**
 
 ### Why CAIP
 
@@ -46,7 +46,7 @@ The namespace identifies the chain ecosystem. The reference identifies the speci
 | `tron` | Tron | Genesis block hash | `tron:00000000000000001ebf88508a03865c` |
 | `polkadot` | Polkadot | Genesis hash (first 32 bytes) | `polkadot:91b171bb158e2d3848fa23a9f1c25182` |
 
-New chains are added by registering a CAIP-2 namespace — no changes to the LWS core spec are needed.
+New chains are added by registering a CAIP-2 namespace — no changes to the OWS core spec are needed.
 
 ## CAIP-10: Account Identification
 
@@ -60,18 +60,18 @@ solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:7S3P4HxJpyyigGzodYwHtCxZyUQe9JiBMHyLWXo5
 cosmos:cosmoshub-4:cosmos1t2uflqwqe0fsj0shcfkrvpukewcw40yjj6hdc0
 ```
 
-Every account in an LWS wallet is identified by its CAIP-10 ID. This enables:
+Every account in an OWS wallet is identified by its CAIP-10 ID. This enables:
 - Unambiguous cross-chain references
 - Deterministic account lookup across tools
 - Standard format for audit logs and policy rules
 
 ## CAIP-27: Method Invocation
 
-LWS adopts CAIP-27 semantics for RPC method routing. When a signing request arrives, it is scoped to a specific chain:
+OWS adopts CAIP-27 semantics for RPC method routing. When a signing request arrives, it is scoped to a specific chain:
 
 ```json
 {
-  "method": "lws_signTransaction",
+  "method": "ows_signTransaction",
   "params": {
     "chainId": "eip155:8453",
     "walletId": "3198bc9c-...",
@@ -99,18 +99,18 @@ The special token `native` refers to the chain's native currency (ETH, SOL, TRX,
 
 ## How This Affects the Interface
 
-All LWS interface methods accept CAIP identifiers:
+All OWS interface methods accept CAIP identifiers:
 
 ```typescript
 // Sign a transaction on Base
-await lws.sign({
+await ows.sign({
   walletId: "3198bc9c-...",
   chainId: "eip155:8453",          // CAIP-2
   transaction: { /* ... */ }
 });
 
 // List accounts (returns CAIP-10 identifiers)
-const accounts = await lws.listAccounts("3198bc9c-...");
+const accounts = await ows.listAccounts("3198bc9c-...");
 // => ["eip155:8453:0xab16...", "eip155:1:0xab16..."]
 
 // PolicyContext uses CAIP-2 chain identifiers

@@ -1,5 +1,5 @@
 {
-  "name": "@local-wallet-standard/node-linux-arm64-gnu",
+  "name": "@open-wallet-standard/node-linux-arm64-gnu",
   "version": "0.2.27",
   "os": [
     "linux"
@@ -7,10 +7,10 @@
   "cpu": [
     "arm64"
   ],
-  "main": "lws-node.linux-arm64-gnu.node",
+  "main": "ows-node.linux-arm64-gnu.node",
   "files": [
-    "lws-node.linux-arm64-gnu.node",
-    "lws"
+    "ows-node.linux-arm64-gnu.node",
+    "ows"
   ],
   "license": "MIT"
 }

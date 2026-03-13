@@ -1,13 +1,13 @@
 [package]
-name = "lws-python"
+name = "ows-python"
 version = "0.2.27"
 edition = "2021"
-description = "Python native bindings for the Lightweight Wallet Signer"
+description = "Python native bindings for the Open Wallet Standard"
 
 [lib]
-name = "lws"
+name = "ows"
 crate-type = ["cdylib"]
 
 [dependencies]
-lws-lib = { path = "../../lws/crates/lws-lib" }
+ows-lib = { path = "../../ows/crates/ows-lib" }
 pyo3 = { version = "0.22", features = ["extension-module"] }

@@ -1,0 +1,19 @@
+/* highlight.js theme — matches OWS dark pre blocks */
+.hljs { background: transparent; color: #e5e5e5; }
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in { color: #c4b5fd; }
+.hljs-type,
+.hljs-class .hljs-title { color: #7dd3fc; }
+.hljs-string,
+.hljs-attr { color: #86efac; }
+.hljs-number,
+.hljs-literal { color: #fca5a5; }
+.hljs-comment { color: #737373; font-style: italic; }
+.hljs-property { color: #fde68a; }
+.hljs-function .hljs-title,
+.hljs-title.function_ { color: #93c5fd; }
+.hljs-variable,
+.hljs-template-variable { color: #e5e5e5; }
+.hljs-meta { color: #a3a3a3; }
+.hljs-punctuation { color: #d4d4d4; }

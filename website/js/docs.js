@@ -144,7 +144,7 @@ async function loadDoc() {
   var doc = DOCS.find(function (d) { return d.slug === slug; });
   if (!doc) { window.location.href = './'; return; }
 
-  document.title = doc.title + ' - LWS Docs';
+  document.title = doc.title + ' - OWS Docs';
   buildSidebar(slug);
 
   var content = document.getElementById('docs-content');

@@ -1,22 +1,22 @@
 # 03 - Signing Interface
 
-> The core operations exposed by an LWS implementation: signing, sending, and message signing.
+> The core operations exposed by an OWS implementation: signing, sending, and message signing.
 
 ## Implementation Status
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `sign` (sign transaction) | Done | CLI `lws sign tx`, `lws-signer` trait |
-| `signAndSend` (sign + broadcast) | Done | CLI `lws sign send-tx`, per-chain broadcast |
-| `signMessage` (arbitrary message signing) | Done | CLI `lws sign message`, EIP-712 supported |
+| `sign` (sign transaction) | Done | CLI `ows sign tx`, `ows-signer` trait |
+| `signAndSend` (sign + broadcast) | Done | CLI `ows sign send-tx`, per-chain broadcast |
+| `signMessage` (arbitrary message signing) | Done | CLI `ows sign message`, EIP-712 supported |
 | EVM broadcast (`eth_sendRawTransaction`) | Done | `send_transaction.rs` |
 | Solana broadcast (`sendTransaction`) | Done | `send_transaction.rs` |
 | Bitcoin broadcast (mempool.space REST) | Done | `send_transaction.rs` |
 | Cosmos broadcast (`/cosmos/tx/v1beta1/txs`) | Done | `send_transaction.rs` |
 | Tron broadcast (`/wallet/broadcasthex`) | Done | `send_transaction.rs` |
-| Error code: `WALLET_NOT_FOUND` | Done | `lws-core/src/error.rs` |
-| Error code: `CHAIN_NOT_SUPPORTED` | Done | `lws-core/src/error.rs` |
-| Error code: `INVALID_PASSPHRASE` | Done | `lws-core/src/error.rs` |
+| Error code: `WALLET_NOT_FOUND` | Done | `ows-core/src/error.rs` |
+| Error code: `CHAIN_NOT_SUPPORTED` | Done | `ows-core/src/error.rs` |
+| Error code: `INVALID_PASSPHRASE` | Done | `ows-core/src/error.rs` |
 | Error code: `POLICY_DENIED` | Not started | No policy engine |
 | Error code: `INSUFFICIENT_FUNDS` | Not started | |
 | Error code: `VAULT_LOCKED` | Not started | No session/lock concept |
@@ -27,7 +27,7 @@
 
 ## Design Decision
 
-**LWS defines a minimal, chain-agnostic interface with three core operations (`sign`, `signAndSend`, `signMessage`) that accept serialized chain-specific data and return chain-specific results. The interface never exposes private keys.**
+**OWS defines a minimal, chain-agnostic interface with three core operations (`sign`, `signAndSend`, `signMessage`) that accept serialized chain-specific data and return chain-specific results. The interface never exposes private keys.**
 
 ### Why This Shape
 
@@ -42,7 +42,7 @@ We studied the interfaces of six major wallet systems:
 | WalletConnect v2 | JSON-RPC over relay | `wallet_invokeMethod` routes to chain-specific RPC |
 | Turnkey | REST API (sign arbitrary payloads) | Curve-primitive signing, chain-agnostic |
 
-LWS takes Turnkey's chain-agnostic signing philosophy and wraps it in Coinbase's provider pattern.
+OWS takes Turnkey's chain-agnostic signing philosophy and wraps it in Coinbase's provider pattern.
 
 ## Interface Definition
 
@@ -93,12 +93,12 @@ interface SignAndSendResult extends SignResult {
 
 The chain plugin handles broadcasting via its configured RPC endpoint. The `confirmations` parameter is chain-specific: on EVM chains it means block confirmations; on Solana it maps to commitment levels (`confirmed` = 1, `finalized` ≈ 31).
 
-#### CLI: `lws sign send-tx`
+#### CLI: `ows sign send-tx`
 
-The `lws sign send-tx` command provides sign-and-broadcast from the command line:
+The `ows sign send-tx` command provides sign-and-broadcast from the command line:
 
 ```bash
-lws sign send-tx \
+ows sign send-tx \
   --chain evm \
   --wallet agent-treasury \
   --tx 0x<hex-encoded-unsigned-tx> \
@@ -187,7 +187,7 @@ Chain plugins are responsible for filling in defaults (nonce, gas, blockhash) an
 All operations return structured errors:
 
 ```typescript
-interface LwsError {
+interface OwsError {
   code: string;
   message: string;
   details?: Record<string, unknown>;
@@ -209,7 +209,7 @@ interface LwsError {
 
 ## Concurrency
 
-LWS implementations MUST support concurrent signing requests across different wallets. Concurrent requests to the same wallet MUST be serialized to prevent nonce conflicts on chains that require sequential nonces (EVM, Cosmos). Implementations SHOULD use a per-wallet mutex or nonce manager.
+OWS implementations MUST support concurrent signing requests across different wallets. Concurrent requests to the same wallet MUST be serialized to prevent nonce conflicts on chains that require sequential nonces (EVM, Cosmos). Implementations SHOULD use a per-wallet mutex or nonce manager.
 
 ## References
 

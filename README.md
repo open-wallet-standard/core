@@ -1,13 +1,13 @@
-# LWS — Local Wallet Standard
+# OWS — Open Wallet Standard
 
 Secure signing and wallet management for every chain. One vault, one interface — keys never leave your machine.
 
-[![CI](https://github.com/dawnlabsai/lws/actions/workflows/ci.yml/badge.svg)](https://github.com/dawnlabsai/lws/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/@local-wallet-standard/node)](https://www.npmjs.com/package/@local-wallet-standard/node)
-[![PyPI](https://img.shields.io/pypi/v/local-wallet-standard)](https://pypi.org/project/local-wallet-standard/)
+[![CI](https://github.com/open-wallet-standard/core/actions/workflows/ci.yml/badge.svg)](https://github.com/open-wallet-standard/core/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@open-wallet-standard/node)](https://www.npmjs.com/package/@open-wallet-standard/node)
+[![PyPI](https://img.shields.io/pypi/v/open-wallet-standard)](https://pypi.org/project/open-wallet-standard/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Why LWS
+## Why OWS
 
 - **Zero key exposure.** Private keys are encrypted at rest, decrypted only inside an isolated signing process. Agents and LLMs never see raw key material.
 - **Every chain, one interface.** EVM, Solana, Bitcoin, Cosmos, Tron, TON — all first-class. CAIP-2/CAIP-10 addressing abstracts away chain-specific details.
@@ -24,29 +24,29 @@ curl -fsSL https://openwallet.sh/install.sh | bash
 Or install only what you need:
 
 ```bash
-npm install @local-wallet-standard/node    # Node.js SDK
-npm install -g @local-wallet-standard/node # Node.js SDK + CLI (provides `lws` command)
-pip install local-wallet-standard           # Python
-cd lws && cargo build --workspace --release # From source
+npm install @open-wallet-standard/node    # Node.js SDK
+npm install -g @open-wallet-standard/node # Node.js SDK + CLI (provides `ows` command)
+pip install open-wallet-standard           # Python
+cd ows && cargo build --workspace --release # From source
 ```
 
-The language bindings are **fully self-contained** — they embed the Rust core via native FFI. Installing globally with `-g` also provides the `lws` CLI.
+The language bindings are **fully self-contained** — they embed the Rust core via native FFI. Installing globally with `-g` also provides the `ows` CLI.
 
 ## Quick Start
 
 ```bash
 # Create a wallet (derives addresses for all supported chains)
-lws wallet create --name "agent-treasury"
+ows wallet create --name "agent-treasury"
 
 # Sign a message
-lws sign message --wallet agent-treasury --chain evm --message "hello"
+ows sign message --wallet agent-treasury --chain evm --message "hello"
 
 # Sign a transaction
-lws sign tx --wallet agent-treasury --chain evm --tx-hex "deadbeef..."
+ows sign tx --wallet agent-treasury --chain evm --tx-hex "deadbeef..."
 ```
 
 ```javascript
-import { createWallet, signMessage } from "@local-wallet-standard/node";
+import { createWallet, signMessage } from "@open-wallet-standard/node";
 
 const wallet = createWallet("agent-treasury");
 // => accounts for EVM, Solana, BTC, Cosmos, Tron, TON
@@ -56,7 +56,7 @@ console.log(sig.signature);
 ```
 
 ```python
-from local_wallet_standard import create_wallet, sign_message
+from open_wallet_standard import create_wallet, sign_message
 
 wallet = create_wallet("agent-treasury")
 # => accounts for EVM, Solana, BTC, Cosmos, Tron, TON
@@ -70,10 +70,10 @@ print(sig["signature"])
 ```
 Agent / CLI / App
        │
-       │  LWS Interface (MCP / SDK / CLI)
+       │  OWS Interface (MCP / SDK / CLI)
        ▼
 ┌─────────────────────┐
-│    Access Layer      │     1. Agent calls lws.sign()
+│    Access Layer      │     1. Agent calls ows.sign()
 │  ┌────────────────┐  │     2. Policy engine evaluates
 │  │ Policy Engine   │  │     3. Enclave decrypts key
 │  │ (pre-signing)   │  │     4. Transaction signed
@@ -84,7 +84,7 @@ Agent / CLI / App
 │  └───────┬────────┘  │     the private key.
 │  ┌───────▼────────┐  │
 │  │  Wallet Vault   │  │
-│  │ ~/.lws/wallets/ │  │
+│  │ ~/.ows/wallets/ │  │
 │  └────────────────┘  │
 └─────────────────────┘
 ```
@@ -104,15 +104,15 @@ Agent / CLI / App
 
 | Command | Description |
 |---------|-------------|
-| `lws wallet create` | Create a new wallet with addresses for all chains |
-| `lws wallet list` | List all wallets in the vault |
-| `lws wallet info` | Show vault path and supported chains |
-| `lws sign message` | Sign a message with chain-specific formatting |
-| `lws sign tx` | Sign a raw transaction |
-| `lws mnemonic generate` | Generate a BIP-39 mnemonic phrase |
-| `lws mnemonic derive` | Derive an address from a mnemonic |
-| `lws update` | Update lws and bindings |
-| `lws uninstall` | Remove lws from the system |
+| `ows wallet create` | Create a new wallet with addresses for all chains |
+| `ows wallet list` | List all wallets in the vault |
+| `ows wallet info` | Show vault path and supported chains |
+| `ows sign message` | Sign a message with chain-specific formatting |
+| `ows sign tx` | Sign a raw transaction |
+| `ows mnemonic generate` | Generate a BIP-39 mnemonic phrase |
+| `ows mnemonic derive` | Derive an address from a mnemonic |
+| `ows update` | Update ows and bindings |
+| `ows uninstall` | Remove ows from the system |
 
 ## Specification
 

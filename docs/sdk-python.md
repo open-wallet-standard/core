@@ -2,12 +2,12 @@
 
 > Native bindings for Python via PyO3. No CLI, no server, no subprocess &mdash; the Rust core runs in-process.
 
-[![PyPI](https://img.shields.io/pypi/v/local-wallet-standard)](https://pypi.org/project/local-wallet-standard/)
+[![PyPI](https://img.shields.io/pypi/v/open-wallet-standard)](https://pypi.org/project/open-wallet-standard/)
 
 ## Install
 
 ```bash
-pip install local-wallet-standard
+pip install open-wallet-standard
 ```
 
 Prebuilt wheels are available for macOS (arm64, x64) and Linux (x64, arm64) on Python 3.9&ndash;3.13.
@@ -15,7 +15,7 @@ Prebuilt wheels are available for macOS (arm64, x64) and Linux (x64, arm64) on P
 ## Quick Start
 
 ```python
-from local_wallet_standard import (
+from open_wallet_standard import (
     generate_mnemonic,
     create_wallet,
     list_wallets,
@@ -244,7 +244,7 @@ Every function accepts an optional `vault_path` parameter for testing or isolati
 import tempfile
 import shutil
 
-vault = tempfile.mkdtemp(prefix="lws-test-")
+vault = tempfile.mkdtemp(prefix="ows-test-")
 try:
     wallet = create_wallet("test", vault_path=vault)
     # ... use wallet ...

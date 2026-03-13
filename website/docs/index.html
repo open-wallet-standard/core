@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Docs - LWS</title>
+  <title>Docs - OWS</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -13,7 +13,7 @@
 
   <header class="header">
     <div class="header-inner">
-      <a href="../" class="header-logo">LWS</a>
+      <a href="../" class="header-logo">OWS</a>
       <nav class="header-nav" id="nav">
         <a href="../#principles">Principles</a>
         <a href="../#architecture">Architecture</a>
@@ -25,7 +25,7 @@
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2h7l3 3v9H3V2z"/><path d="M10 2v3h3"/><path d="M5 9h6M5 11.5h4"/></svg>
           Docs
         </a>
-        <a href="https://github.com/dawnlabsai/lws" class="btn btn-primary">GitHub</a>
+        <a href="https://github.com/open-wallet-standard/core" class="btn btn-primary">GitHub</a>
       </div>
       <button class="mobile-menu-btn" onclick="document.getElementById('nav').classList.toggle('active')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
@@ -52,12 +52,12 @@
     </aside>
 
     <main class="docs-content">
-      <h1>Local Wallet Standard v0.1</h1>
+      <h1>Open Wallet Standard v0.1</h1>
       <p class="subtitle">An open standard for secure local wallet storage and agent access.</p>
 
       <h2>Abstract</h2>
-      <p>The Local Wallet Standard (LWS) defines how cryptographic wallets are stored on a local filesystem, how agents and CLI tools access them through a unified interface, and how policy-based controls govern what operations are permitted &mdash; all without ever exposing private keys to the calling process.</p>
-      <p>As AI agents become first-class participants in blockchain ecosystems &mdash; executing trades, paying for services, managing treasuries &mdash; they need a standardized, secure way to access wallets locally. Today, every tool rolls its own approach: environment variables with raw private keys, proprietary cloud APIs, bespoke keystore formats. LWS replaces this fragmentation with a single open standard.</p>
+      <p>The Open Wallet Standard (OWS) defines how cryptographic wallets are stored on a local filesystem, how agents and CLI tools access them through a unified interface, and how policy-based controls govern what operations are permitted &mdash; all without ever exposing private keys to the calling process.</p>
+      <p>As AI agents become first-class participants in blockchain ecosystems &mdash; executing trades, paying for services, managing treasuries &mdash; they need a standardized, secure way to access wallets locally. Today, every tool rolls its own approach: environment variables with raw private keys, proprietary cloud APIs, bespoke keystore formats. OWS replaces this fragmentation with a single open standard.</p>
 
       <h2>Core Types</h2>
       <p>All types use <a href="https://chainagnostic.org/">CAIP</a> identifiers and are defined in TypeScript for clarity. Implementations may use any language.</p>

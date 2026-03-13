@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: lws
+        working-directory: ows
 
     steps:
       - uses: actions/checkout@v5
@@ -25,8 +25,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            lws/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('lws/Cargo.lock') }}
+            ows/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('ows/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Check formatting

@@ -19,11 +19,11 @@ import {
   signMessage,
 } from '../index.js';
 
-describe('@local-wallet-standard/node', () => {
+describe('@open-wallet-standard/node', () => {
   let vaultDir;
 
   before(() => {
-    vaultDir = mkdtempSync(join(tmpdir(), 'lws-node-test-'));
+    vaultDir = mkdtempSync(join(tmpdir(), 'ows-node-test-'));
   });
 
   after(() => {

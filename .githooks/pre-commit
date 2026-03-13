@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)/lws"
+cd "$(git rev-parse --show-toplevel)/ows"
 
 echo "Running cargo fmt..."
 cargo fmt --all
@@ -16,7 +16,7 @@ git diff --name-only | while IFS= read -r f; do
 done
 
 echo "Running cargo build..."
-cd "$(git rev-parse --show-toplevel)/lws"
+cd "$(git rev-parse --show-toplevel)/ows"
 cargo build --workspace
 
 echo "Pre-commit checks passed."

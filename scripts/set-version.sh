@@ -44,18 +44,18 @@ set_node_version() {
 }
 
 set_rust_version() {
-  local crates_dir="$REPO_ROOT/lws/crates"
+  local crates_dir="$REPO_ROOT/ows/crates"
 
   # Update package versions
-  for crate in lws-core lws-signer lws-lib lws-cli; do
+  for crate in ows-core ows-signer ows-lib ows-cli; do
     sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" \
       "$crates_dir/$crate/Cargo.toml"
     rm -f "$crates_dir/$crate/Cargo.toml.bak"
   done
 
   # Update internal dependency version specifiers
-  for crate in lws-signer lws-lib lws-cli; do
-    sed -i.bak -E "s/(lws-(core|signer|lib) = \{[^}]*version = \")=[^\"]*\"/\1=$VERSION\"/" \
+  for crate in ows-signer ows-lib ows-cli; do
+    sed -i.bak -E "s/(ows-(core|signer|lib) = \{[^}]*version = \")=[^\"]*\"/\1=$VERSION\"/" \
       "$crates_dir/$crate/Cargo.toml"
     rm -f "$crates_dir/$crate/Cargo.toml.bak"
   done
@@ -63,8 +63,8 @@ set_rust_version() {
 
 set_skill_version() {
   sed -i.bak "s/^version: .*/version: $VERSION/" \
-    "$REPO_ROOT/skills/lws/SKILL.md"
-  rm -f "$REPO_ROOT/skills/lws/SKILL.md.bak"
+    "$REPO_ROOT/skills/ows/SKILL.md"
+  rm -f "$REPO_ROOT/skills/ows/SKILL.md.bak"
 }
 
 case "$SCOPE" in

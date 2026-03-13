@@ -7,9 +7,9 @@
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Two-tier access model (owner vs agent) | Not started | |
-| API key creation (`lws key create`) | Not started | |
-| API key file format + storage (`~/.lws/keys/`) | Not started | |
-| Policy file format + storage (`~/.lws/policies/`) | Not started | |
+| API key creation (`ows key create`) | Not started | |
+| API key file format + storage (`~/.ows/keys/`) | Not started | |
+| Policy file format + storage (`~/.ows/policies/`) | Not started | |
 | Policy executable protocol (JSON-RPC over stdin/stdout) | Not started | |
 | PolicyContext structure (piped to stdin) | Not started | |
 | PolicyResult structure (read from stdout) | Not started | |
@@ -19,15 +19,15 @@
 | Failure semantics (deny on non-zero exit, bad JSON) | Not started | |
 | Policy actions (`deny` / `warn`) | Not started | |
 | AND semantics (all policies must allow) | Not started | |
-| `lws policy create` CLI command | Not started | |
-| `lws key create` CLI command | Not started | |
+| `ows policy create` CLI command | Not started | |
+| `ows key create` CLI command | Not started | |
 | Audit log integration for policy results | Not started | |
 
 **This entire spec is unimplemented.** The policy engine is the core security boundary for agent access and is the highest-priority gap.
 
 ## Design Decision
 
-**LWS uses a two-tier access model: the wallet owner has unrestricted (sudo) access, while agents authenticate via API keys whose attached policies are evaluated before the signing enclave is invoked. Policies are attached to API keys, not wallets — wallets are dumb containers for key material. Default behavior is deny-by-default when a policy is attached to a key — only transactions that pass all of the key's policies are signed.**
+**OWS uses a two-tier access model: the wallet owner has unrestricted (sudo) access, while agents authenticate via API keys whose attached policies are evaluated before the signing enclave is invoked. Policies are attached to API keys, not wallets — wallets are dumb containers for key material. Default behavior is deny-by-default when a policy is attached to a key — only transactions that pass all of the key's policies are signed.**
 
 ### Why Pre-Signing Policy Enforcement
 
@@ -39,7 +39,7 @@ We studied three enforcement models:
 | Smart contract | On-chain | Crossmint (ERC-4337), Lit Protocol | Strong but chain-specific; gas cost for policy checks |
 | **Pre-signing gate** | In the wallet process | Privy, Turnkey | Universal across chains; not bypassable without vault access |
 
-LWS uses pre-signing enforcement because:
+OWS uses pre-signing enforcement because:
 1. It works identically for all chains (no smart contract deployment needed)
 2. It prevents key material from being accessed for unauthorized transactions
 3. It complements on-chain enforcement (use both for defense in depth)
@@ -47,11 +47,11 @@ LWS uses pre-signing enforcement because:
 
 ## Policy Executable Protocol
 
-A policy is any executable program. LWS invokes the executable, pipes a `PolicyContext` JSON object to its stdin, and reads a `PolicyResult` JSON object from its stdout.
+A policy is any executable program. OWS invokes the executable, pipes a `PolicyContext` JSON object to its stdin, and reads a `PolicyResult` JSON object from its stdout.
 
-This follows the Unix philosophy and mirrors the enclave protocol already used by LWS (JSON-RPC over stdio). Policies can be written in any language — shell scripts, Python, Go, Rust, JavaScript — whatever the operator prefers.
+This follows the Unix philosophy and mirrors the enclave protocol already used by OWS (JSON-RPC over stdio). Policies can be written in any language — shell scripts, Python, Go, Rust, JavaScript — whatever the operator prefers.
 
-Because a policy is arbitrary code, it can perform any logic before returning a verdict — including making RPC calls to simulate the transaction, querying on-chain state, checking balances, calling external APIs, or consulting a local database. LWS core does not provide these capabilities directly; they are delegated to the policy layer.
+Because a policy is arbitrary code, it can perform any logic before returning a verdict — including making RPC calls to simulate the transaction, querying on-chain state, checking balances, calling external APIs, or consulting a local database. OWS core does not provide these capabilities directly; they are delegated to the policy layer.
 
 **Invocation:**
 
@@ -67,7 +67,7 @@ echo '<PolicyContext JSON>' | /path/to/policy-executable
 
 ## Policy File Format
 
-Policies are JSON files stored in `~/.lws/policies/`:
+Policies are JSON files stored in `~/.ows/policies/`:
 
 ```json
 {
@@ -75,7 +75,7 @@ Policies are JSON files stored in `~/.lws/policies/`:
   "name": "Safe Agent Policy",
   "version": 1,
   "created_at": "2026-02-27T10:00:00Z",
-  "executable": "/home/user/.lws/plugins/policies/safe-agent.sh",
+  "executable": "/home/user/.ows/plugins/policies/safe-agent.sh",
   "config": {
     "max_daily_spend_wei": "1000000000000000000",
     "allowed_chains": ["eip155:8453", "eip155:84532"]
@@ -182,12 +182,12 @@ The default-deny stance ensures that policy failures are never silently bypassed
 
 ## Who Is Evaluated?
 
-LWS uses a two-tier access model:
+OWS uses a two-tier access model:
 
 | Caller | Authentication | Policy Evaluation |
 |---|---|---|
 | **Owner** | Passphrase/passkey | **None.** The owner has unrestricted (sudo) access to all wallets. No policies are evaluated. |
-| **Agent (API key)** | `lws_key_...` token | **All policies attached to the API key** are evaluated. Every policy must allow the transaction (AND semantics). |
+| **Agent (API key)** | `ows_key_...` token | **All policies attached to the API key** are evaluated. Every policy must allow the transaction (AND semantics). |
 
 The owner can always sign any transaction on any wallet — if they want self-imposed limits, they create an API key for themselves and use that instead.
 
@@ -197,11 +197,11 @@ Policies are attached to API keys, not wallets. When an API key is created, it i
 
 ```bash
 # Create a policy
-lws policy create --file safe-agent-policy.json
+ows policy create --file safe-agent-policy.json
 
 # Create an API key with wallet scope and policy attachment
-lws key create --name "claude-agent" --wallet agent-treasury --policy safe-agent-policy
-# => lws_key_a1b2c3d4e5f6...  (shown once, store securely)
+ows key create --name "claude-agent" --wallet agent-treasury --policy safe-agent-policy
+# => ows_key_a1b2c3d4e5f6...  (shown once, store securely)
 ```
 
 An API key can have multiple policies attached. All attached policies are evaluated — every policy must allow the transaction for it to proceed (AND semantics). Evaluation short-circuits on the first denial. All denials are logged to the audit log.
@@ -243,7 +243,7 @@ The corresponding policy file:
   "name": "1 ETH Per-Transaction Limit",
   "version": 1,
   "created_at": "2026-02-27T10:00:00Z",
-  "executable": "/home/user/.lws/plugins/policies/spending-limit.sh",
+  "executable": "/home/user/.ows/plugins/policies/spending-limit.sh",
   "action": "deny"
 }
 ```

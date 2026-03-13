@@ -1,30 +1,30 @@
 # 05 - Key Isolation
 
-> How LWS prevents private keys from leaking to agents, LLMs, logs, or parent processes.
+> How OWS prevents private keys from leaking to agents, LLMs, logs, or parent processes.
 
 ## Implementation Status
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Core dump disabling (`PR_SET_DUMPABLE` / `PT_DENY_ATTACH`) | Done | `lws-signer/src/process_hardening.rs` |
+| Core dump disabling (`PR_SET_DUMPABLE` / `PT_DENY_ATTACH`) | Done | `ows-signer/src/process_hardening.rs` |
 | `RLIMIT_CORE` set to 0 | Done | `process_hardening.rs` |
-| Memory locking (`mlock`) for key material | Done | `lws-signer/src/zeroizing.rs` |
+| Memory locking (`mlock`) for key material | Done | `ows-signer/src/zeroizing.rs` |
 | Zeroization on drop (`SecretBytes`) | Done | `zeroizing.rs` uses `zeroize` crate |
 | Signal handlers (SIGTERM/SIGINT/SIGHUP cleanup) | Done | `process_hardening.rs` |
-| Key cache with TTL + LRU eviction | Done | `lws-signer/src/key_cache.rs` (5s TTL, 32 entries) |
+| Key cache with TTL + LRU eviction | Done | `ows-signer/src/key_cache.rs` (5s TTL, 32 entries) |
 | Subprocess signing enclave (child process) | Not started | Keys are decrypted in-process, not isolated |
 | Unix domain socket / pipe IPC | Not started | No enclave transport |
 | JSON-RPC enclave protocol (`sign`, `sign_message`, `unlock`, `lock`, `status`) | Not started | |
 | Passphrase delivery: interactive prompt | Not started | |
 | Passphrase delivery: file descriptor | Not started | |
-| Passphrase delivery: env var (`LWS_PASSPHRASE`) with immediate clear | Partial | Passphrase passed as param, not read from env |
+| Passphrase delivery: env var (`OWS_PASSPHRASE`) with immediate clear | Partial | Passphrase passed as param, not read from env |
 | Session-based unlock/lock | Not started | Each operation re-decrypts (or uses cache) |
 
 **Note:** The current implementation provides in-process hardening (mlock, zeroize, anti-debug) but does NOT implement the subprocess isolation model described in the spec. Keys are decrypted within the calling process's address space.
 
 ## Design Decision
 
-**LWS mandates that key material is decrypted and used exclusively inside an isolated signing process. The parent process (agent, CLI, app) never has access to plaintext keys. This follows the principle that agents should be able to _use_ wallets without being able to _extract_ keys.**
+**OWS mandates that key material is decrypted and used exclusively inside an isolated signing process. The parent process (agent, CLI, app) never has access to plaintext keys. This follows the principle that agents should be able to _use_ wallets without being able to _extract_ keys.**
 
 ### Why Process Isolation
 
@@ -35,9 +35,9 @@ The fundamental threat in agent wallet systems is that the agent (or the LLM dri
 | In-process encryption only | Low — keys in same address space | Fast | Low | Most local keystores |
 | TEE enclaves (AWS Nitro, SGX) | Very high — hardware isolation | Fast | High (requires cloud) | Privy, Turnkey, Coinbase |
 | MPC/threshold signatures | High — key never reconstituted | Slow (multi-round) | Very high | Lit Protocol |
-| **Subprocess isolation** | High — OS-level memory isolation | Fast | Medium | LWS reference impl |
+| **Subprocess isolation** | High — OS-level memory isolation | Fast | Medium | OWS reference impl |
 
-LWS targets local-first deployments where cloud TEEs aren't available. Subprocess isolation provides strong guarantees using standard OS primitives:
+OWS targets local-first deployments where cloud TEEs aren't available. Subprocess isolation provides strong guarantees using standard OS primitives:
 - The signing process runs as a separate OS process
 - Communication happens over a Unix domain socket or stdin/stdout pipe
 - The parent process sends serialized transactions and receives signatures
@@ -52,7 +52,7 @@ For deployments where hardware enclaves are available, the signing subprocess ca
 │        Agent / CLI / App        │     │      Signing Enclave         │
 │                                 │     │      (child process)         │
 │  1. Build transaction           │     │                              │
-│  2. Call lws.sign(req)  ───────────►  │  5. Decrypt key (KDF+AES)   │
+│  2. Call ows.sign(req)  ───────────►  │  5. Decrypt key (KDF+AES)   │
 │                                 │     │  6. Sign transaction         │
 │                                 │     │  7. Wipe key from memory     │
 │  9. Receive signature  ◄───────────  │  8. Return signature         │
@@ -66,7 +66,7 @@ For deployments where hardware enclaves are available, the signing subprocess ca
 └─────────────────────────────────┘     └──────────────────────────────┘
          │                                        │
          │    Unix Domain Socket / Pipe           │
-         │    (~/.lws/enclave.sock)                │
+         │    (~/.ows/enclave.sock)                │
          └────────────────────────────────────────┘
 ```
 
@@ -133,7 +133,7 @@ Step 7 is critical. Implementations MUST zero key material immediately after sig
 
 ## Passphrase Handling
 
-The enclave needs the vault passphrase to decrypt wallet files. LWS supports three passphrase delivery mechanisms:
+The enclave needs the vault passphrase to decrypt wallet files. OWS supports three passphrase delivery mechanisms:
 
 ### 1. Interactive Prompt (CLI mode)
 The enclave prompts for the passphrase on its own TTY. The passphrase never passes through the parent process.
@@ -142,9 +142,9 @@ The enclave prompts for the passphrase on its own TTY. The passphrase never pass
 The passphrase is written to a file descriptor inherited by the enclave process. This is the RECOMMENDED delivery mechanism for non-interactive use because the passphrase never appears in process environment listings or `/proc/[pid]/environ`.
 
 ### 3. Environment Variable (fallback for daemon mode)
-The enclave reads `LWS_PASSPHRASE` from its own environment. After reading, the enclave MUST immediately clear it from its own environment.
+The enclave reads `OWS_PASSPHRASE` from its own environment. After reading, the enclave MUST immediately clear it from its own environment.
 
-> **Warning:** Environment variables are the least secure delivery mechanism. They are readable in `/proc/[pid]/environ` by any process running as the same user, appear in crash dumps, and are inherited by child processes. Use file descriptor delivery (option 2) when possible. If `LWS_PASSPHRASE` must be used, implementations MUST clear the variable from the process environment immediately after reading it.
+> **Warning:** Environment variables are the least secure delivery mechanism. They are readable in `/proc/[pid]/environ` by any process running as the same user, appear in crash dumps, and are inherited by child processes. Use file descriptor delivery (option 2) when possible. If `OWS_PASSPHRASE` must be used, implementations MUST clear the variable from the process environment immediately after reading it.
 
 ## Threat Model
 
@@ -161,7 +161,7 @@ The enclave reads `LWS_PASSPHRASE` from its own environment. After reading, the 
 
 ## Defense in Depth
 
-LWS key isolation is one layer. For maximum security, deployments can add:
+OWS key isolation is one layer. For maximum security, deployments can add:
 
 1. **OS-level sandboxing**: Run the enclave in a seccomp-bpf sandbox (Linux) or App Sandbox (macOS) restricting syscalls to read/write/crypto operations only.
 2. **TEE backends**: Replace the subprocess with a TEE-backed signer (AWS Nitro, Intel SGX) using the same JSON-RPC protocol.
@@ -196,9 +196,9 @@ The vault `unlock` operation (see [Enclave Protocol](#enclave-protocol)) also es
 | Lit Protocol | Distributed key generation across nodes | No (network) |
 | Crossmint | Dual-key smart contract + TEE | No (cloud) |
 | Phala Wallet | TEE (Intel SGX) on decentralized cloud | No (cloud) |
-| **LWS** | **OS process isolation + optional TEE** | **Yes** |
+| **OWS** | **OS process isolation + optional TEE** | **Yes** |
 
-LWS is the only standard designed for local-first operation. The subprocess model works on any machine — no cloud accounts, no network connectivity, no hardware enclaves required. When stronger guarantees are needed, the enclave can be upgraded without changing the interface.
+OWS is the only standard designed for local-first operation. The subprocess model works on any machine — no cloud accounts, no network connectivity, no hardware enclaves required. When stronger guarantees are needed, the enclave can be upgraded without changing the interface.
 
 ## References
 

@@ -660,79 +660,15 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "libc"
-version = "0.2.182"
+version = "0.2.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6800badb6cb2082ffd7b6a67e6125bb39f18782f793520caee8cb8846be06112"
+checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
 
 [[package]]
 name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
-
-[[package]]
-name = "lws-core"
-version = "0.2.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
-name = "lws-lib"
-version = "0.2.0"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "getrandom 0.2.17",
- "hex",
- "lws-core",
- "lws-signer",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
-name = "lws-python"
-version = "0.2.18"
-dependencies = [
- "lws-lib",
- "pyo3",
-]
-
-[[package]]
-name = "lws-signer"
-version = "0.2.0"
-dependencies = [
- "aes-gcm",
- "base64 0.22.1",
- "bech32 0.11.1",
- "bs58",
- "coins-bip32",
- "coins-bip39",
- "digest",
- "ed25519-dalek",
- "hex",
- "hmac",
- "k256",
- "libc",
- "lws-core",
- "rand 0.8.5",
- "ripemd",
- "scrypt",
- "serde",
- "serde_json",
- "sha2",
- "sha3",
- "signal-hook",
- "thiserror 2.0.18",
- "zeroize",
-]
 
 [[package]]
 name = "memchr"
@@ -760,15 +696,80 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.21.3"
+version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
+checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
+name = "ows-core"
+version = "0.2.27"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "ows-lib"
+version = "0.2.27"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "getrandom 0.2.17",
+ "hex",
+ "ows-core",
+ "ows-signer",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "ows-python"
+version = "0.2.27"
+dependencies = [
+ "ows-lib",
+ "pyo3",
+]
+
+[[package]]
+name = "ows-signer"
+version = "0.2.27"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "bech32 0.11.1",
+ "bs58",
+ "coins-bip32",
+ "coins-bip39",
+ "digest",
+ "ed25519-dalek",
+ "hex",
+ "hmac",
+ "k256",
+ "libc",
+ "ows-core",
+ "rand 0.8.5",
+ "ripemd",
+ "scrypt",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sha3",
+ "signal-hook",
+ "thiserror 2.0.18",
+ "zeroize",
+]
 
 [[package]]
 name = "password-hash"
@@ -1337,9 +1338,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.21.0"
+version = "1.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b672338555252d43fd2240c714dc444b8c6fb0a5c5335e65a07bba7742735ddb"
+checksum = "a68d3c8f01c0cfa54a75291d83601161799e4a89a39e0929f4b0354d88757a37"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
@@ -1622,18 +1623,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.40"
+version = "0.8.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a789c6e490b576db9f7e6b6d661bcc9799f7c0ac8352f56ea20193b2681532e5"
+checksum = "f2578b716f8a7a858b7f02d5bd870c14bf4ddbbcf3a4c05414ba6503640505e3"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.40"
+version = "0.8.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f65c489a7071a749c849713807783f70672b28094011623e200cb86dcb835953"
+checksum = "7e6cc098ea4d3bd6246687de65af3f920c430e236bee1e3bf2e441463f08a02f"
 dependencies = [
  "proc-macro2",
  "quote",

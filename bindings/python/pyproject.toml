@@ -3,13 +3,13 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "local-wallet-standard"
+name = "open-wallet-standard"
 version = "0.2.27"
-description = "Python native bindings for the Lightweight Wallet Signer"
+description = "Python native bindings for the Open Wallet Standard"
 requires-python = ">=3.8"
 license = { text = "MIT" }
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
 python-source = "python"
-module-name = "lws._native"
+module-name = "ows._native"

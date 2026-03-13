@@ -11,19 +11,19 @@ curl -fsSL https://openwallet.sh/install.sh | bash
 Or build from source:
 
 ```bash
-git clone https://github.com/dawnlabsai/lws.git
-cd lws/lws
+git clone https://github.com/open-wallet-standard/core.git
+cd core/ows
 cargo build --workspace --release
 ```
 
 ## Wallet Commands
 
-### `lws wallet create`
+### `ows wallet create`
 
 Create a new wallet. Generates a BIP-39 mnemonic and derives addresses for all supported chains.
 
 ```bash
-lws wallet create --name "my-wallet"
+ows wallet create --name "my-wallet"
 ```
 
 | Flag | Description |
@@ -43,22 +43,22 @@ Created wallet 3198bc9c-...
   tron:mainnet                           TKLm...    m/44'/195'/0'/0/0
 ```
 
-### `lws wallet import`
+### `ows wallet import`
 
 Import an existing wallet from a mnemonic or private key.
 
 ```bash
-# Import from mnemonic (reads from LWS_MNEMONIC env or stdin)
-echo "goose puzzle decorate ..." | lws wallet import --name "imported" --mnemonic
+# Import from mnemonic (reads from OWS_MNEMONIC env or stdin)
+echo "goose puzzle decorate ..." | ows wallet import --name "imported" --mnemonic
 
-# Import from private key (reads from LWS_PRIVATE_KEY env or stdin)
-echo "4c0883a691..." | lws wallet import --name "from-evm" --private-key
+# Import from private key (reads from OWS_PRIVATE_KEY env or stdin)
+echo "4c0883a691..." | ows wallet import --name "from-evm" --private-key
 
 # Import an Ed25519 key (e.g. from Solana)
-echo "9d61b19d..." | lws wallet import --name "from-sol" --private-key --chain solana
+echo "9d61b19d..." | ows wallet import --name "from-sol" --private-key --chain solana
 
 # Import explicit keys for both curves (no stdin needed)
-lws wallet import --name "both" \
+ows wallet import --name "both" \
   --secp256k1-key "4c0883a691..." \
   --ed25519-key "9d61b19d..."
 ```
@@ -75,12 +75,12 @@ lws wallet import --name "both" \
 
 Private key imports generate all 6 chain accounts: the provided key is used for its curve's chains, and a random key is generated for the other curve. Use `--secp256k1-key` and `--ed25519-key` together to supply both keys explicitly.
 
-### `lws wallet export`
+### `ows wallet export`
 
 Export a wallet's secret to stdout. Requires an interactive terminal.
 
 ```bash
-lws wallet export --wallet "my-wallet"
+ows wallet export --wallet "my-wallet"
 ```
 
 - Mnemonic wallets output the phrase.
@@ -88,30 +88,30 @@ lws wallet export --wallet "my-wallet"
 
 If the wallet is passphrase-protected, you will be prompted.
 
-### `lws wallet list`
+### `ows wallet list`
 
 List all wallets in the vault.
 
 ```bash
-lws wallet list
+ows wallet list
 ```
 
-### `lws wallet info`
+### `ows wallet info`
 
 Show vault path and supported chains.
 
 ```bash
-lws wallet info
+ows wallet info
 ```
 
 ## Signing Commands
 
-### `lws sign message`
+### `ows sign message`
 
 Sign a message with chain-specific formatting (e.g., EIP-191 for EVM, `\x19TRON Signed Message` for Tron).
 
 ```bash
-lws sign message --wallet "my-wallet" --chain evm --message "hello world"
+ows sign message --wallet "my-wallet" --chain evm --message "hello world"
 ```
 
 | Flag | Description |
@@ -122,12 +122,12 @@ lws sign message --wallet "my-wallet" --chain evm --message "hello world"
 | `--passphrase <PASS>` | Decryption passphrase |
 | `--encoding <ENC>` | Message encoding: `utf8` (default) or `hex` |
 
-### `lws sign tx`
+### `ows sign tx`
 
 Sign a raw transaction (hex-encoded bytes).
 
 ```bash
-lws sign tx --wallet "my-wallet" --chain evm --tx "02f8..."
+ows sign tx --wallet "my-wallet" --chain evm --tx "02f8..."
 ```
 
 | Flag | Description |
@@ -139,48 +139,48 @@ lws sign tx --wallet "my-wallet" --chain evm --tx "02f8..."
 
 ## Mnemonic Commands
 
-### `lws mnemonic generate`
+### `ows mnemonic generate`
 
 Generate a new BIP-39 mnemonic phrase.
 
 ```bash
-lws mnemonic generate --words 24
+ows mnemonic generate --words 24
 ```
 
-### `lws mnemonic derive`
+### `ows mnemonic derive`
 
-Derive an address from a mnemonic for a given chain. Reads the mnemonic from the `LWS_MNEMONIC` environment variable or stdin.
+Derive an address from a mnemonic for a given chain. Reads the mnemonic from the `OWS_MNEMONIC` environment variable or stdin.
 
 ```bash
-echo "word1 word2 ..." | lws mnemonic derive --chain evm
+echo "word1 word2 ..." | ows mnemonic derive --chain evm
 ```
 
 ## System Commands
 
-### `lws update`
+### `ows update`
 
-Update the `lws` binary to the latest release. Also updates Node.js and Python bindings if they are installed.
+Update the `ows` binary to the latest release. Also updates Node.js and Python bindings if they are installed.
 
 ```bash
-lws update
-lws update --force   # re-download even if already on latest
+ows update
+ows update --force   # re-download even if already on latest
 ```
 
-### `lws uninstall`
+### `ows uninstall`
 
-Remove `lws` from the system. Also uninstalls Node.js and Python bindings if present.
+Remove `ows` from the system. Also uninstalls Node.js and Python bindings if present.
 
 ```bash
-lws uninstall          # keep wallet data
-lws uninstall --purge  # also remove ~/.lws (all wallet data)
+ows uninstall          # keep wallet data
+ows uninstall --purge  # also remove ~/.ows (all wallet data)
 ```
 
 ## File Layout
 
 ```
-~/.lws/
+~/.ows/
   bin/
-    lws                  # CLI binary
+    ows                  # CLI binary
   wallets/
     <uuid>/
       wallet.json        # Encrypted keystore (Keystore v3)
