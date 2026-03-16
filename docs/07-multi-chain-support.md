@@ -93,7 +93,7 @@ interface ChainPlugin {
 
 ## First-Party Plugins
 
-### EVM (`@ows/plugin-evm`)
+### EVM
 
 Supports all EVM-compatible chains: Ethereum, Base, Polygon, Arbitrum, Optimism, Avalanche, BSC, etc.
 
@@ -120,7 +120,7 @@ Supports all EVM-compatible chains: Ethereum, Base, Polygon, Arbitrum, Optimism,
 }
 ```
 
-### Solana (`@ows/plugin-solana`)
+### Solana
 
 | Property | Value |
 |---|---|
@@ -151,7 +151,7 @@ Supports all EVM-compatible chains: Ethereum, Base, Polygon, Arbitrum, Optimism,
 
 **Commitment mapping:** OWS `confirmations: 1` → Solana `"confirmed"`, `confirmations: 31` → Solana `"finalized"`.
 
-### Cosmos (`@ows/plugin-cosmos`)
+### Cosmos
 
 | Property | Value |
 |---|---|
@@ -162,7 +162,7 @@ Supports all EVM-compatible chains: Ethereum, Base, Polygon, Arbitrum, Optimism,
 | Transaction Library | @cosmjs/stargate |
 | RPC Protocol | Tendermint RPC + gRPC |
 
-### Bitcoin (`@ows/plugin-bitcoin`)
+### Bitcoin
 
 | Property | Value |
 |---|---|
@@ -173,7 +173,7 @@ Supports all EVM-compatible chains: Ethereum, Base, Polygon, Arbitrum, Optimism,
 | Transaction Library | bitcoinjs-lib |
 | RPC Protocol | Bitcoin Core JSON-RPC / Electrum |
 
-### Tron (`@ows/plugin-tron`)
+### Tron
 
 | Property | Value |
 |---|---|

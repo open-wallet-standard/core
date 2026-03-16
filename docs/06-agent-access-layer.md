@@ -35,11 +35,11 @@
 ### Node.js (NAPI)
 
 ```bash
-npm install @ows/node
+npm install @open-wallet-standard/core
 ```
 
 ```typescript
-import { createWallet, listWallets, signMessage, signTransaction, signAndSend } from "@ows/node";
+import { createWallet, listWallets, signMessage, signTransaction, signAndSend } from "@open-wallet-standard/core";
 
 // Create a wallet
 const wallet = createWallet("agent-treasury", "evm", "my-passphrase");
@@ -60,11 +60,11 @@ const result = signAndSend("agent-treasury", "evm", "<tx-hex>", "my-passphrase")
 ### Python (PyO3)
 
 ```bash
-pip install ows
+pip install open-wallet-standard
 ```
 
 ```python
-from ows import create_wallet, list_wallets, sign_message, sign_transaction, sign_and_send
+from open_wallet_standard import create_wallet, list_wallets, sign_message, sign_transaction, sign_and_send
 
 # Create a wallet
 wallet = create_wallet("agent-treasury", "evm", "my-passphrase")

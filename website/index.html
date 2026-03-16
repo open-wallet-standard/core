@@ -43,7 +43,7 @@
   <section class="hero">
     <div class="hero-badge">
       <span class="dot"></span>
-      Open Standard v0.1
+      Open Standard v0.3.0
     </div>
     <h1 class="hero-title">OWS</h1>
     <p class="hero-subtitle">Open Wallet Standard</p>
@@ -291,7 +291,7 @@
     <span class="section-label">Get Started</span>
     <h2 class="section-title">From zero to signing in 60 seconds</h2>
     <p class="section-description">
-      Choose your path: install the CLI for terminal use, or add the npm/pip package directly to your project. The language bindings are standalone &mdash; no CLI required.
+      Choose your path: install the CLI for terminal use, or add the npm/pip package directly to your project. The language bindings are fully self-contained &mdash; they embed the Rust core via native FFI. No CLI required.
     </p>
 
     <!-- Install options -->
@@ -307,11 +307,20 @@
       </div>
       <div class="code-block-wrapper" style="max-width: 100%;">
         <div class="code-block-header">
-          <span class="code-block-title">Node.js only</span>
+          <span class="code-block-title">Node.js SDK</span>
           <button class="code-block-copy" onclick="copyCode(this)">Copy</button>
         </div>
         <div class="code-block">
 <pre>npm install @open-wallet-standard/core</pre>
+        </div>
+      </div>
+      <div class="code-block-wrapper" style="max-width: 100%;">
+        <div class="code-block-header">
+          <span class="code-block-title">Node.js SDK + CLI</span>
+          <button class="code-block-copy" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-block">
+<pre>npm install -g @open-wallet-standard/core</pre>
         </div>
       </div>
       <div class="code-block-wrapper" style="max-width: 100%;">
@@ -321,6 +330,15 @@
         </div>
         <div class="code-block">
 <pre>pip install open-wallet-standard</pre>
+        </div>
+      </div>
+      <div class="code-block-wrapper" style="max-width: 100%;">
+        <div class="code-block-header">
+          <span class="code-block-title">From source (Rust)</span>
+          <button class="code-block-copy" onclick="copyCode(this)">Copy</button>
+        </div>
+        <div class="code-block">
+<pre>cd ows && cargo build --workspace --release</pre>
         </div>
       </div>
     </div>
@@ -407,6 +425,56 @@ ows sign tx --wallet agent-treasury --chain evm --tx-hex <span class="string">"d
   }
 }</pre>
       </div>
+    <!-- CLI Reference -->
+    <h3 style="margin-top: 2.5rem; margin-bottom: 1rem;">CLI Reference</h3>
+    <div style="overflow-x: auto;">
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Command</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>ows wallet create</code></td>
+            <td>Create a new wallet with addresses for all chains</td>
+          </tr>
+          <tr>
+            <td><code>ows wallet list</code></td>
+            <td>List all wallets in the vault</td>
+          </tr>
+          <tr>
+            <td><code>ows wallet info</code></td>
+            <td>Show vault path and supported chains</td>
+          </tr>
+          <tr>
+            <td><code>ows sign message</code></td>
+            <td>Sign a message with chain-specific formatting</td>
+          </tr>
+          <tr>
+            <td><code>ows sign tx</code></td>
+            <td>Sign a raw transaction</td>
+          </tr>
+          <tr>
+            <td><code>ows mnemonic generate</code></td>
+            <td>Generate a BIP-39 mnemonic phrase</td>
+          </tr>
+          <tr>
+            <td><code>ows mnemonic derive</code></td>
+            <td>Derive an address from a mnemonic</td>
+          </tr>
+          <tr>
+            <td><code>ows update</code></td>
+            <td>Update ows and bindings</td>
+          </tr>
+          <tr>
+            <td><code>ows uninstall</code></td>
+            <td>Remove ows from the system</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     </div>
   </section>
 
@@ -681,7 +749,7 @@ ows sign tx --wallet agent-treasury --chain evm --tx-hex <span class="string">"d
     </div>
     <div class="footer-bottom">
       <span>CC0 1.0 Universal &mdash; Public Domain</span>
-      <span>Open Wallet Standard v0.1</span>
+      <span>Open Wallet Standard v0.3.0</span>
     </div>
   </footer>
 
