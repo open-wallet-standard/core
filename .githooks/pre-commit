@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cd "$(git rev-parse --show-toplevel)"
+
+# Remember which files are currently staged
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+
 cd "$(git rev-parse --show-toplevel)/ows"
 
 echo "Running cargo fmt..."
@@ -9,10 +14,10 @@ cargo fmt --all
 echo "Running cargo clippy..."
 cargo clippy --workspace --fix --allow-dirty --allow-staged -- -D warnings
 
-# Re-stage any files modified by fmt/clippy
+# Re-stage only files that were originally staged (they may have been modified by fmt/clippy)
 cd "$(git rev-parse --show-toplevel)"
-git diff --name-only | while IFS= read -r f; do
-  git check-ignore -q "$f" || git add "$f"
+echo "$STAGED_FILES" | while IFS= read -r f; do
+  [ -n "$f" ] && git add "$f"
 done
 
 echo "Running cargo build..."
