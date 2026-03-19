@@ -1,6 +1,6 @@
 [package]
 name = "ows-cli"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2021"
 license = "MIT"
 description = "CLI for the Open Wallet Standard"
@@ -12,9 +12,9 @@ name = "ows"
 path = "src/main.rs"
 
 [dependencies]
-ows-core = { path = "../ows-core", version = "=0.3.8" }
-ows-signer = { path = "../ows-signer", version = "=0.3.8" }
-ows-lib = { path = "../ows-lib", version = "=0.3.8" }
+ows-core = { path = "../ows-core", version = "=0.3.9" }
+ows-signer = { path = "../ows-signer", version = "=0.3.9" }
+ows-lib = { path = "../ows-lib", version = "=0.3.9" }
 clap = { version = "4", features = ["derive", "env"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -27,4 +27,4 @@ serde = { version = "1", features = ["derive"] }
 zeroize = "1"
 
 [dev-dependencies]
-ows-signer = { path = "../ows-signer", version = "=0.3.8", features = ["fast-kdf"] }
+ows-signer = { path = "../ows-signer", version = "=0.3.9", features = ["fast-kdf"] }
