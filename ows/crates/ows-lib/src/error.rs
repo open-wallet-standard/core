@@ -20,6 +20,15 @@ pub enum OwsLibError {
     #[error("broadcast failed: {0}")]
     BroadcastFailed(String),
 
+    #[error("wallet '{0}' uses the legacy embedded-secret format, which is no longer supported")]
+    LegacyWalletUnsupported(String),
+
+    #[error("secret store unavailable: {0}")]
+    SecretStoreUnavailable(String),
+
+    #[error("wallet secret not found: {0}")]
+    SecretNotFound(String),
+
     #[error("{0}")]
     Crypto(#[from] CryptoError),
 

@@ -5,12 +5,10 @@ use ows_core::{
     default_chain_for_type, ChainType, Config, EncryptedWallet, KeyType, WalletAccount,
     ALL_CHAIN_TYPES,
 };
-use ows_signer::{
-    decrypt, encrypt, signer_for_chain, CryptoEnvelope, HdDeriver, Mnemonic, MnemonicStrength,
-    SecretBytes,
-};
+use ows_signer::{signer_for_chain, HdDeriver, Mnemonic, MnemonicStrength, SecretBytes};
 
 use crate::error::OwsLibError;
+use crate::secret_store;
 use crate::types::{AccountInfo, SendResult, SignResult, WalletInfo};
 use crate::vault;
 
@@ -159,15 +157,49 @@ pub fn derive_address(
     Ok(address)
 }
 
+fn save_wallet_with_secret(
+    wallet_id: String,
+    name: &str,
+    accounts: Vec<WalletAccount>,
+    key_type: KeyType,
+    payload: &str,
+    vault_path: Option<&Path>,
+) -> Result<WalletInfo, OwsLibError> {
+    let secret_ref = secret_store::secret_ref_for_wallet(&wallet_id, vault_path);
+    secret_store::store_wallet_secret(&secret_ref, &wallet_id, key_type.clone(), payload)?;
+
+    let wallet = EncryptedWallet::new(
+        wallet_id,
+        name.to_string(),
+        accounts,
+        secret_ref.clone(),
+        key_type,
+    );
+
+    if let Err(err) = vault::save_encrypted_wallet(&wallet, vault_path) {
+        let _ = secret_store::delete_wallet_secret(&secret_ref);
+        return Err(err);
+    }
+
+    Ok(wallet_to_info(&wallet))
+}
+
+fn load_wallet_secret(wallet: &EncryptedWallet) -> Result<SecretBytes, OwsLibError> {
+    let secret_ref = wallet
+        .secret_ref
+        .as_deref()
+        .ok_or_else(|| OwsLibError::LegacyWalletUnsupported(wallet.id.clone()))?;
+    let payload = secret_store::load_wallet_secret(secret_ref)?;
+    Ok(SecretBytes::from_slice(payload.as_bytes()))
+}
+
 /// Create a new universal wallet: generates mnemonic, derives addresses for all chains,
-/// encrypts, and saves to vault.
+/// stores the secret in the OS keyring, and saves wallet metadata to the vault.
 pub fn create_wallet(
     name: &str,
     words: Option<u32>,
-    passphrase: Option<&str>,
     vault_path: Option<&Path>,
 ) -> Result<WalletInfo, OwsLibError> {
-    let passphrase = passphrase.unwrap_or("");
     let words = words.unwrap_or(12);
     let strength = match words {
         12 => MnemonicStrength::Words12,
@@ -183,32 +215,20 @@ pub fn create_wallet(
     let accounts = derive_all_accounts(&mnemonic, 0)?;
 
     let phrase = mnemonic.phrase();
-    let crypto_envelope = encrypt(phrase.expose(), passphrase)?;
-    let crypto_json = serde_json::to_value(&crypto_envelope)?;
-
     let wallet_id = uuid::Uuid::new_v4().to_string();
+    let payload = std::str::from_utf8(phrase.expose())
+        .map_err(|_| OwsLibError::InvalidInput("wallet contains invalid UTF-8 mnemonic".into()))?;
 
-    let wallet = EncryptedWallet::new(
-        wallet_id,
-        name.to_string(),
-        accounts,
-        crypto_json,
-        KeyType::Mnemonic,
-    );
-
-    vault::save_encrypted_wallet(&wallet, vault_path)?;
-    Ok(wallet_to_info(&wallet))
+    save_wallet_with_secret(wallet_id, name, accounts, KeyType::Mnemonic, payload, vault_path)
 }
 
 /// Import a wallet from a mnemonic phrase. Derives addresses for all chains.
 pub fn import_wallet_mnemonic(
     name: &str,
     mnemonic_phrase: &str,
-    passphrase: Option<&str>,
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<WalletInfo, OwsLibError> {
-    let passphrase = passphrase.unwrap_or("");
     let index = index.unwrap_or(0);
 
     if vault::wallet_name_exists(name, vault_path)? {
@@ -219,21 +239,11 @@ pub fn import_wallet_mnemonic(
     let accounts = derive_all_accounts(&mnemonic, index)?;
 
     let phrase = mnemonic.phrase();
-    let crypto_envelope = encrypt(phrase.expose(), passphrase)?;
-    let crypto_json = serde_json::to_value(&crypto_envelope)?;
-
     let wallet_id = uuid::Uuid::new_v4().to_string();
+    let payload = std::str::from_utf8(phrase.expose())
+        .map_err(|_| OwsLibError::InvalidInput("wallet contains invalid UTF-8 mnemonic".into()))?;
 
-    let wallet = EncryptedWallet::new(
-        wallet_id,
-        name.to_string(),
-        accounts,
-        crypto_json,
-        KeyType::Mnemonic,
-    );
-
-    vault::save_encrypted_wallet(&wallet, vault_path)?;
-    Ok(wallet_to_info(&wallet))
+    save_wallet_with_secret(wallet_id, name, accounts, KeyType::Mnemonic, payload, vault_path)
 }
 
 /// Decode a hex-encoded key, stripping an optional `0x` prefix.
@@ -245,7 +255,7 @@ fn decode_hex_key(hex_str: &str) -> Result<Vec<u8>, OwsLibError> {
 
 /// Import a wallet from a hex-encoded private key.
 /// The `chain` parameter specifies which chain the key originates from (e.g. "evm", "solana").
-/// A random key is generated for the other curve so all 6 chains are supported.
+/// A random key is generated for the other curve so all 7 chain families are supported.
 ///
 /// Alternatively, provide both `secp256k1_key_hex` and `ed25519_key_hex` to supply
 /// explicit keys for each curve. When both are given, `private_key_hex` and `chain`
@@ -255,13 +265,10 @@ pub fn import_wallet_private_key(
     name: &str,
     private_key_hex: &str,
     chain: Option<&str>,
-    passphrase: Option<&str>,
     vault_path: Option<&Path>,
     secp256k1_key_hex: Option<&str>,
     ed25519_key_hex: Option<&str>,
 ) -> Result<WalletInfo, OwsLibError> {
-    let passphrase = passphrase.unwrap_or("");
-
     if vault::wallet_name_exists(name, vault_path)? {
         return Err(OwsLibError::WalletNameExists(name.to_string()));
     }
@@ -311,23 +318,19 @@ pub fn import_wallet_private_key(
     };
 
     let accounts = derive_all_accounts_from_keys(&keys)?;
-
     let payload = keys.to_json_bytes();
-    let crypto_envelope = encrypt(&payload, passphrase)?;
-    let crypto_json = serde_json::to_value(&crypto_envelope)?;
+    let payload = String::from_utf8(payload)
+        .map_err(|_| OwsLibError::InvalidInput("wallet contains invalid key data".into()))?;
 
     let wallet_id = uuid::Uuid::new_v4().to_string();
-
-    let wallet = EncryptedWallet::new(
+    save_wallet_with_secret(
         wallet_id,
-        name.to_string(),
+        name,
         accounts,
-        crypto_json,
         KeyType::PrivateKey,
-    );
-
-    vault::save_encrypted_wallet(&wallet, vault_path)?;
-    Ok(wallet_to_info(&wallet))
+        &payload,
+        vault_path,
+    )
 }
 
 /// List all wallets in the vault.
@@ -346,6 +349,9 @@ pub fn get_wallet(name_or_id: &str, vault_path: Option<&Path>) -> Result<WalletI
 pub fn delete_wallet(name_or_id: &str, vault_path: Option<&Path>) -> Result<(), OwsLibError> {
     let wallet = vault::load_wallet_by_name_or_id(name_or_id, vault_path)?;
     vault::delete_wallet_file(&wallet.id, vault_path)?;
+    if let Some(secret_ref) = wallet.secret_ref.as_deref() {
+        let _ = secret_store::delete_wallet_secret(secret_ref);
+    }
     Ok(())
 }
 
@@ -353,13 +359,10 @@ pub fn delete_wallet(name_or_id: &str, vault_path: Option<&Path>) -> Result<(), 
 /// Mnemonic wallets return the phrase. Private key wallets return JSON with both keys.
 pub fn export_wallet(
     name_or_id: &str,
-    passphrase: Option<&str>,
     vault_path: Option<&Path>,
 ) -> Result<String, OwsLibError> {
-    let passphrase = passphrase.unwrap_or("");
     let wallet = vault::load_wallet_by_name_or_id(name_or_id, vault_path)?;
-    let envelope: CryptoEnvelope = serde_json::from_value(wallet.crypto.clone())?;
-    let secret = decrypt(&envelope, passphrase)?;
+    let secret = load_wallet_secret(&wallet)?;
 
     match wallet.key_type {
         KeyType::Mnemonic => String::from_utf8(secret.expose().to_vec()).map_err(|_| {
@@ -399,18 +402,16 @@ pub fn sign_transaction(
     wallet: &str,
     chain: &str,
     tx_hex: &str,
-    passphrase: Option<&str>,
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<SignResult, OwsLibError> {
-    let passphrase = passphrase.unwrap_or("");
     let chain = parse_chain(chain)?;
 
     let tx_hex_clean = tx_hex.strip_prefix("0x").unwrap_or(tx_hex);
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| OwsLibError::InvalidInput(format!("invalid hex transaction: {e}")))?;
 
-    let key = decrypt_signing_key(wallet, chain.chain_type, passphrase, index, vault_path)?;
+    let key = decrypt_signing_key(wallet, chain.chain_type, index, vault_path)?;
     let signer = signer_for_chain(chain.chain_type);
     let output = signer.sign_transaction(key.expose(), &tx_bytes)?;
 
@@ -425,12 +426,10 @@ pub fn sign_message(
     wallet: &str,
     chain: &str,
     message: &str,
-    passphrase: Option<&str>,
     encoding: Option<&str>,
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<SignResult, OwsLibError> {
-    let passphrase = passphrase.unwrap_or("");
     let chain = parse_chain(chain)?;
 
     let encoding = encoding.unwrap_or("utf8");
@@ -445,7 +444,7 @@ pub fn sign_message(
         }
     };
 
-    let key = decrypt_signing_key(wallet, chain.chain_type, passphrase, index, vault_path)?;
+    let key = decrypt_signing_key(wallet, chain.chain_type, index, vault_path)?;
     let signer = signer_for_chain(chain.chain_type);
     let output = signer.sign_message(key.expose(), &msg_bytes)?;
 
@@ -461,11 +460,9 @@ pub fn sign_typed_data(
     wallet: &str,
     chain: &str,
     typed_data_json: &str,
-    passphrase: Option<&str>,
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<SignResult, OwsLibError> {
-    let passphrase = passphrase.unwrap_or("");
     let chain = parse_chain(chain)?;
 
     if chain.chain_type != ows_core::ChainType::Evm {
@@ -474,7 +471,7 @@ pub fn sign_typed_data(
         ));
     }
 
-    let key = decrypt_signing_key(wallet, chain.chain_type, passphrase, index, vault_path)?;
+    let key = decrypt_signing_key(wallet, chain.chain_type, index, vault_path)?;
     let evm_signer = ows_signer::chains::EvmSigner;
     let output = evm_signer.sign_typed_data(key.expose(), typed_data_json)?;
 
@@ -489,19 +486,17 @@ pub fn sign_and_send(
     wallet: &str,
     chain: &str,
     tx_hex: &str,
-    passphrase: Option<&str>,
     index: Option<u32>,
     rpc_url: Option<&str>,
     vault_path: Option<&Path>,
 ) -> Result<SendResult, OwsLibError> {
-    let passphrase = passphrase.unwrap_or("");
     let chain_info = parse_chain(chain)?;
 
     let tx_hex_clean = tx_hex.strip_prefix("0x").unwrap_or(tx_hex);
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| OwsLibError::InvalidInput(format!("invalid hex transaction: {e}")))?;
 
-    let key = decrypt_signing_key(wallet, chain_info.chain_type, passphrase, index, vault_path)?;
+    let key = decrypt_signing_key(wallet, chain_info.chain_type, index, vault_path)?;
 
     sign_encode_and_broadcast(key.expose(), chain, &tx_bytes, rpc_url)
 }
@@ -545,13 +540,11 @@ pub fn sign_encode_and_broadcast(
 fn decrypt_signing_key(
     wallet_name_or_id: &str,
     chain_type: ChainType,
-    passphrase: &str,
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<SecretBytes, OwsLibError> {
     let wallet = vault::load_wallet_by_name_or_id(wallet_name_or_id, vault_path)?;
-    let envelope: CryptoEnvelope = serde_json::from_value(wallet.crypto.clone())?;
-    let secret = decrypt(&envelope, passphrase)?;
+    let secret = load_wallet_secret(&wallet)?;
 
     match wallet.key_type {
         KeyType::Mnemonic => {
@@ -779,7 +772,6 @@ mod tests {
     fn save_privkey_wallet(
         name: &str,
         privkey_hex: &str,
-        passphrase: &str,
         vault: &Path,
     ) -> WalletInfo {
         let key_bytes = hex::decode(privkey_hex).unwrap();
@@ -793,18 +785,17 @@ mod tests {
             ed25519: ed_key,
         };
         let accounts = derive_all_accounts_from_keys(&keys).unwrap();
-        let payload = keys.to_json_bytes();
-        let crypto_envelope = encrypt(&payload, passphrase).unwrap();
-        let crypto_json = serde_json::to_value(&crypto_envelope).unwrap();
-        let wallet = EncryptedWallet::new(
-            uuid::Uuid::new_v4().to_string(),
-            name.to_string(),
+        let payload = String::from_utf8(keys.to_json_bytes()).unwrap();
+        let wallet_id = uuid::Uuid::new_v4().to_string();
+        save_wallet_with_secret(
+            wallet_id,
+            name,
             accounts,
-            crypto_json,
             KeyType::PrivateKey,
-        );
-        vault::save_encrypted_wallet(&wallet, Some(vault)).unwrap();
-        wallet_to_info(&wallet)
+            &payload,
+            Some(vault),
+        )
+        .unwrap()
     }
 
     const TEST_PRIVKEY: &str = "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318";
@@ -898,15 +889,15 @@ mod tests {
         let v2 = tempfile::tempdir().unwrap();
 
         // Create
-        let w1 = create_wallet("w1", None, None, Some(v1.path())).unwrap();
+        let w1 = create_wallet("w1", None, Some(v1.path())).unwrap();
         assert!(!w1.accounts.is_empty());
 
         // Export mnemonic
-        let phrase = export_wallet("w1", None, Some(v1.path())).unwrap();
+        let phrase = export_wallet("w1", Some(v1.path())).unwrap();
         assert_eq!(phrase.split_whitespace().count(), 12);
 
         // Re-import into fresh vault
-        let w2 = import_wallet_mnemonic("w2", &phrase, None, None, Some(v2.path())).unwrap();
+        let w2 = import_wallet_mnemonic("w2", &phrase, None, Some(v2.path())).unwrap();
 
         // Addresses must match exactly
         assert_eq!(w1.accounts.len(), w2.accounts.len());
@@ -924,19 +915,11 @@ mod tests {
     fn mnemonic_wallet_sign_message_all_chains() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        create_wallet("multi-sign", None, None, Some(vault)).unwrap();
+        create_wallet("multi-sign", None, Some(vault)).unwrap();
 
         let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark"];
         for chain in &chains {
-            let result = sign_message(
-                "multi-sign",
-                chain,
-                "test msg",
-                None,
-                None,
-                None,
-                Some(vault),
-            );
+            let result = sign_message("multi-sign", chain, "test msg", None, None, Some(vault));
             assert!(
                 result.is_ok(),
                 "sign_message should work for {chain}: {:?}",
@@ -954,7 +937,7 @@ mod tests {
     fn mnemonic_wallet_sign_tx_all_chains() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        create_wallet("tx-sign", None, None, Some(vault)).unwrap();
+        create_wallet("tx-sign", None, Some(vault)).unwrap();
 
         let generic_tx_hex = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
         // Solana requires a properly formatted serialized transaction:
@@ -971,7 +954,7 @@ mod tests {
             } else {
                 generic_tx_hex
             };
-            let result = sign_transaction("tx-sign", chain, tx, None, None, Some(vault));
+            let result = sign_transaction("tx-sign", chain, tx, None, Some(vault));
             assert!(
                 result.is_ok(),
                 "sign_transaction should work for {chain}: {:?}",
@@ -984,10 +967,10 @@ mod tests {
     fn mnemonic_wallet_signing_is_deterministic() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        create_wallet("det-sign", None, None, Some(vault)).unwrap();
+        create_wallet("det-sign", None, Some(vault)).unwrap();
 
-        let s1 = sign_message("det-sign", "evm", "hello", None, None, None, Some(vault)).unwrap();
-        let s2 = sign_message("det-sign", "evm", "hello", None, None, None, Some(vault)).unwrap();
+        let s1 = sign_message("det-sign", "evm", "hello", None, None, Some(vault)).unwrap();
+        let s2 = sign_message("det-sign", "evm", "hello", None, None, Some(vault)).unwrap();
         assert_eq!(
             s1.signature, s2.signature,
             "same message should produce same signature"
@@ -998,10 +981,10 @@ mod tests {
     fn mnemonic_wallet_different_messages_produce_different_sigs() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        create_wallet("diff-msg", None, None, Some(vault)).unwrap();
+        create_wallet("diff-msg", None, Some(vault)).unwrap();
 
-        let s1 = sign_message("diff-msg", "evm", "hello", None, None, None, Some(vault)).unwrap();
-        let s2 = sign_message("diff-msg", "evm", "world", None, None, None, Some(vault)).unwrap();
+        let s1 = sign_message("diff-msg", "evm", "hello", None, None, Some(vault)).unwrap();
+        let s2 = sign_message("diff-msg", "evm", "world", None, None, Some(vault)).unwrap();
         assert_ne!(s1.signature, s2.signature);
     }
 
@@ -1012,18 +995,9 @@ mod tests {
     #[test]
     fn privkey_wallet_sign_message() {
         let dir = tempfile::tempdir().unwrap();
-        save_privkey_wallet("pk-sign", TEST_PRIVKEY, "", dir.path());
+        save_privkey_wallet("pk-sign", TEST_PRIVKEY, dir.path());
 
-        let sig = sign_message(
-            "pk-sign",
-            "evm",
-            "hello",
-            None,
-            None,
-            None,
-            Some(dir.path()),
-        )
-        .unwrap();
+        let sig = sign_message("pk-sign", "evm", "hello", None, None, Some(dir.path())).unwrap();
         assert!(!sig.signature.is_empty());
         assert!(sig.recovery_id.is_some());
     }
@@ -1031,19 +1005,19 @@ mod tests {
     #[test]
     fn privkey_wallet_sign_transaction() {
         let dir = tempfile::tempdir().unwrap();
-        save_privkey_wallet("pk-tx", TEST_PRIVKEY, "", dir.path());
+        save_privkey_wallet("pk-tx", TEST_PRIVKEY, dir.path());
 
         let tx = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
-        let sig = sign_transaction("pk-tx", "evm", tx, None, None, Some(dir.path())).unwrap();
+        let sig = sign_transaction("pk-tx", "evm", tx, None, Some(dir.path())).unwrap();
         assert!(!sig.signature.is_empty());
     }
 
     #[test]
     fn privkey_wallet_export_returns_json() {
         let dir = tempfile::tempdir().unwrap();
-        save_privkey_wallet("pk-export", TEST_PRIVKEY, "", dir.path());
+        save_privkey_wallet("pk-export", TEST_PRIVKEY, dir.path());
 
-        let exported = export_wallet("pk-export", None, Some(dir.path())).unwrap();
+        let exported = export_wallet("pk-export", Some(dir.path())).unwrap();
         let obj: serde_json::Value = serde_json::from_str(&exported).unwrap();
         assert_eq!(
             obj["secp256k1"].as_str().unwrap(),
@@ -1056,10 +1030,10 @@ mod tests {
     #[test]
     fn privkey_wallet_signing_is_deterministic() {
         let dir = tempfile::tempdir().unwrap();
-        save_privkey_wallet("pk-det", TEST_PRIVKEY, "", dir.path());
+        save_privkey_wallet("pk-det", TEST_PRIVKEY, dir.path());
 
-        let s1 = sign_message("pk-det", "evm", "test", None, None, None, Some(dir.path())).unwrap();
-        let s2 = sign_message("pk-det", "evm", "test", None, None, None, Some(dir.path())).unwrap();
+        let s1 = sign_message("pk-det", "evm", "test", None, None, Some(dir.path())).unwrap();
+        let s2 = sign_message("pk-det", "evm", "test", None, None, Some(dir.path())).unwrap();
         assert_eq!(s1.signature, s2.signature);
     }
 
@@ -1068,11 +1042,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
 
-        create_wallet("mn-w", None, None, Some(vault)).unwrap();
-        save_privkey_wallet("pk-w", TEST_PRIVKEY, "", vault);
+        create_wallet("mn-w", None, Some(vault)).unwrap();
+        save_privkey_wallet("pk-w", TEST_PRIVKEY, vault);
 
-        let mn_sig = sign_message("mn-w", "evm", "hello", None, None, None, Some(vault)).unwrap();
-        let pk_sig = sign_message("pk-w", "evm", "hello", None, None, None, Some(vault)).unwrap();
+        let mn_sig = sign_message("mn-w", "evm", "hello", None, None, Some(vault)).unwrap();
+        let pk_sig = sign_message("pk-w", "evm", "hello", None, None, Some(vault)).unwrap();
         assert_ne!(
             mn_sig.signature, pk_sig.signature,
             "different keys should produce different signatures"
@@ -1088,7 +1062,6 @@ mod tests {
             "pk-api",
             TEST_PRIVKEY,
             Some("evm"),
-            None,
             Some(vault),
             None,
             None,
@@ -1100,11 +1073,11 @@ mod tests {
         );
 
         // Should be able to sign
-        let sig = sign_message("pk-api", "evm", "hello", None, None, None, Some(vault)).unwrap();
+        let sig = sign_message("pk-api", "evm", "hello", None, None, Some(vault)).unwrap();
         assert!(!sig.signature.is_empty());
 
         // Export should return JSON key pair with original key
-        let exported = export_wallet("pk-api", None, Some(vault)).unwrap();
+        let exported = export_wallet("pk-api", Some(vault)).unwrap();
         let obj: serde_json::Value = serde_json::from_str(&exported).unwrap();
         assert_eq!(obj["secp256k1"].as_str().unwrap(), TEST_PRIVKEY);
     }
@@ -1121,7 +1094,6 @@ mod tests {
             "pk-both",
             "",   // ignored when both curve keys provided
             None, // chain ignored too
-            None,
             Some(vault),
             Some(secp_key),
             Some(ed_key),
@@ -1135,104 +1107,22 @@ mod tests {
         );
 
         // Sign on EVM (secp256k1)
-        let sig = sign_message("pk-both", "evm", "hello", None, None, None, Some(vault)).unwrap();
+        let sig = sign_message("pk-both", "evm", "hello", None, None, Some(vault)).unwrap();
         assert!(!sig.signature.is_empty());
 
         // Sign on Solana (ed25519)
-        let sig =
-            sign_message("pk-both", "solana", "hello", None, None, None, Some(vault)).unwrap();
+        let sig = sign_message("pk-both", "solana", "hello", None, None, Some(vault)).unwrap();
         assert!(!sig.signature.is_empty());
 
         // Export should return both keys
-        let exported = export_wallet("pk-both", None, Some(vault)).unwrap();
+        let exported = export_wallet("pk-both", Some(vault)).unwrap();
         let obj: serde_json::Value = serde_json::from_str(&exported).unwrap();
         assert_eq!(obj["secp256k1"].as_str().unwrap(), secp_key);
         assert_eq!(obj["ed25519"].as_str().unwrap(), ed_key);
     }
 
     // ================================================================
-    // 5. PASSPHRASE PROTECTION
-    // ================================================================
-
-    #[test]
-    fn passphrase_protected_mnemonic_wallet() {
-        let dir = tempfile::tempdir().unwrap();
-        let vault = dir.path();
-
-        create_wallet("pass-mn", None, Some("s3cret"), Some(vault)).unwrap();
-
-        // Sign with correct passphrase
-        let sig = sign_message(
-            "pass-mn",
-            "evm",
-            "hello",
-            Some("s3cret"),
-            None,
-            None,
-            Some(vault),
-        )
-        .unwrap();
-        assert!(!sig.signature.is_empty());
-
-        // Export with correct passphrase
-        let phrase = export_wallet("pass-mn", Some("s3cret"), Some(vault)).unwrap();
-        assert_eq!(phrase.split_whitespace().count(), 12);
-
-        // Wrong passphrase should fail
-        assert!(sign_message(
-            "pass-mn",
-            "evm",
-            "hello",
-            Some("wrong"),
-            None,
-            None,
-            Some(vault)
-        )
-        .is_err());
-        assert!(export_wallet("pass-mn", Some("wrong"), Some(vault)).is_err());
-
-        // No passphrase should fail (defaults to empty string, which is wrong)
-        assert!(sign_message("pass-mn", "evm", "hello", None, None, None, Some(vault)).is_err());
-    }
-
-    #[test]
-    fn passphrase_protected_privkey_wallet() {
-        let dir = tempfile::tempdir().unwrap();
-        save_privkey_wallet("pass-pk", TEST_PRIVKEY, "mypass", dir.path());
-
-        // Correct passphrase
-        let sig = sign_message(
-            "pass-pk",
-            "evm",
-            "hello",
-            Some("mypass"),
-            None,
-            None,
-            Some(dir.path()),
-        )
-        .unwrap();
-        assert!(!sig.signature.is_empty());
-
-        let exported = export_wallet("pass-pk", Some("mypass"), Some(dir.path())).unwrap();
-        let obj: serde_json::Value = serde_json::from_str(&exported).unwrap();
-        assert_eq!(obj["secp256k1"].as_str().unwrap(), TEST_PRIVKEY);
-
-        // Wrong passphrase
-        assert!(sign_message(
-            "pass-pk",
-            "evm",
-            "hello",
-            Some("wrong"),
-            None,
-            None,
-            Some(dir.path())
-        )
-        .is_err());
-        assert!(export_wallet("pass-pk", Some("wrong"), Some(dir.path())).is_err());
-    }
-
-    // ================================================================
-    // 6. SIGNATURE VERIFICATION (prove signatures are cryptographically valid)
+    // 5. SIGNATURE VERIFICATION (prove signatures are cryptographically valid)
     // ================================================================
 
     #[test]
@@ -1241,7 +1131,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
 
-        let info = create_wallet("verify-evm", None, None, Some(vault)).unwrap();
+        let info = create_wallet("verify-evm", None, Some(vault)).unwrap();
         let evm_addr = info
             .accounts
             .iter()
@@ -1254,7 +1144,6 @@ mod tests {
             "verify-evm",
             "evm",
             "hello world",
-            None,
             None,
             None,
             Some(vault),
@@ -1307,8 +1196,8 @@ mod tests {
     fn error_nonexistent_wallet() {
         let dir = tempfile::tempdir().unwrap();
         assert!(get_wallet("nope", Some(dir.path())).is_err());
-        assert!(export_wallet("nope", None, Some(dir.path())).is_err());
-        assert!(sign_message("nope", "evm", "x", None, None, None, Some(dir.path())).is_err());
+        assert!(export_wallet("nope", Some(dir.path())).is_err());
+        assert!(sign_message("nope", "evm", "x", None, None, Some(dir.path())).is_err());
         assert!(delete_wallet("nope", Some(dir.path())).is_err());
     }
 
@@ -1316,8 +1205,8 @@ mod tests {
     fn error_duplicate_wallet_name() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        create_wallet("dup", None, None, Some(vault)).unwrap();
-        assert!(create_wallet("dup", None, None, Some(vault)).is_err());
+        create_wallet("dup", None, Some(vault)).unwrap();
+        assert!(create_wallet("dup", None, Some(vault)).is_err());
     }
 
     #[test]
@@ -1327,7 +1216,6 @@ mod tests {
             "bad",
             "not-hex",
             Some("evm"),
-            None,
             Some(dir.path()),
             None,
             None,
@@ -1339,20 +1227,16 @@ mod tests {
     fn error_invalid_chain_for_signing() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        create_wallet("chain-err", None, None, Some(vault)).unwrap();
-        assert!(
-            sign_message("chain-err", "fakecoin", "hi", None, None, None, Some(vault)).is_err()
-        );
+        create_wallet("chain-err", None, Some(vault)).unwrap();
+        assert!(sign_message("chain-err", "fakecoin", "hi", None, None, Some(vault)).is_err());
     }
 
     #[test]
     fn error_invalid_tx_hex() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        create_wallet("hex-err", None, None, Some(vault)).unwrap();
-        assert!(
-            sign_transaction("hex-err", "evm", "not-valid-hex!", None, None, Some(vault)).is_err()
-        );
+        create_wallet("hex-err", None, Some(vault)).unwrap();
+        assert!(sign_transaction("hex-err", "evm", "not-valid-hex!", None, Some(vault)).is_err());
     }
 
     // ================================================================
@@ -1370,7 +1254,7 @@ mod tests {
     fn get_wallet_by_name_and_id() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        let info = create_wallet("lookup", None, None, Some(vault)).unwrap();
+        let info = create_wallet("lookup", None, Some(vault)).unwrap();
 
         let by_name = get_wallet("lookup", Some(vault)).unwrap();
         assert_eq!(by_name.id, info.id);
@@ -1383,7 +1267,7 @@ mod tests {
     fn rename_wallet_works() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        let info = create_wallet("before", None, None, Some(vault)).unwrap();
+        let info = create_wallet("before", None, Some(vault)).unwrap();
 
         rename_wallet("before", "after", Some(vault)).unwrap();
 
@@ -1396,8 +1280,8 @@ mod tests {
     fn rename_to_existing_name_fails() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        create_wallet("a", None, None, Some(vault)).unwrap();
-        create_wallet("b", None, None, Some(vault)).unwrap();
+        create_wallet("a", None, Some(vault)).unwrap();
+        create_wallet("b", None, Some(vault)).unwrap();
         assert!(rename_wallet("a", "b", Some(vault)).is_err());
     }
 
@@ -1405,7 +1289,7 @@ mod tests {
     fn delete_wallet_removes_from_list() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        create_wallet("del-me", None, None, Some(vault)).unwrap();
+        create_wallet("del-me", None, Some(vault)).unwrap();
         assert_eq!(list_wallets(Some(vault)).unwrap().len(), 1);
 
         delete_wallet("del-me", Some(vault)).unwrap();
@@ -1420,14 +1304,13 @@ mod tests {
     fn sign_message_hex_encoding() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        create_wallet("hex-enc", None, None, Some(vault)).unwrap();
+        create_wallet("hex-enc", None, Some(vault)).unwrap();
 
         // "hello" in hex
         let sig = sign_message(
             "hex-enc",
             "evm",
             "68656c6c6f",
-            None,
             Some("hex"),
             None,
             Some(vault),
@@ -1440,7 +1323,6 @@ mod tests {
             "hex-enc",
             "evm",
             "hello",
-            None,
             Some("utf8"),
             None,
             Some(vault),
@@ -1456,12 +1338,11 @@ mod tests {
     fn sign_message_invalid_encoding() {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        create_wallet("bad-enc", None, None, Some(vault)).unwrap();
+        create_wallet("bad-enc", None, Some(vault)).unwrap();
         assert!(sign_message(
             "bad-enc",
             "evm",
             "hello",
-            None,
             Some("base64"),
             None,
             Some(vault)
@@ -1478,17 +1359,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
 
-        create_wallet("w1", None, None, Some(vault)).unwrap();
-        create_wallet("w2", None, None, Some(vault)).unwrap();
-        save_privkey_wallet("w3", TEST_PRIVKEY, "", vault);
+        create_wallet("w1", None, Some(vault)).unwrap();
+        create_wallet("w2", None, Some(vault)).unwrap();
+        save_privkey_wallet("w3", TEST_PRIVKEY, vault);
 
         let wallets = list_wallets(Some(vault)).unwrap();
         assert_eq!(wallets.len(), 3);
 
         // All can sign independently
-        let s1 = sign_message("w1", "evm", "test", None, None, None, Some(vault)).unwrap();
-        let s2 = sign_message("w2", "evm", "test", None, None, None, Some(vault)).unwrap();
-        let s3 = sign_message("w3", "evm", "test", None, None, None, Some(vault)).unwrap();
+        let s1 = sign_message("w1", "evm", "test", None, None, Some(vault)).unwrap();
+        let s2 = sign_message("w2", "evm", "test", None, None, Some(vault)).unwrap();
+        let s3 = sign_message("w3", "evm", "test", None, None, Some(vault)).unwrap();
 
         // All signatures should be different (different keys)
         assert_ne!(s1.signature, s2.signature);
@@ -1498,8 +1379,8 @@ mod tests {
         // Delete one, others survive
         delete_wallet("w2", Some(vault)).unwrap();
         assert_eq!(list_wallets(Some(vault)).unwrap().len(), 2);
-        assert!(sign_message("w1", "evm", "test", None, None, None, Some(vault)).is_ok());
-        assert!(sign_message("w3", "evm", "test", None, None, None, Some(vault)).is_ok());
+        assert!(sign_message("w1", "evm", "test", None, None, Some(vault)).is_ok());
+        assert!(sign_message("w3", "evm", "test", None, None, Some(vault)).is_ok());
     }
 
     // ================================================================
@@ -1519,7 +1400,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path();
-        save_privkey_wallet("send-bug", TEST_PRIVKEY, "", vault);
+        save_privkey_wallet("send-bug", TEST_PRIVKEY, vault);
 
         // Build a minimal unsigned EIP-1559 transaction
         let items: Vec<u8> = [
@@ -1540,12 +1421,11 @@ mod tests {
         let tx_hex = hex::encode(&unsigned_tx);
 
         // Sign the transaction via the library
-        let sign_result =
-            sign_transaction("send-bug", "evm", &tx_hex, None, None, Some(vault)).unwrap();
+        let sign_result = sign_transaction("send-bug", "evm", &tx_hex, None, Some(vault)).unwrap();
         let raw_signature = hex::decode(&sign_result.signature).unwrap();
 
         // Now encode the full signed transaction (what the library does correctly)
-        let key = decrypt_signing_key("send-bug", ChainType::Evm, "", None, Some(vault)).unwrap();
+        let key = decrypt_signing_key("send-bug", ChainType::Evm, None, Some(vault)).unwrap();
         let signer = signer_for_chain(ChainType::Evm);
         let output = signer.sign_transaction(key.expose(), &unsigned_tx).unwrap();
         let full_signed_tx = signer
@@ -1587,7 +1467,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let vault = tmp.path();
 
-        let w = save_privkey_wallet("typed-data-test", TEST_PRIVKEY, "pass", vault);
+        let w = save_privkey_wallet("typed-data-test", TEST_PRIVKEY, vault);
 
         let typed_data = r#"{
             "types": {
@@ -1599,7 +1479,7 @@ mod tests {
             "message": {"value": "1"}
         }"#;
 
-        let result = sign_typed_data(&w.id, "solana", typed_data, Some("pass"), None, Some(vault));
+        let result = sign_typed_data(&w.id, "solana", typed_data, None, Some(vault));
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -1613,7 +1493,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let vault = tmp.path();
 
-        let w = save_privkey_wallet("typed-data-evm", TEST_PRIVKEY, "pass", vault);
+        let w = save_privkey_wallet("typed-data-evm", TEST_PRIVKEY, vault);
 
         let typed_data = r#"{
             "types": {
@@ -1629,7 +1509,7 @@ mod tests {
             "message": {"value": "42"}
         }"#;
 
-        let result = sign_typed_data(&w.id, "evm", typed_data, Some("pass"), None, Some(vault));
+        let result = sign_typed_data(&w.id, "evm", typed_data, None, Some(vault));
         assert!(result.is_ok(), "sign_typed_data failed: {:?}", result.err());
 
         let sign_result = result.unwrap();

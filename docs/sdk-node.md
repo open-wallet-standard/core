@@ -1,6 +1,6 @@
 # Node.js SDK
 
-> Native bindings for Node.js via NAPI. No CLI, no server, no subprocess &mdash; the Rust core runs in-process.
+> Native bindings for Node.js via NAPI. No CLI, no server, no subprocess.
 
 [![npm](https://img.shields.io/npm/v/@open-wallet-standard/core)](https://www.npmjs.com/package/@open-wallet-standard/core)
 
@@ -10,328 +10,162 @@
 npm install @open-wallet-standard/core
 ```
 
-The package includes prebuilt native binaries for macOS (arm64, x64) and Linux (x64, arm64). No Rust toolchain required.
+Wallet metadata is stored under `~/.ows/wallets/`. Mnemonics and private keys are stored in the OS keyring.
 
 ## Quick Start
 
 ```javascript
 import {
-  generateMnemonic,
   createWallet,
   listWallets,
   signMessage,
-  signTypedData,
-  deleteWallet,
+  exportWallet,
 } from "@open-wallet-standard/core";
 
-const mnemonic = generateMnemonic(12);
 const wallet = createWallet("my-wallet");
+console.log(wallet.accounts.length); // 7
+
+const wallets = listWallets();
 const sig = signMessage("my-wallet", "evm", "hello");
+const phrase = exportWallet("my-wallet");
+
+console.log(wallets.length);
 console.log(sig.signature);
+console.log(phrase.split(" ").length);
 ```
 
-## API Reference
-
-### Types
+## Types
 
 ```typescript
 interface AccountInfo {
-  chainId: string;        // CAIP-2 chain ID (e.g. "eip155:1")
-  address: string;        // Chain-native address
-  derivationPath: string; // BIP-44 path (e.g. "m/44'/60'/0'/0/0")
+  chainId: string;
+  address: string;
+  derivationPath: string;
 }
 
 interface WalletInfo {
-  id: string;             // UUID v4
+  id: string;
   name: string;
   accounts: AccountInfo[];
-  createdAt: string;      // ISO 8601
+  createdAt: string;
 }
 
 interface SignResult {
-  signature: string;      // Hex-encoded signature
-  recoveryId?: number;    // EVM/Tron recovery ID (v value)
+  signature: string;
+  recoveryId?: number;
 }
 
 interface SendResult {
-  txHash: string;         // Transaction hash
+  txHash: string;
 }
 ```
 
-### Mnemonic
+## API
+
+### Mnemonics
 
 #### `generateMnemonic(words?)`
 
-Generate a new BIP-39 mnemonic phrase.
-
-```javascript
-const phrase = generateMnemonic(12);  // or 24
-// => "goose puzzle decorate much stable beach ..."
-```
-
-| Param | Type | Default | Description |
-|-------|------|---------|-------------|
-| `words` | `number` | `12` | Word count (12 or 24) |
-
-**Returns:** `string`
+Generate a new 12- or 24-word BIP-39 mnemonic.
 
 #### `deriveAddress(mnemonic, chain, index?)`
 
 Derive an address from a mnemonic without creating a wallet.
 
-```javascript
-const addr = deriveAddress(mnemonic, "evm");
-// => "0xCc1e2c3D077b7c0f5301ef400bDE30d0e23dF1C6"
-
-const solAddr = deriveAddress(mnemonic, "solana");
-// => "DzkqyvQrBvLqKSMhCoXoGK65e9PvyWjb6YjS4BqcxN2i"
-```
-
-| Param | Type | Default | Description |
-|-------|------|---------|-------------|
-| `mnemonic` | `string` | &mdash; | BIP-39 mnemonic phrase |
-| `chain` | `string` | &mdash; | `"evm"`, `"solana"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"` |
-| `index` | `number` | `0` | Account index in derivation path |
-
-**Returns:** `string`
-
 ### Wallet Management
 
-#### `createWallet(name, passphrase?, words?, vaultPath?)`
+#### `createWallet(name, words?, vaultPath?)`
 
-Create a new wallet. Generates a mnemonic and derives addresses for all supported chains.
+Create a wallet, derive accounts for all supported chain families, store the secret in the OS keyring, and write wallet metadata to the vault.
 
-```javascript
-const wallet = createWallet("agent-treasury");
-console.log(wallet.accounts);
-// => [
-//   { chainId: "eip155:1", address: "0x...", derivationPath: "m/44'/60'/0'/0/0" },
-//   { chainId: "solana:5eykt4...", address: "7Kz9...", derivationPath: "m/44'/501'/0'/0'" },
-//   { chainId: "bip122:000...", address: "bc1q...", derivationPath: "m/84'/0'/0'/0/0" },
-//   { chainId: "cosmos:cosmoshub-4", address: "cosmos1...", derivationPath: "m/44'/118'/0'/0/0" },
-//   { chainId: "tron:mainnet", address: "TKLm...", derivationPath: "m/44'/195'/0'/0/0" },
-//   { chainId: "ton:mainnet", address: "UQ...", derivationPath: "m/44'/607'/0'" },
-//   { chainId: "fil:mainnet", address: "f1...", derivationPath: "m/44'/461'/0'/0/0" },
-// ]
-```
+#### `importWalletMnemonic(name, mnemonic, index?, vaultPath?)`
 
-| Param | Type | Default | Description |
-|-------|------|---------|-------------|
-| `name` | `string` | &mdash; | Wallet name |
-| `passphrase` | `string` | `undefined` | Encryption passphrase |
-| `words` | `number` | `12` | Mnemonic word count |
-| `vaultPath` | `string` | `~/.ows/wallets` | Custom vault directory |
+Import a mnemonic-backed wallet.
 
-**Returns:** `WalletInfo`
+#### `importWalletPrivateKey(name, privateKeyHex, chain?, vaultPath?, secp256k1Key?, ed25519Key?)`
+
+Import a private-key wallet. When only one curve key is provided, OWS generates the other curve's key so the wallet still has all 7 chain accounts.
 
 #### `listWallets(vaultPath?)`
 
-List all wallets in the vault.
-
-```javascript
-const wallets = listWallets();
-console.log(wallets.length); // => 1
-```
-
-**Returns:** `WalletInfo[]`
+List wallet metadata from the vault.
 
 #### `getWallet(nameOrId, vaultPath?)`
 
-Look up a wallet by name or UUID.
-
-```javascript
-const wallet = getWallet("agent-treasury");
-```
-
-**Returns:** `WalletInfo`
-
-#### `deleteWallet(nameOrId, vaultPath?)`
-
-Delete a wallet from the vault.
-
-```javascript
-deleteWallet("agent-treasury");
-```
+Load one wallet by name or ID.
 
 #### `renameWallet(nameOrId, newName, vaultPath?)`
 
-Rename a wallet.
+Rename a wallet. The keyring entry stays stable because it is keyed by wallet ID.
 
-```javascript
-renameWallet("old-name", "new-name");
-```
+#### `deleteWallet(nameOrId, vaultPath?)`
 
-#### `exportWallet(nameOrId, passphrase?, vaultPath?)`
+Delete the metadata file and the matching keyring entry.
 
-Export a wallet's secret.
+#### `exportWallet(nameOrId, vaultPath?)`
 
-- **Mnemonic wallets** return the phrase string.
-- **Private key wallets** return a JSON string with both curve keys:
+Export the wallet secret.
 
-```javascript
-// Mnemonic wallet
-const phrase = exportWallet("mn-wallet");
-// => "goose puzzle decorate much ..."
-
-// Private key wallet
-const keysJson = exportWallet("pk-wallet");
-const keys = JSON.parse(keysJson);
-// => { secp256k1: "4c0883a6...", ed25519: "9d61b19d..." }
-```
-
-**Returns:** `string`
-
-### Import
-
-#### `importWalletMnemonic(name, mnemonic, passphrase?, index?, vaultPath?)`
-
-Import a wallet from a BIP-39 mnemonic. Derives all 7 chain accounts via HD paths.
-
-```javascript
-const wallet = importWalletMnemonic("imported", "goose puzzle decorate ...");
-```
-
-**Returns:** `WalletInfo`
-
-#### `importWalletPrivateKey(name, privateKeyHex, passphrase?, vaultPath?, chain?, secp256k1Key?, ed25519Key?)`
-
-Import a wallet from a hex-encoded private key. All 7 chains are supported: the provided key is used for its curve's chains, and a random key is generated for the other curve.
-
-The optional `chain` parameter specifies which chain the key originates from to determine the curve. Defaults to `"evm"` (secp256k1).
-
-Alternatively, provide explicit keys for each curve via `secp256k1Key` and `ed25519Key`. When both are given, `privateKeyHex` and `chain` are ignored.
-
-```javascript
-// Import an EVM private key — generates a random Ed25519 key for Solana/TON
-const wallet = importWalletPrivateKey("from-evm", "4c0883a691...");
-console.log(wallet.accounts.length); // => 7
-
-// Import a Solana private key — generates a random secp256k1 key for EVM/BTC/etc.
-const wallet2 = importWalletPrivateKey(
-  "from-solana", "9d61b19d...", undefined, undefined, "solana"
-);
-console.log(wallet2.accounts.length); // => 6
-
-// Import explicit keys for both curves
-const wallet3 = importWalletPrivateKey(
-  "both-keys", "", undefined, undefined, undefined,
-  "4c0883a691...",  // secp256k1 key
-  "9d61b19d..."     // ed25519 key
-);
-console.log(wallet3.accounts.length); // => 6
-```
-
-| Param | Type | Default | Description |
-|-------|------|---------|-------------|
-| `name` | `string` | &mdash; | Wallet name |
-| `privateKeyHex` | `string` | &mdash; | Hex-encoded private key (with or without `0x` prefix). Ignored when both curve keys are provided. |
-| `passphrase` | `string` | `undefined` | Encryption passphrase |
-| `vaultPath` | `string` | `~/.ows/wallets` | Custom vault directory |
-| `chain` | `string` | `"evm"` | Source chain: `"evm"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"` (secp256k1) or `"solana"`, `"ton"` (Ed25519) |
-| `secp256k1Key` | `string` | `undefined` | Explicit secp256k1 private key (hex). Overrides random generation for secp256k1 chains. |
-| `ed25519Key` | `string` | `undefined` | Explicit Ed25519 private key (hex). Overrides random generation for Ed25519 chains. |
-
-**Returns:** `WalletInfo`
+- Mnemonic wallets return the phrase string.
+- Private-key wallets return JSON with `secp256k1` and `ed25519` fields.
 
 ### Signing
 
-#### `signMessage(wallet, chain, message, passphrase?, encoding?, index?, vaultPath?)`
+#### `signMessage(wallet, chain, message, encoding?, index?, vaultPath?)`
 
 Sign a message with chain-specific formatting.
 
-```javascript
-const result = signMessage("agent-treasury", "evm", "hello world");
-console.log(result.signature);  // hex string
-console.log(result.recoveryId); // 0 or 1
-```
+#### `signTypedData(wallet, chain, typedDataJson, index?, vaultPath?)`
 
-| Param | Type | Default | Description |
-|-------|------|---------|-------------|
-| `wallet` | `string` | &mdash; | Wallet name or ID |
-| `chain` | `string` | &mdash; | Chain family |
-| `message` | `string` | &mdash; | Message to sign |
-| `passphrase` | `string` | `undefined` | Decryption passphrase |
-| `encoding` | `string` | `"utf8"` | `"utf8"` or `"hex"` |
-| `index` | `number` | `0` | Account index |
-| `vaultPath` | `string` | `~/.ows/wallets` | Custom vault directory |
+Sign EIP-712 typed data for EVM chains.
 
-**Returns:** `SignResult`
+#### `signTransaction(wallet, chain, txHex, index?, vaultPath?)`
 
-#### `signTypedData(wallet, chain, typedDataJson, passphrase?, index?, vaultPath?)`
+Sign a raw transaction.
 
-Sign EIP-712 typed structured data (EVM only).
+#### `signAndSend(wallet, chain, txHex, index?, rpcUrl?, vaultPath?)`
+
+Sign and broadcast a transaction.
+
+## Examples
+
+### Import from mnemonic
 
 ```javascript
-const typedData = JSON.stringify({
-  types: {
-    EIP712Domain: [
-      { name: "name", type: "string" },
-      { name: "chainId", type: "uint256" },
-    ],
-    Transfer: [
-      { name: "to", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-  },
-  primaryType: "Transfer",
-  domain: { name: "MyDApp", chainId: "1" },
-  message: { to: "0xabc...", amount: "1000" },
-});
+import { importWalletMnemonic } from "@open-wallet-standard/core";
 
-const result = signTypedData("agent-treasury", "evm", typedData);
-console.log(result.signature);  // hex string
-console.log(result.recoveryId); // 27 or 28
-```
-
-| Param | Type | Default | Description |
-|-------|------|---------|-------------|
-| `wallet` | `string` | &mdash; | Wallet name or ID |
-| `chain` | `string` | &mdash; | Must be an EVM chain |
-| `typedDataJson` | `string` | &mdash; | JSON string of EIP-712 typed data |
-| `passphrase` | `string` | `undefined` | Decryption passphrase |
-| `index` | `number` | `0` | Account index |
-| `vaultPath` | `string` | `~/.ows/wallets` | Custom vault directory |
-
-**Returns:** `SignResult`
-
-#### `signTransaction(wallet, chain, txHex, passphrase?, index?, vaultPath?)`
-
-Sign a raw transaction (hex-encoded bytes).
-
-```javascript
-const result = signTransaction("agent-treasury", "evm", "02f8...");
-console.log(result.signature);
-```
-
-**Returns:** `SignResult`
-
-#### `signAndSend(wallet, chain, txHex, passphrase?, index?, rpcUrl?, vaultPath?)`
-
-Sign and broadcast a transaction. Requires an RPC URL.
-
-```javascript
-const result = signAndSend(
-  "agent-treasury", "evm", "02f8...",
-  undefined, undefined, "https://mainnet.infura.io/v3/..."
+const wallet = importWalletMnemonic(
+  "imported",
+  "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 );
-console.log(result.txHash);
+
+console.log(wallet.accounts.length); // 7
 ```
 
-**Returns:** `SendResult`
-
-## Custom Vault Path
-
-Every function accepts an optional `vaultPath` parameter. When omitted, the default vault at `~/.ows/wallets/` is used. This is useful for testing or running isolated environments:
+### Import explicit curve keys
 
 ```javascript
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { importWalletPrivateKey } from "@open-wallet-standard/core";
 
-const tmpVault = mkdtempSync(join(tmpdir(), "ows-test-"));
+const wallet = importWalletPrivateKey(
+  "both-keys",
+  "",
+  undefined,
+  undefined,
+  "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318",
+  "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
+);
 
-const wallet = createWallet("test-wallet", undefined, 12, tmpVault);
-// ... use wallet ...
-
-rmSync(tmpVault, { recursive: true, force: true });
+console.log(wallet.accounts.length); // 7
 ```
+
+### Custom vault root
+
+```javascript
+import { createWallet } from "@open-wallet-standard/core";
+
+const wallet = createWallet("isolated", 12, "/tmp/ows-test");
+console.log(wallet.id);
+```
+
+`vaultPath` points at the vault root, not the `wallets/` subdirectory. When omitted, OWS uses `~/.ows/`.

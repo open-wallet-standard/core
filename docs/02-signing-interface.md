@@ -17,7 +17,6 @@
 | Tron broadcast (`/wallet/broadcasthex`) | Done | `send_transaction.rs` |
 | Error code: `WALLET_NOT_FOUND` | Done | `ows-core/src/error.rs` |
 | Error code: `CHAIN_NOT_SUPPORTED` | Done | `ows-core/src/error.rs` |
-| Error code: `INVALID_PASSPHRASE` | Done | `ows-core/src/error.rs` |
 | Error code: `POLICY_DENIED` | Not started | No policy engine |
 | Error code: `INSUFFICIENT_FUNDS` | Not started | |
 | Error code: `VAULT_LOCKED` | Not started | No session/lock concept |
@@ -67,13 +66,11 @@ interface SignResult {
 **Flow:**
 1. Resolve `walletId` → wallet file
 2. Resolve `chainId` → chain plugin
-3. Authenticate caller: owner (passphrase/passkey) or agent (API key)
-4. If agent: verify wallet is in API key's `walletIds` scope; evaluate API key's policies against the transaction
-5. If owner: skip policy evaluation (sudo access)
-6. If policies pass (or owner), decrypt key material in the signing enclave
-7. Sign via chain plugin's signer
-8. Wipe key material
-9. Return signed transaction
+3. Resolve `secret_ref` from the wallet file
+4. Load key material from the OS keyring
+5. Sign via the chain plugin's signer
+6. Wipe key material
+7. Return signed transaction
 
 ### `signAndSend(request: SignAndSendRequest): Promise<SignAndSendResult>`
 
@@ -107,7 +104,7 @@ ows sign send-tx \
   --rpc-url https://eth-sepolia.g.alchemy.com/v2/demo   # optional override
 ```
 
-The command signs the transaction using the wallet's encrypted mnemonic, resolves the RPC endpoint (flag > config override > built-in default), broadcasts via the chain-appropriate protocol, and prints the transaction hash. Use `--json` for structured output including `tx_hash`, `chain`, `rpc_url`, and `signature`.
+The command signs the transaction using the wallet secret resolved from the OS keyring, resolves the RPC endpoint (flag > config override > built-in default), broadcasts via the chain-appropriate protocol, and prints the transaction hash. Use `--json` for structured output including `tx_hash`, `chain`, `rpc_url`, and `signature`.
 
 Per-chain broadcast protocols:
 
@@ -238,7 +235,6 @@ interface OwsError {
 | `CHAIN_NOT_SUPPORTED` | No plugin loaded for the given chain |
 | `POLICY_DENIED` | Transaction rejected by policy engine |
 | `INSUFFICIENT_FUNDS` | Account balance too low |
-| `INVALID_PASSPHRASE` | Vault passphrase incorrect |
 | `VAULT_LOCKED` | Vault has not been unlocked |
 | `BROADCAST_FAILED` | Transaction broadcast rejected by RPC node |
 | `TIMEOUT` | Confirmation wait exceeded |

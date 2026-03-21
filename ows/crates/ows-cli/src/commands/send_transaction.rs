@@ -1,4 +1,4 @@
-use crate::{audit, parse_chain, CliError};
+use crate::{audit, CliError};
 
 pub fn run(
     chain_str: &str,
@@ -8,17 +8,14 @@ pub fn run(
     json_output: bool,
     rpc_url_override: Option<&str>,
 ) -> Result<(), CliError> {
-    let chain = parse_chain(chain_str)?;
-    let key = super::resolve_signing_key(wallet_name, chain.chain_type, index)?;
-
-    let tx_hex_clean = tx_hex.strip_prefix("0x").unwrap_or(tx_hex);
-    let tx_bytes = hex::decode(tx_hex_clean)
-        .map_err(|e| CliError::InvalidArgs(format!("invalid hex transaction: {e}")))?;
-
-    // Delegate sign → encode → broadcast to the library so this pipeline
-    // is never duplicated between the CLI and the library.
-    let result =
-        ows_lib::sign_encode_and_broadcast(key.expose(), chain_str, &tx_bytes, rpc_url_override)?;
+    let result = ows_lib::sign_and_send(
+        wallet_name,
+        chain_str,
+        tx_hex,
+        Some(index),
+        rpc_url_override,
+        None,
+    )?;
 
     if json_output {
         let obj = serde_json::json!({

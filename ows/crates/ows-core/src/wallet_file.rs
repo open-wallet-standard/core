@@ -14,7 +14,13 @@ pub struct EncryptedWallet {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chain_type: Option<ChainType>,
     pub accounts: Vec<WalletAccount>,
-    pub crypto: serde_json::Value,
+    /// Reference to the wallet secret stored in the OS keyring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_ref: Option<String>,
+    /// Legacy embedded crypto envelope from older wallet formats.
+    /// New wallets must not serialize this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crypto: Option<serde_json::Value>,
     pub key_type: KeyType,
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub metadata: serde_json::Value,
@@ -29,13 +35,13 @@ pub struct WalletAccount {
     pub derivation_path: String,
 }
 
-/// Type of key material stored in the ciphertext.
+/// Type of key material referenced by the wallet file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyType {
     Mnemonic,
-    /// Multi-curve key pair: encrypted JSON `{"secp256k1":"hex","ed25519":"hex"}`.
-    /// Supports all 6 chains.
+    /// Multi-curve key pair JSON `{"secp256k1":"hex","ed25519":"hex"}`.
+    /// Supports all 7 chain families.
     PrivateKey,
 }
 
@@ -44,17 +50,18 @@ impl EncryptedWallet {
         id: String,
         name: String,
         accounts: Vec<WalletAccount>,
-        crypto: serde_json::Value,
+        secret_ref: String,
         key_type: KeyType,
     ) -> Self {
         EncryptedWallet {
-            ows_version: 2,
+            ows_version: 3,
             id,
             name,
             created_at: chrono::Utc::now().to_rfc3339(),
             chain_type: None,
             accounts,
-            crypto,
+            secret_ref: Some(secret_ref),
+            crypto: None,
             key_type,
             metadata: serde_json::Value::Null,
         }
@@ -75,7 +82,7 @@ mod tests {
                 chain_id: "eip155:1".to_string(),
                 derivation_path: "m/44'/60'/0'/0/0".to_string(),
             }],
-            serde_json::json!({"cipher": "aes-256-gcm"}),
+            "wallet:v1:test:test-id".to_string(),
             KeyType::Mnemonic,
         )
     }
@@ -87,8 +94,13 @@ mod tests {
         let deserialized: EncryptedWallet = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.id, "test-id");
         assert_eq!(deserialized.name, "test-wallet");
-        assert_eq!(deserialized.ows_version, 2);
+        assert_eq!(deserialized.ows_version, 3);
         assert!(deserialized.chain_type.is_none());
+        assert_eq!(
+            deserialized.secret_ref.as_deref(),
+            Some("wallet:v1:test:test-id")
+        );
+        assert!(deserialized.crypto.is_none());
     }
 
     #[test]
@@ -100,12 +112,12 @@ mod tests {
     }
 
     #[test]
-    fn test_v2_no_chain_type_field() {
+    fn test_v3_no_chain_type_field() {
         let wallet = dummy_wallet();
         let json = serde_json::to_value(&wallet).unwrap();
         assert!(
             json.get("chain_type").is_none(),
-            "v2 wallets should not serialize chain_type"
+            "v3 wallets should not serialize chain_type"
         );
     }
 
@@ -119,11 +131,12 @@ mod tests {
             "name",
             "created_at",
             "accounts",
-            "crypto",
+            "secret_ref",
             "key_type",
         ] {
             assert!(json.get(key).is_some(), "missing key: {key}");
         }
+        assert!(json.get("crypto").is_none());
     }
 
     #[test]
@@ -135,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_v1_backward_compat() {
-        // Simulate a v1 wallet JSON with chain_type field
+        // Simulate a legacy wallet JSON with embedded crypto and v1 chain_type field.
         let v1_json = serde_json::json!({
             "lws_version": 1,
             "id": "old-id",
@@ -154,5 +167,7 @@ mod tests {
         let wallet: EncryptedWallet = serde_json::from_value(v1_json).unwrap();
         assert_eq!(wallet.ows_version, 1);
         assert_eq!(wallet.chain_type, Some(ChainType::Evm));
+        assert!(wallet.secret_ref.is_none());
+        assert!(wallet.crypto.is_some());
     }
 }

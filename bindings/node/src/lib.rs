@@ -79,18 +79,12 @@ pub fn derive_address(
 #[napi]
 pub fn create_wallet(
     name: String,
-    passphrase: Option<String>,
     words: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> Result<WalletInfo> {
-    ows_lib::create_wallet(
-        &name,
-        words,
-        passphrase.as_deref(),
-        vault_path(vault_path_opt).as_deref(),
-    )
-    .map(WalletInfo::from)
-    .map_err(map_err)
+    ows_lib::create_wallet(&name, words, vault_path(vault_path_opt).as_deref())
+        .map(WalletInfo::from)
+        .map_err(map_err)
 }
 
 /// Import a wallet from a mnemonic phrase (derives addresses for all chains).
@@ -98,23 +92,16 @@ pub fn create_wallet(
 pub fn import_wallet_mnemonic(
     name: String,
     mnemonic: String,
-    passphrase: Option<String>,
     index: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> Result<WalletInfo> {
-    ows_lib::import_wallet_mnemonic(
-        &name,
-        &mnemonic,
-        passphrase.as_deref(),
-        index,
-        vault_path(vault_path_opt).as_deref(),
-    )
-    .map(WalletInfo::from)
-    .map_err(map_err)
+    ows_lib::import_wallet_mnemonic(&name, &mnemonic, index, vault_path(vault_path_opt).as_deref())
+        .map(WalletInfo::from)
+        .map_err(map_err)
 }
 
 /// Import a wallet from a hex-encoded private key.
-/// All 6 chains are supported: the provided key is used for its curve's chains,
+/// All 7 chain families are supported: the provided key is used for its curve's chains,
 /// and a random key is generated for the other curve.
 /// The optional `chain` parameter specifies the key's source chain (e.g. "evm", "solana")
 /// to determine which curve it uses. Defaults to "evm" (secp256k1).
@@ -125,9 +112,8 @@ pub fn import_wallet_mnemonic(
 pub fn import_wallet_private_key(
     name: String,
     private_key_hex: String,
-    passphrase: Option<String>,
-    vault_path_opt: Option<String>,
     chain: Option<String>,
+    vault_path_opt: Option<String>,
     secp256k1_key: Option<String>,
     ed25519_key: Option<String>,
 ) -> Result<WalletInfo> {
@@ -135,7 +121,6 @@ pub fn import_wallet_private_key(
         &name,
         &private_key_hex,
         chain.as_deref(),
-        passphrase.as_deref(),
         vault_path(vault_path_opt).as_deref(),
         secp256k1_key.as_deref(),
         ed25519_key.as_deref(),
@@ -170,15 +155,9 @@ pub fn delete_wallet(name_or_id: String, vault_path_opt: Option<String>) -> Resu
 #[napi]
 pub fn export_wallet(
     name_or_id: String,
-    passphrase: Option<String>,
     vault_path_opt: Option<String>,
 ) -> Result<String> {
-    ows_lib::export_wallet(
-        &name_or_id,
-        passphrase.as_deref(),
-        vault_path(vault_path_opt).as_deref(),
-    )
-    .map_err(map_err)
+    ows_lib::export_wallet(&name_or_id, vault_path(vault_path_opt).as_deref()).map_err(map_err)
 }
 
 /// Rename a wallet.
@@ -202,7 +181,6 @@ pub fn sign_transaction(
     wallet: String,
     chain: String,
     tx_hex: String,
-    passphrase: Option<String>,
     index: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> Result<SignResult> {
@@ -210,7 +188,6 @@ pub fn sign_transaction(
         &wallet,
         &chain,
         &tx_hex,
-        passphrase.as_deref(),
         index,
         vault_path(vault_path_opt).as_deref(),
     )
@@ -227,7 +204,6 @@ pub fn sign_message(
     wallet: String,
     chain: String,
     message: String,
-    passphrase: Option<String>,
     encoding: Option<String>,
     index: Option<u32>,
     vault_path_opt: Option<String>,
@@ -236,7 +212,6 @@ pub fn sign_message(
         &wallet,
         &chain,
         &message,
-        passphrase.as_deref(),
         encoding.as_deref(),
         index,
         vault_path(vault_path_opt).as_deref(),
@@ -254,7 +229,6 @@ pub fn sign_typed_data(
     wallet: String,
     chain: String,
     typed_data_json: String,
-    passphrase: Option<String>,
     index: Option<u32>,
     vault_path_opt: Option<String>,
 ) -> Result<SignResult> {
@@ -262,7 +236,6 @@ pub fn sign_typed_data(
         &wallet,
         &chain,
         &typed_data_json,
-        passphrase.as_deref(),
         index,
         vault_path(vault_path_opt).as_deref(),
     )
@@ -279,7 +252,6 @@ pub fn sign_and_send(
     wallet: String,
     chain: String,
     tx_hex: String,
-    passphrase: Option<String>,
     index: Option<u32>,
     rpc_url: Option<String>,
     vault_path_opt: Option<String>,
@@ -288,7 +260,6 @@ pub fn sign_and_send(
         &wallet,
         &chain,
         &tx_hex,
-        passphrase.as_deref(),
         index,
         rpc_url.as_deref(),
         vault_path(vault_path_opt).as_deref(),

@@ -5,7 +5,6 @@ use serde::{Serialize, Serializer};
 pub enum OwsErrorCode {
     WalletNotFound,
     ChainNotSupported,
-    InvalidPassphrase,
     InvalidInput,
     CaipParseError,
 }
@@ -17,9 +16,6 @@ pub enum OwsError {
 
     #[error("chain not supported: {chain}")]
     ChainNotSupported { chain: String },
-
-    #[error("invalid passphrase")]
-    InvalidPassphrase,
 
     #[error("invalid input: {message}")]
     InvalidInput { message: String },
@@ -33,7 +29,6 @@ impl OwsError {
         match self {
             OwsError::WalletNotFound { .. } => OwsErrorCode::WalletNotFound,
             OwsError::ChainNotSupported { .. } => OwsErrorCode::ChainNotSupported,
-            OwsError::InvalidPassphrase => OwsErrorCode::InvalidPassphrase,
             OwsError::InvalidInput { .. } => OwsErrorCode::InvalidInput,
             OwsError::CaipParseError { .. } => OwsErrorCode::CaipParseError,
         }
@@ -73,10 +68,6 @@ mod tests {
         assert_eq!(
             OwsError::ChainNotSupported { chain: "x".into() }.code(),
             OwsErrorCode::ChainNotSupported
-        );
-        assert_eq!(
-            OwsError::InvalidPassphrase.code(),
-            OwsErrorCode::InvalidPassphrase
         );
         assert_eq!(
             OwsError::InvalidInput {

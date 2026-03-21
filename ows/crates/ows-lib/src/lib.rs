@@ -1,6 +1,7 @@
 pub mod error;
 pub mod migrate;
 pub mod ops;
+mod secret_store;
 pub mod types;
 pub mod vault;
 

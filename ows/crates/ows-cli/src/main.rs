@@ -121,7 +121,7 @@ enum SignCommands {
         /// Chain (ethereum, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID)
         #[arg(long)]
         chain: String,
-        /// Wallet name or ID (uses stored encrypted mnemonic)
+        /// Wallet name or ID (uses keyring-backed wallet secrets)
         #[arg(long, env = "OWS_WALLET")]
         wallet: String,
         /// Message to sign
@@ -145,7 +145,7 @@ enum SignCommands {
         /// Chain (ethereum, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID)
         #[arg(long)]
         chain: String,
-        /// Wallet name or ID (uses stored encrypted mnemonic)
+        /// Wallet name or ID (uses keyring-backed wallet secrets)
         #[arg(long, env = "OWS_WALLET")]
         wallet: String,
         /// Hex-encoded unsigned transaction bytes
@@ -163,7 +163,7 @@ enum SignCommands {
         /// Chain (ethereum, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID)
         #[arg(long)]
         chain: String,
-        /// Wallet name or ID (uses stored encrypted mnemonic)
+        /// Wallet name or ID (uses keyring-backed wallet secrets)
         #[arg(long, env = "OWS_WALLET")]
         wallet: String,
         /// Hex-encoded unsigned transaction bytes

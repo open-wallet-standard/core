@@ -7,7 +7,7 @@ use zeroize::Zeroize;
 pub fn create(name: &str, words: u32, show_mnemonic: bool) -> Result<(), CliError> {
     // Generate mnemonic, then import it to create the wallet
     let mut mnemonic_phrase = ows_lib::generate_mnemonic(words)?;
-    let info = ows_lib::import_wallet_mnemonic(name, &mnemonic_phrase, None, Some(0), None)?;
+    let info = ows_lib::import_wallet_mnemonic(name, &mnemonic_phrase, Some(0), None)?;
 
     audit::log_wallet_created(&info);
 
@@ -29,7 +29,7 @@ pub fn create(name: &str, words: u32, show_mnemonic: bool) -> Result<(), CliErro
         println!("{mnemonic_phrase}");
     } else {
         eprintln!();
-        eprintln!("Mnemonic encrypted and saved to vault.");
+        eprintln!("Mnemonic stored in the OS keyring.");
         eprintln!("Use --show-mnemonic at creation time if you need a backup copy.");
     }
 
@@ -68,7 +68,7 @@ pub fn import(
 
     let info = if use_mnemonic {
         let phrase = super::read_mnemonic()?;
-        ows_lib::import_wallet_mnemonic(name, &phrase, None, Some(index), None)?
+        ows_lib::import_wallet_mnemonic(name, &phrase, Some(index), None)?
     } else {
         // Read from env/stdin only when both curve keys are not already provided
         let private_key_hex = if both_curve_keys {
@@ -80,7 +80,6 @@ pub fn import(
             name,
             &private_key_hex,
             chain,
-            None,
             None,
             secp256k1_key,
             ed25519_key,
@@ -109,14 +108,7 @@ pub fn export(wallet_name: &str) -> Result<(), CliError> {
         ));
     }
 
-    // Try empty passphrase first, then prompt if it fails
-    let mut exported = match ows_lib::export_wallet(wallet_name, None, None) {
-        Ok(s) => s,
-        Err(_) => {
-            let passphrase = super::read_passphrase();
-            ows_lib::export_wallet(wallet_name, Some(&passphrase), None)?
-        }
-    };
+    let mut exported = ows_lib::export_wallet(wallet_name, None)?;
 
     let is_key_pair = exported.starts_with('{');
     eprintln!();
@@ -172,7 +164,7 @@ pub fn list() -> Result<(), CliError> {
     for w in &wallets {
         println!("ID:      {}", w.id);
         println!("Name:    {}", w.name);
-        println!("Secured: ✓ (encrypted)");
+        println!("Secured: ✓ (OS keyring)");
         for acct in &w.accounts {
             println!("  {} → {}", acct.chain_id, acct.address);
         }

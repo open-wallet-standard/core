@@ -1,132 +1,103 @@
 # 04 - Agent Access Layer
 
-> How AI agents, CLI tools, and applications access OWS wallets through native language bindings.
+> How applications, agents, and the CLI access OWS wallets through the shared Rust core.
 
 ## Implementation Status
 
 | Feature | Status | Notes |
-|---------|--------|-------|
+|---|---|---|
 | `generate_mnemonic(words?)` | Done | 12 or 24 words |
 | `derive_address(mnemonic, chain, index?)` | Done | |
-| `create_wallet(name, chain, passphrase, ...)` | Done | |
+| `create_wallet(name, words?, vault_path?)` | Done | Stores secrets in the OS keyring |
 | `import_wallet_mnemonic(...)` | Done | |
 | `import_wallet_private_key(...)` | Done | |
-| `list_wallets(vault_path?)` | Done | |
+| `list_wallets(vault_path?)` | Done | Reads wallet metadata files |
 | `get_wallet(name_or_id, vault_path?)` | Done | |
-| `delete_wallet(name_or_id, vault_path?)` | Done | |
-| `export_wallet(name_or_id, passphrase, ...)` | Done | |
-| `rename_wallet(name_or_id, new_name, ...)` | Done | |
-| `sign_transaction(...)` | Done | |
+| `delete_wallet(name_or_id, vault_path?)` | Done | Removes file + keyring entry |
+| `export_wallet(name_or_id, vault_path?)` | Done | Reads secret from keyring |
+| `rename_wallet(name_or_id, new_name, vault_path?)` | Done | Metadata only |
+| `sign_transaction(...)` | Done | Uses keyring-backed secret resolution |
 | `sign_message(...)` | Done | |
+| `sign_typed_data(...)` | Done | EVM only |
 | `sign_and_send(...)` | Done | |
 | Node.js NAPI bindings | Done | `bindings/node/src/lib.rs` |
 | Python PyO3 bindings | Done | `bindings/python/src/lib.rs` |
-| API key scoping (agent sees only permitted wallets) | Not started | No API key system |
-| Policy evaluation on agent requests | Not started | No policy engine |
-| MCP server | Not started | |
-| Audit logging from bindings (not just CLI) | Not started | Only CLI logs to audit |
 
 ## Design Decision
 
-**OWS exposes wallet operations through native language bindings backed by the core Rust implementation. Bindings call directly into the `ows-lib` crate via FFI — no HTTP server or subprocess is required. They are compiled native modules that run in-process.**
+**OWS exposes one Rust implementation through native bindings and the CLI.**
 
-## Native Language Bindings
+There is no required background daemon and no HTTP API in the current model. All callers use the same library surface:
 
-### Node.js (NAPI)
+1. Read wallet metadata from the vault.
+2. Resolve `secret_ref` from the wallet file.
+3. Load the wallet secret from the OS keyring.
+4. Perform export, signing, or broadcast.
 
-```bash
-npm install @open-wallet-standard/core
-```
+If the OS keyring is unavailable, secret-dependent operations fail explicitly. OWS does not silently fall back to embedded file secrets for new wallets.
+
+## Node.js Example
 
 ```typescript
-import { createWallet, listWallets, signMessage, signTransaction, signAndSend } from "@open-wallet-standard/core";
+import {
+  createWallet,
+  listWallets,
+  signMessage,
+  signAndSend,
+} from "@open-wallet-standard/core";
 
-// Create a wallet
-const wallet = createWallet("agent-treasury", "evm", "my-passphrase");
-// => { id, name, chain, address, derivation_path, created_at }
-
-// List all wallets
+const wallet = createWallet("agent-treasury");
 const wallets = listWallets();
 
-// Sign a message
-const sig = signMessage("agent-treasury", "evm", "hello", "my-passphrase");
-// => { signature, recoveryId? }
-
-// Sign and broadcast a transaction
-const result = signAndSend("agent-treasury", "evm", "<tx-hex>", "my-passphrase");
-// => { txHash }
+const sig = signMessage("agent-treasury", "evm", "hello");
+const result = signAndSend("agent-treasury", "evm", "<tx-hex>");
 ```
 
-### Python (PyO3)
-
-```bash
-pip install open-wallet-standard
-```
+## Python Example
 
 ```python
-from open_wallet_standard import create_wallet, list_wallets, sign_message, sign_transaction, sign_and_send
+from open_wallet_standard import (
+    create_wallet,
+    list_wallets,
+    sign_message,
+    sign_and_send,
+)
 
-# Create a wallet
-wallet = create_wallet("agent-treasury", "evm", "my-passphrase")
-# => {"id", "name", "chain", "address", "derivation_path", "created_at"}
-
-# List all wallets
+wallet = create_wallet("agent-treasury")
 wallets = list_wallets()
 
-# Sign a message
-sig = sign_message("agent-treasury", "evm", "hello", "my-passphrase")
-# => {"signature", "recovery_id"}
-
-# Sign and broadcast a transaction
-result = sign_and_send("agent-treasury", "evm", "<tx-hex>", "my-passphrase")
-# => {"tx_hash"}
+sig = sign_message("agent-treasury", "evm", "hello")
+result = sign_and_send("agent-treasury", "evm", "<tx-hex>")
 ```
 
-### Available Functions
+## Available Operations
 
-Both bindings expose the same 13 functions:
+Node uses camelCase names. Python uses snake_case names. Both bindings expose the same operations:
 
-| Function | Description |
+| Operation | Description |
 |---|---|
-| `generate_mnemonic(words?)` | Generate a BIP-39 mnemonic (12 or 24 words) |
-| `derive_address(mnemonic, chain, index?)` | Derive a chain-specific address from a mnemonic |
-| `create_wallet(name, chain, passphrase, words?, vault_path?)` | Create a new wallet (generates mnemonic, encrypts, saves) |
-| `import_wallet_mnemonic(name, chain, mnemonic, passphrase, index?, vault_path?)` | Import a wallet from a mnemonic |
-| `import_wallet_private_key(name, chain, key_hex, passphrase, vault_path?, secp256k1_key?, ed25519_key?)` | Import a wallet from a raw private key (or explicit per-curve keys) |
-| `list_wallets(vault_path?)` | List all wallets in the vault |
-| `get_wallet(name_or_id, vault_path?)` | Get a single wallet by name or ID |
+| `generate_mnemonic(words?)` | Generate a BIP-39 mnemonic |
+| `derive_address(mnemonic, chain, index?)` | Derive an address without creating a wallet |
+| `create_wallet(name, words?, vault_path?)` | Create a wallet and store its secret in the OS keyring |
+| `import_wallet_mnemonic(name, mnemonic, index?, vault_path?)` | Import a mnemonic-backed wallet |
+| `import_wallet_private_key(name, private_key_hex, chain?, vault_path?, secp256k1_key?, ed25519_key?)` | Import a private-key wallet |
+| `list_wallets(vault_path?)` | List wallet metadata |
+| `get_wallet(name_or_id, vault_path?)` | Load one wallet's metadata |
 | `delete_wallet(name_or_id, vault_path?)` | Delete a wallet |
-| `export_wallet(name_or_id, passphrase, vault_path?)` | Export a wallet's secret (mnemonic or private key) |
+| `export_wallet(name_or_id, vault_path?)` | Export the wallet secret |
 | `rename_wallet(name_or_id, new_name, vault_path?)` | Rename a wallet |
-| `sign_transaction(wallet, chain, tx_hex, passphrase, index?, vault_path?)` | Sign a transaction |
-| `sign_message(wallet, chain, message, passphrase, encoding?, index?, vault_path?)` | Sign a message |
-| `sign_and_send(wallet, chain, tx_hex, passphrase, index?, rpc_url?, vault_path?)` | Sign and broadcast a transaction |
+| `sign_transaction(wallet, chain, tx_hex, index?, vault_path?)` | Sign a transaction |
+| `sign_message(wallet, chain, message, encoding?, index?, vault_path?)` | Sign a message |
+| `sign_typed_data(wallet, chain, typed_data_json, index?, vault_path?)` | Sign EIP-712 typed data |
+| `sign_and_send(wallet, chain, tx_hex, index?, rpc_url?, vault_path?)` | Sign and broadcast a transaction |
 
-All functions operate on the default vault (`~/.ows/`) unless a custom `vault_path` is provided. The passphrase is used to decrypt wallet key material for signing operations.
+All operations default to the vault root at `~/.ows/` unless a custom `vault_path` is provided.
 
-> **Note:** Because the bindings run in-process, key material is decrypted within the application's address space. For use cases where key isolation is critical, consider running OWS in a separate subprocess.
+## Security Model
 
-## Agent Interaction Example
+- Wallet metadata is stored on disk.
+- Mnemonics and private keys are stored in the OS keyring.
+- Signing happens inside the caller process today, using secret material fetched on demand.
+- Applications do not need to manage secret prompts or encrypted wallet envelopes for new wallets.
 
-Here's how an AI agent interacts with OWS through the bindings using an API key. The API key scopes the agent to specific wallets and policies.
-
-```
-Agent: "I need to send 0.01 ETH to 0x4B08... on Base"
-
-1. Agent calls list_wallets to find available wallets
-   → Returns only wallets in the API key's scope
-   → [{ id: "3198bc9c-...", name: "agent-treasury", ... }]
-
-2. Agent calls sign_and_send to execute
-   → API key verified: wallet is in key's scope
-   → Policy engine evaluates the API key's attached policies
-   → Signing enclave decrypts key, signs, wipes
-   → Transaction broadcast to Base RPC
-   → Returns: { tx_hash: "0xabc..." }
-```
-
-At no point does the agent see the private key. The API key determines which wallets the agent can access, and the policies attached to the key constrain what operations are permitted.
-
-## References
-
-- [Privy Server Wallet REST API](https://docs.privy.io/guide/server-wallets/create)
+This keeps the public API small and makes the storage model the same across CLI, Node, and Python.

@@ -1,62 +1,50 @@
 # 01 - Storage Format
 
-> How wallets are encrypted, structured, and stored on the local filesystem.
+> How OWS stores wallet metadata on disk while keeping wallet secrets in the OS keyring.
 
 ## Implementation Status
 
 | Feature | Status | Notes |
-|---------|--------|-------|
+|---|---|---|
 | Vault directory (`~/.ows/wallets/`) | Done | `ows-lib/src/vault.rs` |
-| Wallet file format (OWS v2 envelope over Keystore v3) | Done | `ows-core/src/wallet_file.rs` |
+| Wallet file format (`ows_version = 3`) | Done | `ows-core/src/wallet_file.rs` |
 | Filesystem permissions (700 dirs, 600 files) | Done | `ows-lib/src/vault.rs` |
+| OS keyring-backed secret storage | Done | `ows-lib/src/secret_store.rs` |
 | Permission verification on startup | Partial | Warns but does not refuse to operate |
 | Audit log (`~/.ows/logs/audit.jsonl`) | Done | `ows-cli/src/audit.rs` |
-| Crypto object (AES-256-GCM + scrypt) | Done | `ows-signer/src/crypto.rs` |
-| Keystore v3 import | Not started | No v3 import/re-wrap logic |
-| `~/.ows/keys/` directory + API key files | Not started | No API key system |
-| `~/.ows/policies/` directory + policy files | Not started | No policy system |
-| `~/.ows/plugins/` directory | Not started | Plugins are hardcoded |
-| Passphrase 12-char minimum enforcement | Not started | No validation at creation time |
+| Legacy embedded `crypto` field | Legacy input only | New wallets do not write it |
 
 ## Design Decision
 
-**OWS uses an extended Ethereum Keystore v3 format with per-chain type adaptations, stored in a well-known directory with strict filesystem permissions.**
+**OWS stores wallet metadata in JSON files and stores secret material in the OS keyring.**
+
+This splits the wallet into two parts:
+
+- A metadata file in `~/.ows/wallets/` that is easy to enumerate, rename, and inspect safely.
+- A keyring entry that holds the mnemonic or private key material and is protected by the host OS account.
 
 ### Why This Approach
 
-We evaluated four storage strategies:
-
 | Approach | Pros | Cons |
 |---|---|---|
-| Raw private keys in env vars | Simple | Catastrophically insecure; keys leak into logs, process lists, LLM contexts |
-| Cloud KMS (Privy, Turnkey) | Strong security, TEE-backed | Requires network; not local-first; vendor lock-in |
-| OS keychain (macOS Keychain, Windows DPAPI) | OS-level encryption | Not portable across platforms; no standard multi-key format |
-| **Encrypted JSON keystore** | Portable, proven, auditable, local-first | Must protect against brute-force; requires passphrase management |
+| Raw secrets in env vars | Simple | Secrets leak into logs, process state, and crash output |
+| Encrypted self-contained wallet files | Portable | Keeps the most sensitive bytes on disk and requires extra secret-unlock plumbing |
+| Full wallet blob in OS keyring | Strong local protection | Harder to enumerate and back up; keyring payload size varies by platform |
+| **Metadata file + keyring secret** | Good UX, clear indexing, small keyring entries | Backup/export must be explicit |
 
-The Ethereum Keystore v3 format has been battle-tested since 2015, is implemented in every major Web3 library, and provides strong encryption with configurable KDF parameters. OWS extends it to support non-EVM chains while maintaining backward compatibility with existing EVM tooling.
-
-## Vault Directory Structure
+## Vault Layout
 
 ```
 ~/.ows/
-├── config.json                    # Global configuration
+├── config.json
 ├── wallets/
-│   ├── <wallet-id>.json           # Encrypted wallet file (one per wallet)
-│   └── ...
-├── keys/
-│   ├── <key-id>.json              # API key definition (one per key)
-│   └── ...
-├── policies/
-│   ├── <policy-id>.json           # Policy definition
-│   └── ...
-├── plugins/
-│   ├── <chain-type>/              # Chain-specific plugins
-│   │   ├── signer.js              # Signing implementation
-│   │   └── builder.js             # Transaction builder
+│   ├── <wallet-id>.json
 │   └── ...
 └── logs/
-    └── audit.jsonl                # Append-only audit log
+    └── audit.jsonl
 ```
+
+The wallet file is the source of truth for metadata. The keyring is the source of truth for secret material.
 
 ### Filesystem Permissions
 
@@ -64,25 +52,21 @@ The Ethereum Keystore v3 format has been battle-tested since 2015, is implemente
 ~/.ows/                  drwx------  (700)
 ~/.ows/wallets/          drwx------  (700)
 ~/.ows/wallets/*.json    -rw-------  (600)
-~/.ows/keys/             drwx------  (700)
-~/.ows/keys/*.json       -rw-------  (600)
-~/.ows/policies/         drwxr-xr-x  (755)
-~/.ows/config.json       -rw-------  (600)
+~/.ows/logs/             drwx------  (700)
 ~/.ows/logs/audit.jsonl  -rw-------  (600)
+~/.ows/config.json       -rw-------  (600)
 ```
-
-The `wallets/` directory and its contents MUST be readable only by the owner. Implementations MUST verify permissions on startup and refuse to operate if the vault directory is world-readable or group-readable.
 
 ## Wallet File Format
 
-Each wallet is stored as a single JSON file extending the Ethereum Keystore v3 structure:
+Each wallet is stored as a single metadata file:
 
 ```json
 {
-  "ows_version": 2,
+  "ows_version": 3,
   "id": "3198bc9c-6672-5ab3-d995-4942343ae5b6",
   "name": "agent-treasury",
-  "created_at": "2026-02-27T10:30:00Z",
+  "created_at": "2026-03-21T10:30:00Z",
   "accounts": [
     {
       "account_id": "eip155:8453:0xab16a96D359eC26a11e2C2b3d8f8B8942d5Bfcdb",
@@ -91,22 +75,7 @@ Each wallet is stored as a single JSON file extending the Ethereum Keystore v3 s
       "derivation_path": "m/44'/60'/0'/0/0"
     }
   ],
-  "crypto": {
-    "cipher": "aes-256-gcm",
-    "cipherparams": {
-      "iv": "6087dab2f9fdbbfaddc31a90"
-    },
-    "ciphertext": "5318b4d5bcd28de64ee5559e671353e16f075ecae9f99c7a79a38af5f869aa46",
-    "auth_tag": "3c5d8c2f1a4b6e9d0f2a5c8b",
-    "kdf": "scrypt",
-    "kdfparams": {
-      "dklen": 32,
-      "n": 65536,
-      "r": 8,
-      "p": 1,
-      "salt": "ae3cd4e7013836a3df6bd7241b12db061dbe2c6785853cce422d148a624ce0bd"
-    }
-  },
+  "secret_ref": "wallet:v1:8cc95b9db1c68f74:3198bc9c-6672-5ab3-d995-4942343ae5b6",
   "key_type": "mnemonic",
   "metadata": {}
 }
@@ -116,116 +85,60 @@ Each wallet is stored as a single JSON file extending the Ethereum Keystore v3 s
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `ows_version` | integer | yes | Schema version (currently `2`) |
+| `ows_version` | integer | yes | Schema version. New wallets use `3`. |
 | `id` | string | yes | UUID v4 wallet identifier |
 | `name` | string | yes | Human-readable wallet name |
 | `created_at` | string | yes | ISO 8601 creation timestamp |
-| `accounts` | array | yes | Derived accounts (see Account object) |
-| `crypto` | object | yes | Encryption parameters (see Crypto object) |
-| `key_type` | string | yes | `mnemonic` (BIP-39) or `private_key` (raw) |
-| `metadata` | object | no | Extensible metadata |
+| `accounts` | array | yes | Derived account metadata |
+| `secret_ref` | string | yes | Reference used to locate the keyring entry |
+| `key_type` | string | yes | `mnemonic` or `private_key` |
+| `metadata` | object | no | Optional future metadata |
 
-## API Key File Format
+New wallets MUST NOT serialize the legacy `crypto` field.
 
-Each API key is stored as a JSON file in `~/.ows/keys/`:
+## Secret References
 
-```json
-{
-  "id": "7a2f1b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
-  "name": "claude-agent",
-  "token_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "created_at": "2026-02-27T10:30:00Z",
-  "wallet_ids": ["3198bc9c-6672-5ab3-d995-4942343ae5b6"],
-  "policy_ids": ["spending-limit-01", "safe-agent-policy"],
-  "expires_at": null
-}
+OWS stores one keyring entry per wallet. The reference format is:
+
+```text
+wallet:v1:<vault_scope>:<wallet_id>
 ```
 
-### Field Definitions
+- `vault_scope` is derived from the vault path so two different vault roots do not collide.
+- `wallet_id` keeps the entry stable across wallet renames.
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `id` | string | yes | UUID v4 key identifier |
-| `name` | string | yes | Human-readable label for the key |
-| `token_hash` | string | yes | SHA-256 hex digest of the raw token. The raw token (`ows_key_...`) is shown once at creation and never stored. |
-| `created_at` | string | yes | ISO 8601 creation timestamp |
-| `wallet_ids` | array | yes | Wallet IDs this key is authorized to access |
-| `policy_ids` | array | yes | Policy IDs evaluated on every request made with this key |
-| `expires_at` | string | no | ISO 8601 expiry timestamp. `null` means no expiry. |
+## Keyring Payload
 
-The `keys/` directory and its contents use the same strict permissions as `wallets/` (`700` for the directory, `600` for files) because the `token_hash` must be protected against local reads.
-
-### Crypto Object
-
-The `crypto` object follows Keystore v3 conventions with two upgrades:
-
-1. **AES-256-GCM** is the default cipher (upgraded from AES-128-CTR). GCM provides authenticated encryption, eliminating the need for a separate MAC field.
-2. **scrypt** remains the recommended KDF with the same parameter semantics. PBKDF2-SHA256 is an acceptable alternative for resource-constrained environments.
-
-| Field | Type | Description |
-|---|---|---|
-| `cipher` | string | `aes-256-gcm` (recommended) or `aes-128-ctr` (v3 compat) |
-| `cipherparams.iv` | string | Hex-encoded initialization vector |
-| `ciphertext` | string | Hex-encoded encrypted key material |
-| `auth_tag` | string | Hex-encoded GCM auth tag (only for `aes-256-gcm`) |
-| `kdf` | string | `scrypt` (recommended) or `pbkdf2` |
-| `kdfparams` | object | KDF-specific parameters |
-
-For `aes-128-ctr` (backward compat), a `mac` field with `keccak-256(dk[16..31] ++ ciphertext)` is required, following the Keystore v3 spec.
-
-### What Gets Encrypted
-
-The `ciphertext` contains the encrypted form of either:
-
-- **BIP-39 mnemonic entropy** (128 or 256 bits) — when `key_type` is `mnemonic`. The mnemonic can derive keys for any supported chain via BIP-44 derivation paths.
-- **Raw private key** (32 bytes for secp256k1/ed25519) — when `key_type` is `private_key`. Used for imported single-chain keys.
-
-Storing the mnemonic (rather than individual private keys) enables a single encrypted blob to derive accounts across multiple chains and indices.
-
-## Passphrase Management
-
-The vault passphrase is used to derive the encryption key via the configured KDF. OWS does NOT define how the passphrase is obtained — this is deliberately left to the implementation:
-
-- **Interactive CLI**: Prompt at first use, optionally cache in OS keychain for a session
-- **Agent/daemon mode**: Read from a file descriptor (RECOMMENDED), an environment variable (`OWS_PASSPHRASE`), or a hardware token. Environment variables are the least secure option — they are readable via `/proc/[pid]/environ` by same-user processes and leak into crash dumps and child process environments. Implementations using `OWS_PASSPHRASE` MUST clear it from the process environment immediately after reading.
-- **Unlocked mode** (development only): A config flag that uses a well-known passphrase — MUST produce a visible warning
-
-The passphrase MUST be at least 12 characters. Implementations SHOULD enforce this at wallet creation time.
-
-## Audit Log
-
-All signing operations are appended to `~/.ows/logs/audit.jsonl`:
+The keyring entry stores a small JSON record:
 
 ```json
 {
-  "timestamp": "2026-02-27T10:35:22Z",
+  "version": 1,
   "wallet_id": "3198bc9c-6672-5ab3-d995-4942343ae5b6",
-  "operation": "broadcast_transaction",
-  "chain_id": "eip155:8453",
-  "details": "tx_hash=0xabc123..."
+  "key_type": "mnemonic",
+  "payload": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 }
 ```
 
-Supported operations: `create_wallet`, `import_wallet`, `export_wallet`, `broadcast_transaction`, `delete_wallet`, `rename_wallet`.
+`payload` contains:
 
-All fields except `timestamp`, `wallet_id`, and `operation` are optional.
+- The mnemonic phrase when `key_type = "mnemonic"`.
+- A JSON string with both curve keys when `key_type = "private_key"`.
 
-The audit log is append-only. Implementations MUST NOT allow deletion or modification of existing entries. Log rotation is permitted (e.g., monthly archives).
+Example private-key payload:
 
-## Backward Compatibility
+```json
+{
+  "version": 1,
+  "wallet_id": "3198bc9c-6672-5ab3-d995-4942343ae5b6",
+  "key_type": "private_key",
+  "payload": "{\"secp256k1\":\"4c0883...\",\"ed25519\":\"9d61b1...\"}"
+}
+```
 
-Any valid Ethereum Keystore v3 file can be imported into an OWS vault. The importer:
+## Operational Notes
 
-1. Reads the v3 JSON
-2. Wraps it in the OWS envelope (adds `ows_version`, `name`, `accounts`)
-3. Optionally re-encrypts with AES-256-GCM
-
-Exported OWS wallets with `cipher: "aes-128-ctr"` and `key_type: "private_key"` are valid Keystore v3 files (minus the OWS envelope fields, which are ignored by v3 parsers).
-
-## References
-
-- [Ethereum Web3 Secret Storage Definition](https://ethereum.org/developers/docs/data-structures-and-encoding/web3-secret-storage)
-- [ERC-2335: BLS12-381 Keystore](https://eips.ethereum.org/EIPS/eip-2335)
-- [BIP-39: Mnemonic Seed Phrases](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki)
-- [NIST SP 800-38D: GCM Mode](https://csrc.nist.gov/publications/detail/sp/800-38d/final)
-- [Privy: Low-Level Key Management](https://privy.io/blog/powering-programmable-wallets-with-low-level-key-management)
+- Listing wallets only reads metadata files.
+- Signing and export first resolve `secret_ref`, then fetch the secret from the OS keyring.
+- Deleting a wallet removes both the metadata file and the keyring entry.
+- Wallet files are no longer self-contained backups. Use `export_wallet` or `ows wallet export` when you need a portable backup.

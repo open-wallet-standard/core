@@ -196,7 +196,7 @@ mod tests {
                 chain_id: "eip155:1".to_string(),
                 derivation_path: "m/44'/60'/0'/0/0".to_string(),
             }],
-            serde_json::json!({"cipher": "aes-256-gcm"}),
+            "wallet:v1:test:test-id".to_string(),
             KeyType::Mnemonic,
         );
 
@@ -220,7 +220,7 @@ mod tests {
                 chain_id: "eip155:1".to_string(),
                 derivation_path: "m/44'/60'/0'/0/0".to_string(),
             }],
-            serde_json::json!({"cipher": "aes-256-gcm"}),
+            "wallet:v1:test:uuid-123".to_string(),
             KeyType::Mnemonic,
         );
 
@@ -248,7 +248,7 @@ mod tests {
             "del-id".to_string(),
             "del-wallet".to_string(),
             vec![],
-            serde_json::json!({}),
+            "wallet:v1:test:del-id".to_string(),
             KeyType::Mnemonic,
         );
 
@@ -268,7 +268,7 @@ mod tests {
             "id-1".to_string(),
             "existing-name".to_string(),
             vec![],
-            serde_json::json!({}),
+            "wallet:v1:test:id-1".to_string(),
             KeyType::Mnemonic,
         );
 

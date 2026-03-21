@@ -1,6 +1,6 @@
 # Python SDK
 
-> Native bindings for Python via PyO3. No CLI, no server, no subprocess &mdash; the Rust core runs in-process.
+> Native bindings for Python via PyO3. No CLI, no server, no subprocess.
 
 [![PyPI](https://img.shields.io/pypi/v/open-wallet-standard)](https://pypi.org/project/open-wallet-standard/)
 
@@ -10,52 +10,50 @@
 pip install open-wallet-standard
 ```
 
-Prebuilt wheels are available for macOS (arm64, x64) and Linux (x64, arm64) on Python 3.9&ndash;3.13.
+Wallet metadata is stored under `~/.ows/wallets/`. Mnemonics and private keys are stored in the OS keyring.
 
 ## Quick Start
 
 ```python
 from open_wallet_standard import (
-    generate_mnemonic,
     create_wallet,
     list_wallets,
     sign_message,
-    sign_typed_data,
-    delete_wallet,
+    export_wallet,
 )
 
-mnemonic = generate_mnemonic(12)
 wallet = create_wallet("my-wallet")
+wallets = list_wallets()
 sig = sign_message("my-wallet", "evm", "hello")
+phrase = export_wallet("my-wallet")
+
+print(len(wallet["accounts"]))  # 7
+print(len(wallets))
 print(sig["signature"])
+print(len(phrase.split()))
 ```
 
-## API Reference
-
-### Return Types
-
-All functions return Python dicts. Wallet functions return:
+## Return Types
 
 ```python
 # WalletInfo
 {
-    "id": "3198bc9c-...",             # UUID v4
+    "id": "3198bc9c-...",
     "name": "my-wallet",
-    "created_at": "2026-03-09T...",   # ISO 8601
+    "created_at": "2026-03-21T10:30:00Z",
     "accounts": [
         {
             "chain_id": "eip155:1",
             "address": "0xab16...",
             "derivation_path": "m/44'/60'/0'/0/0",
-        },
-        # ... one per supported chain
+        }
     ],
 }
 
 # SignResult
 {
-    "signature": "bea6b4ee...",       # Hex-encoded
-    "recovery_id": 0,                 # EVM/Tron only (None for others)
+    "signature": "bea6b4ee...",
+    "recovery_id": 0,
 }
 
 # SendResult
@@ -64,219 +62,110 @@ All functions return Python dicts. Wallet functions return:
 }
 ```
 
-### Mnemonic
+## API
+
+### Mnemonics
 
 #### `generate_mnemonic(words=12)`
 
-Generate a new BIP-39 mnemonic phrase.
+Generate a new 12- or 24-word mnemonic.
 
-```python
-phrase = generate_mnemonic(12)  # or 24
-# => "goose puzzle decorate much stable beach ..."
-```
-
-#### `derive_address(mnemonic, chain, index=0)`
+#### `derive_address(mnemonic, chain, index=None)`
 
 Derive an address from a mnemonic without creating a wallet.
 
-```python
-addr = derive_address(mnemonic, "evm")
-# => "0xCc1e2c3D077b7c0f5301ef400bDE30d0e23dF1C6"
-
-sol_addr = derive_address(mnemonic, "solana")
-# => "DzkqyvQrBvLqKSMhCoXoGK65e9PvyWjb6YjS4BqcxN2i"
-```
-
-| Param | Type | Default | Description |
-|-------|------|---------|-------------|
-| `mnemonic` | `str` | &mdash; | BIP-39 mnemonic phrase |
-| `chain` | `str` | &mdash; | `"evm"`, `"solana"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"` |
-| `index` | `int` | `0` | Account index in derivation path |
-
 ### Wallet Management
 
-#### `create_wallet(name, passphrase=None, words=12, vault_path=None)`
+#### `create_wallet(name, words=None, vault_path_opt=None)`
 
-Create a new wallet. Derives addresses for all supported chains.
+Create a wallet, derive accounts for all supported chain families, store the secret in the OS keyring, and write wallet metadata to the vault.
 
-```python
-wallet = create_wallet("agent-treasury")
-for acct in wallet["accounts"]:
-    print(f"{acct['chain_id']}: {acct['address']}")
-```
+#### `import_wallet_mnemonic(name, mnemonic, index=None, vault_path_opt=None)`
 
-#### `list_wallets(vault_path=None)`
+Import a mnemonic-backed wallet.
 
-List all wallets in the vault.
+#### `import_wallet_private_key(name, private_key_hex, chain=None, vault_path_opt=None, secp256k1_key=None, ed25519_key=None)`
 
-```python
-wallets = list_wallets()
-print(len(wallets))
-```
+Import a private-key wallet. When only one curve key is provided, OWS generates the other curve's key so the wallet still has all 7 chain accounts.
 
-#### `get_wallet(name_or_id, vault_path=None)`
+#### `list_wallets(vault_path_opt=None)`
 
-Look up a wallet by name or UUID.
+List wallet metadata from the vault.
 
-```python
-wallet = get_wallet("agent-treasury")
-```
+#### `get_wallet(name_or_id, vault_path_opt=None)`
 
-#### `delete_wallet(name_or_id, vault_path=None)`
+Load one wallet by name or ID.
 
-Delete a wallet from the vault.
+#### `rename_wallet(name_or_id, new_name, vault_path_opt=None)`
 
-```python
-delete_wallet("agent-treasury")
-```
+Rename a wallet. The keyring entry stays stable because it is keyed by wallet ID.
 
-#### `rename_wallet(name_or_id, new_name, vault_path=None)`
+#### `delete_wallet(name_or_id, vault_path_opt=None)`
 
-Rename a wallet.
+Delete the metadata file and the matching keyring entry.
 
-```python
-rename_wallet("old-name", "new-name")
-```
+#### `export_wallet(name_or_id, vault_path_opt=None)`
 
-#### `export_wallet(name_or_id, passphrase=None, vault_path=None)`
+Export the wallet secret.
 
-Export a wallet's secret.
-
-- **Mnemonic wallets** return the phrase string.
-- **Private key wallets** return a JSON string with both curve keys.
-
-```python
-# Mnemonic wallet
-phrase = export_wallet("mn-wallet")
-# => "goose puzzle decorate much ..."
-
-# Private key wallet
-import json
-keys = json.loads(export_wallet("pk-wallet"))
-# => {"secp256k1": "4c0883a6...", "ed25519": "9d61b19d..."}
-```
-
-### Import
-
-#### `import_wallet_mnemonic(name, mnemonic, passphrase=None, index=None, vault_path=None)`
-
-Import a wallet from a BIP-39 mnemonic. Derives all 7 chain accounts via HD paths.
-
-```python
-wallet = import_wallet_mnemonic("imported", "goose puzzle decorate ...")
-```
-
-#### `import_wallet_private_key(name, private_key_hex, chain=None, passphrase=None, vault_path=None, secp256k1_key=None, ed25519_key=None)`
-
-Import a wallet from a hex-encoded private key. All 7 chains are supported: the provided key is used for its curve's chains, and a random key is generated for the other curve.
-
-The optional `chain` parameter specifies which chain the key originates from to determine the curve. Defaults to `"evm"` (secp256k1).
-
-Alternatively, provide explicit keys for each curve via `secp256k1_key` and `ed25519_key`. When both are given, `private_key_hex` and `chain` are ignored.
-
-```python
-# Import an EVM private key — generates a random Ed25519 key for Solana/TON
-wallet = import_wallet_private_key("from-evm", "4c0883a691...")
-print(len(wallet["accounts"]))  # => 7
-
-# Import a Solana private key — generates a random secp256k1 key for EVM/BTC/etc.
-wallet = import_wallet_private_key(
-    "from-solana", "9d61b19d...", chain="solana"
-)
-print(len(wallet["accounts"]))  # => 7
-
-# Import explicit keys for both curves
-wallet = import_wallet_private_key(
-    "both-keys", "",
-    secp256k1_key="4c0883a691...",
-    ed25519_key="9d61b19d..."
-)
-print(len(wallet["accounts"]))  # => 7
-```
-
-| Param | Type | Default | Description |
-|-------|------|---------|-------------|
-| `name` | `str` | &mdash; | Wallet name |
-| `private_key_hex` | `str` | &mdash; | Hex-encoded private key. Ignored when both curve keys are provided. |
-| `chain` | `str` | `"evm"` | Source chain: `"evm"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"` (secp256k1) or `"solana"`, `"ton"` (Ed25519) |
-| `passphrase` | `str` | `None` | Encryption passphrase |
-| `vault_path` | `str` | `None` | Custom vault directory |
-| `secp256k1_key` | `str` | `None` | Explicit secp256k1 private key (hex) |
-| `ed25519_key` | `str` | `None` | Explicit Ed25519 private key (hex) |
+- Mnemonic wallets return the phrase string.
+- Private-key wallets return JSON with `secp256k1` and `ed25519` fields.
 
 ### Signing
 
-#### `sign_message(wallet, chain, message, passphrase=None, encoding=None, index=None, vault_path=None)`
+#### `sign_message(wallet, chain, message, encoding=None, index=None, vault_path_opt=None)`
 
 Sign a message with chain-specific formatting.
 
-```python
-result = sign_message("agent-treasury", "evm", "hello world")
-print(result["signature"])   # hex string
-print(result["recovery_id"]) # 0 or 1
-```
+#### `sign_typed_data(wallet, chain, typed_data_json, index=None, vault_path_opt=None)`
 
-#### `sign_typed_data(wallet, chain, typed_data_json, passphrase=None, index=None, vault_path=None)`
+Sign EIP-712 typed data for EVM chains.
 
-Sign EIP-712 typed structured data (EVM only).
+#### `sign_transaction(wallet, chain, tx_hex, index=None, vault_path_opt=None)`
 
-```python
-import json
+Sign a raw transaction.
 
-typed_data = json.dumps({
-    "types": {
-        "EIP712Domain": [
-            {"name": "name", "type": "string"},
-            {"name": "chainId", "type": "uint256"},
-        ],
-        "Transfer": [
-            {"name": "to", "type": "address"},
-            {"name": "amount", "type": "uint256"},
-        ],
-    },
-    "primaryType": "Transfer",
-    "domain": {"name": "MyDApp", "chainId": "1"},
-    "message": {"to": "0xabc...", "amount": "1000"},
-})
-
-result = sign_typed_data("agent-treasury", "evm", typed_data)
-print(result["signature"])   # hex string
-print(result["recovery_id"]) # 27 or 28
-```
-
-#### `sign_transaction(wallet, chain, tx_hex, passphrase=None, index=None, vault_path=None)`
-
-Sign a raw transaction (hex-encoded bytes).
-
-```python
-result = sign_transaction("agent-treasury", "evm", "02f8...")
-print(result["signature"])
-```
-
-#### `sign_and_send(wallet, chain, tx_hex, passphrase=None, index=None, rpc_url=None, vault_path=None)`
+#### `sign_and_send(wallet, chain, tx_hex, index=None, rpc_url=None, vault_path_opt=None)`
 
 Sign and broadcast a transaction.
 
+## Examples
+
+### Import from mnemonic
+
 ```python
-result = sign_and_send(
-    "agent-treasury", "evm", "02f8...",
-    rpc_url="https://mainnet.infura.io/v3/..."
+from open_wallet_standard import import_wallet_mnemonic
+
+wallet = import_wallet_mnemonic(
+    "imported",
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
 )
-print(result["tx_hash"])
+
+print(len(wallet["accounts"]))  # 7
 ```
 
-## Custom Vault Path
-
-Every function accepts an optional `vault_path` parameter for testing or isolation:
+### Import explicit curve keys
 
 ```python
-import tempfile
-import shutil
+from open_wallet_standard import import_wallet_private_key
 
-vault = tempfile.mkdtemp(prefix="ows-test-")
-try:
-    wallet = create_wallet("test", vault_path=vault)
-    # ... use wallet ...
-finally:
-    shutil.rmtree(vault)
+wallet = import_wallet_private_key(
+    "both-keys",
+    "",
+    secp256k1_key="4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318",
+    ed25519_key="9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+)
+
+print(len(wallet["accounts"]))  # 7
 ```
+
+### Custom vault root
+
+```python
+from open_wallet_standard import create_wallet
+
+wallet = create_wallet("isolated", vault_path_opt="/tmp/ows-test")
+print(wallet["id"])
+```
+
+`vault_path_opt` points at the vault root, not the `wallets/` subdirectory. When omitted, OWS uses `~/.ows/`.
