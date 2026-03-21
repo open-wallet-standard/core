@@ -35,7 +35,7 @@ All functions return Python dicts:
 from open_wallet_standard import generate_mnemonic, derive_address
 
 phrase = generate_mnemonic(12)         # or 24
-addr = derive_address(phrase, "evm")   # any chain: evm, solana, bitcoin, cosmos, tron, ton
+addr = derive_address(phrase, "evm")   # any chain: evm, solana, sui, bitcoin, cosmos, tron, ton
 ```
 
 ## Wallet Management
@@ -63,7 +63,7 @@ w1 = import_wallet_mnemonic("imported", "goose puzzle ...")
 # Import from private key (default: evm/secp256k1)
 w2 = import_wallet_private_key("from-evm", "4c0883a691...")
 
-# Import Ed25519 key (solana/ton)
+# Import Ed25519 key (solana/sui/ton)
 w3 = import_wallet_private_key("from-sol", "9d61b19d...", chain="solana")
 
 # Import explicit keys for both curves

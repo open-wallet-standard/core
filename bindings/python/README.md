@@ -8,7 +8,7 @@ Secure signing and wallet management for every chain. One vault, one interface �
 ## Why OWS
 
 - **Zero key exposure.** Private keys are encrypted at rest, decrypted only inside an isolated signing process. Agents and LLMs never see raw key material.
-- **Every chain, one interface.** EVM, Solana, Bitcoin, Cosmos, Tron, TON — all first-class. CAIP-2/CAIP-10 addressing abstracts away chain-specific details.
+- **Every chain, one interface.** EVM, Solana, Sui, Bitcoin, Cosmos, Tron, TON — all first-class. CAIP-2/CAIP-10 addressing abstracts away chain-specific details.
 - **Policy before signing.** A pre-signing policy engine gates every operation — spending limits, allowlists, chain restrictions — before any key is touched.
 - **Built for agents.** MCP server, native SDK, and CLI. A wallet created by one tool works in every other.
 
@@ -26,7 +26,7 @@ The package is **fully self-contained** — it embeds the Rust core via native F
 from ows import create_wallet, sign_message
 
 wallet = create_wallet("agent-treasury")
-# => accounts for EVM, Solana, BTC, Cosmos, Tron, TON
+# => accounts for EVM, Solana, Sui, BTC, Cosmos, Tron, TON
 
 sig = sign_message("agent-treasury", "evm", "hello")
 print(sig["signature"])
@@ -60,6 +60,7 @@ print(sig["signature"])
 | Cosmos | secp256k1 | bech32 | `m/44'/118'/0'/0/0` |
 | Tron | secp256k1 | base58check | `m/44'/195'/0'/0/0` |
 | TON | Ed25519 | raw/bounceable | `m/44'/607'/0'` |
+| Sui | Ed25519 | 0x + BLAKE2b-256 hex | `m/44'/784'/0'/0'/0'` |
 | Filecoin | secp256k1 | f1 base32 | `m/44'/461'/0'/0/0` |
 
 ## Architecture

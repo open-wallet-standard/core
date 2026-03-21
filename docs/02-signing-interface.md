@@ -12,6 +12,7 @@
 | `signTypedData` (EIP-712 typed structured data) | Done | SDK-level API, CLI `--typed-data` flag |
 | EVM broadcast (`eth_sendRawTransaction`) | Done | `send_transaction.rs` |
 | Solana broadcast (`sendTransaction`) | Done | `send_transaction.rs` |
+| Sui broadcast (`sui_executeTransactionBlock`) | Done | `ops.rs` |
 | Bitcoin broadcast (mempool.space REST) | Done | `send_transaction.rs` |
 | Cosmos broadcast (`/cosmos/tx/v1beta1/txs`) | Done | `send_transaction.rs` |
 | Tron broadcast (`/wallet/broadcasthex`) | Done | `send_transaction.rs` |
@@ -118,6 +119,7 @@ Per-chain broadcast protocols:
 | Bitcoin | POST raw hex to `{rpc}/tx` (mempool.space REST) |
 | Cosmos | POST to `{rpc}/cosmos/tx/v1beta1/txs` (base64 tx_bytes) |
 | Tron | POST to `{rpc}/wallet/broadcasthex` |
+| Sui | JSON-RPC `sui_executeTransactionBlock` (base64 tx + sig) |
 
 ### `signMessage(request: SignMessageRequest): Promise<SignMessageResult>`
 
@@ -141,6 +143,7 @@ interface SignMessageResult {
 Message signing follows chain-specific conventions:
 - **EVM**: `personal_sign` (EIP-191) or `eth_signTypedData_v4` (EIP-712)
 - **Solana**: Ed25519 signature over the raw message bytes
+- **Sui**: Intent-prefixed (scope=3) BLAKE2b-256 digest, Ed25519 signature
 - **Cosmos**: ADR-036 off-chain signing
 - **Filecoin**: Blake2b-256 hash then secp256k1 signing
 

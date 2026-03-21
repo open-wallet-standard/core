@@ -38,6 +38,7 @@ Output:
 Created wallet 3198bc9c-...
   eip155:1                              0xab16...   m/44'/60'/0'/0/0
   solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp  7Kz9...    m/44'/501'/0'/0'
+  sui:mainnet                              0x...      m/44'/784'/0'/0'/0'
   bip122:000000000019d6689c085ae165831e93   bc1q...    m/84'/0'/0'/0/0
   cosmos:cosmoshub-4                     cosmos1... m/44'/118'/0'/0/0
   tron:mainnet                           TKLm...    m/44'/195'/0'/0/0
@@ -73,7 +74,7 @@ ows wallet import --name "both" \
 | `--secp256k1-key <HEX>` | Explicit secp256k1 private key. When combined with `--ed25519-key`, `--private-key` is not required. |
 | `--ed25519-key <HEX>` | Explicit Ed25519 private key. When combined with `--secp256k1-key`, `--private-key` is not required. |
 
-Private key imports generate all 6 chain accounts: the provided key is used for its curve's chains, and a random key is generated for the other curve. Use `--secp256k1-key` and `--ed25519-key` together to supply both keys explicitly.
+Private key imports generate all 8 chain accounts: the provided key is used for its curve's chains, and a random key is generated for the other curve. Use `--secp256k1-key` and `--ed25519-key` together to supply both keys explicitly.
 
 ### `ows wallet export`
 
@@ -117,7 +118,7 @@ ows sign message --wallet "my-wallet" --chain evm --message "hello world"
 | Flag | Description |
 |------|-------------|
 | `--wallet <NAME>` | Wallet name or ID |
-| `--chain <CHAIN>` | Chain family: `evm`, `solana`, `bitcoin`, `cosmos`, `tron` |
+| `--chain <CHAIN>` | Chain family: `evm`, `solana`, `sui`, `bitcoin`, `cosmos`, `tron` |
 | `--message <MSG>` | Message to sign |
 | `--passphrase <PASS>` | Decryption passphrase |
 | `--encoding <ENC>` | Message encoding: `utf8` (default) or `hex` |

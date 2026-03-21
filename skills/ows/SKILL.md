@@ -1,6 +1,6 @@
 ---
 name: ows
-description: Secure, local-first multi-chain wallet management — create wallets, derive addresses, sign messages and transactions across EVM, Solana, Bitcoin, Cosmos, Tron, and TON via CLI, Node.js, or Python.
+description: Secure, local-first multi-chain wallet management — create wallets, derive addresses, sign messages and transactions across EVM, Solana, Sui, Bitcoin, Cosmos, Tron, and TON via CLI, Node.js, or Python.
 version: 0.3.9
 metadata:
   openclaw:
@@ -33,7 +33,7 @@ Use this skill when the user asks to:
 
 - Create, import, list, delete, or manage crypto wallets
 - Derive blockchain addresses from a mnemonic
-- Sign messages or transactions for EVM, Solana, Bitcoin, Cosmos, Tron, or TON
+- Sign messages or transactions for EVM, Solana, Sui, Bitcoin, Cosmos, Tron, or TON
 - Broadcast signed transactions to a chain
 - Generate BIP-39 mnemonic phrases
 - Work with `@open-wallet-standard/core` or `open-wallet-standard` in code
@@ -48,6 +48,7 @@ Use this skill when the user asks to:
 | Cosmos | `cosmos` | secp256k1 | bech32 |
 | Tron | `tron` | secp256k1 | base58check |
 | TON | `ton` | Ed25519 | raw/bounceable |
+| Sui | `sui` | Ed25519 | 0x + BLAKE2b-256 hex |
 
 ## Installation
 
@@ -183,4 +184,4 @@ Full API reference, return types, and examples: see `{baseDir}/references/python
 - Signing in isolated process — keys decrypted, used, wiped from memory
 - Caller never sees raw private key during signing
 - Optional passphrase adds second encryption layer
-- Universal wallets: single mnemonic derives addresses for all 6 chains via BIP-44 HD paths
+- Universal wallets: single mnemonic derives addresses for all supported chains via BIP-44 HD paths

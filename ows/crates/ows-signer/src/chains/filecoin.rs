@@ -123,6 +123,7 @@ impl ChainSigner for FilecoinSigner {
         Ok(SignOutput {
             signature: sig_bytes,
             recovery_id: Some(recovery_id.to_byte()),
+            public_key: None,
         })
     }
 

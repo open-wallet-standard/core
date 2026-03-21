@@ -12,6 +12,7 @@
 | Import: Ethereum Keystore v3 | Not started | No v3 import logic |
 | Import: WIF (Bitcoin) | Not started | |
 | Import: Solana keypair JSON | Not started | |
+| Import: Sui keystore JSON | Not started | |
 | Export: mnemonic / private key | Done | `export_wallet()` |
 | Export: Keystore v3 format | Not started | |
 | Backup: encrypted tar.gz (`ows backup`) | Not started | `BackupConfig` struct exists but unused |
@@ -131,6 +132,14 @@ ows wallet import --name "sol-wallet" --format solana-keypair --file ~/.config/s
 ```
 
 Reads the 64-byte keypair JSON array format used by the Solana CLI.
+
+### Sui Keystore JSON
+
+```bash
+ows wallet import --name "sui-wallet" --format sui-keystore --file ~/.sui/sui_config/sui.keystore
+```
+
+Reads the base64-encoded keypair array format used by the Sui CLI (`sui keytool`).
 
 ## Export
 

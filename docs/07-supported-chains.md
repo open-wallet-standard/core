@@ -8,8 +8,8 @@
 |---------|--------|-------|
 | CAIP-2 chain ID parsing (`namespace:reference`) | Done | `ows-core/src/caip.rs` |
 | CAIP-10 account IDs (`chain_id:address`) | Done | Stored in wallet `account_id` field |
-| Registered chain families (8 families, 14 networks) | Done | `ows-core/src/chain.rs` |
-| Per-chain signers (EVM, Solana, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin) | Done | `ows-signer/src/chains/` |
+| Registered chain families (9 families, 15 networks) | Done | `ows-core/src/chain.rs` |
+| Per-chain signers (EVM, Solana, Sui, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin) | Done | `ows-signer/src/chains/` |
 | HD derivation: BIP-32 (secp256k1) + SLIP-10 (ed25519) | Done | `ows-signer/src/hd.rs` |
 | Default RPC endpoints | Done | `ows-core/src/config.rs` |
 | User RPC overrides via config | Done | Merge semantics |
@@ -35,7 +35,7 @@ type AssetId = `${ChainId}:${string}`;
 // e.g. "eip155:8453:native" (ETH on Base)
 ```
 
-The `native` token refers to the chain's native currency (ETH, SOL, BTC, ATOM, TRX, TON, etc.).
+The `native` token refers to the chain's native currency (ETH, SOL, SUI, BTC, ATOM, TRX, TON, etc.).
 
 ## Chain Families
 
@@ -49,6 +49,7 @@ OWS groups chains into families that share a cryptographic curve and address der
 | Cosmos | secp256k1 | 118 | `m/44'/118'/0'/0/{index}` | Bech32 (`cosmos1...`) | `cosmos` |
 | Tron | secp256k1 | 195 | `m/44'/195'/0'/0/{index}` | Base58Check (`T...`) | `tron` |
 | TON | ed25519 | 607 | `m/44'/607'/{index}'` | Base64url wallet v5r1 (`UQ...`) | `ton` |
+| Sui | ed25519 | 784 | `m/44'/784'/{index}'/0'/0'` | `0x` + BLAKE2b-256 hex (32 bytes) | `sui` |
 | Spark | secp256k1 | 8797555 | `m/84'/0'/0'/0/{index}` | `spark:` + compressed pubkey hex | `spark` |
 | Filecoin | secp256k1 | 461 | `m/44'/461'/0'/0/{index}` | `f1` + base32(blake2b-160) | `fil` |
 
@@ -77,6 +78,7 @@ Each network has a CAIP-2 chain ID and a default public RPC endpoint.
 | Cosmos | `cosmos:cosmoshub-4` | `https://cosmos-rest.publicnode.com` |
 | Tron | `tron:mainnet` | `https://api.trongrid.io` |
 | TON | `ton:mainnet` | `https://toncenter.com/api/v2` |
+| Sui | `sui:mainnet` | `https://fullnode.mainnet.sui.io:443` |
 | Spark | `spark:mainnet` | — |
 | Filecoin | `fil:mainnet` | `https://api.node.glif.io/rpc/v1` |
 
@@ -121,6 +123,7 @@ bitcoin   → bip122:000000000019d6689c085ae165831e93
 cosmos    → cosmos:cosmoshub-4
 tron      → tron:mainnet
 ton       → ton:mainnet
+sui       → sui:mainnet
 spark     → spark:mainnet
 filecoin  → fil:mainnet
 ```
@@ -143,6 +146,7 @@ Master Seed (512 bits via PBKDF2)
     ├── m/44'/118'/0'/0/0   → Cosmos Account 0
     ├── m/44'/195'/0'/0/0   → Tron Account 0
     ├── m/44'/607'/0'       → TON Account 0
+    ├── m/44'/784'/0'/0'/0' → Sui Account 0
     ├── m/84'/0'/0'/0/0     → Spark Account 0
     └── m/44'/461'/0'/0/0   → Filecoin Account 0
 ```

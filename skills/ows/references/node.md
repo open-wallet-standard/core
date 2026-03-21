@@ -38,7 +38,7 @@ interface SendResult {
 import { generateMnemonic, deriveAddress } from "@open-wallet-standard/core";
 
 const phrase = generateMnemonic(12);       // or 24
-const addr = deriveAddress(phrase, "evm"); // any chain: evm, solana, bitcoin, cosmos, tron, ton
+const addr = deriveAddress(phrase, "evm"); // any chain: evm, solana, sui, bitcoin, cosmos, tron, ton
 ```
 
 ## Wallet Management
@@ -66,7 +66,7 @@ const w1 = importWalletMnemonic("imported", "goose puzzle ...");
 // Import from private key (default: evm/secp256k1)
 const w2 = importWalletPrivateKey("from-evm", "4c0883a691...");
 
-// Import Ed25519 key (solana/ton)
+// Import Ed25519 key (solana/sui/ton)
 const w3 = importWalletPrivateKey("from-sol", "9d61b19d...", undefined, undefined, "solana");
 
 // Import explicit keys for both curves

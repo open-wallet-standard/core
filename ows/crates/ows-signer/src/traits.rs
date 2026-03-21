@@ -8,6 +8,8 @@ pub struct SignOutput {
     pub signature: Vec<u8>,
     /// Recovery ID (for secp256k1 signatures). None for Ed25519.
     pub recovery_id: Option<u8>,
+    /// Public key bytes (needed by chains like Sui whose wire format includes the pubkey).
+    pub public_key: Option<Vec<u8>>,
 }
 
 /// Trait for chain-specific signing operations.

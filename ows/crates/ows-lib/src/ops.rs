@@ -630,6 +630,7 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         ChainType::Filecoin => Err(OwsLibError::InvalidInput(
             "broadcast not yet supported for Filecoin".into(),
         )),
+        ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
     }
 }
 
@@ -726,6 +727,42 @@ fn broadcast_ton(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibErr
         .as_str()
         .map(|s| s.to_string())
         .ok_or_else(|| OwsLibError::BroadcastFailed(format!("no hash in response: {resp}")))
+}
+
+fn broadcast_sui(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
+    use base64::Engine;
+    use ows_signer::chains::sui::WIRE_SIG_LEN;
+
+    if signed_bytes.len() <= WIRE_SIG_LEN {
+        return Err(OwsLibError::InvalidInput(
+            "signed transaction too short to contain tx + signature".into(),
+        ));
+    }
+
+    let split = signed_bytes.len() - WIRE_SIG_LEN;
+    let tx_part = &signed_bytes[..split];
+    let sig_part = &signed_bytes[split..];
+
+    let b64_tx = base64::engine::general_purpose::STANDARD.encode(tx_part);
+    let b64_sig = base64::engine::general_purpose::STANDARD.encode(sig_part);
+
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "sui_executeTransactionBlock",
+        "params": [b64_tx, [b64_sig], null, null],
+        "id": 1
+    });
+    let resp = curl_post_json(rpc_url, &body.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_str(&resp)?;
+
+    if let Some(error) = parsed.get("error") {
+        return Err(OwsLibError::BroadcastFailed(format!("RPC error: {error}")));
+    }
+
+    parsed["result"]["digest"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| OwsLibError::BroadcastFailed(format!("no digest in response: {resp}")))
 }
 
 fn curl_post_json(url: &str, body: &str) -> Result<String, OwsLibError> {
@@ -846,7 +883,7 @@ mod tests {
     #[test]
     fn derive_address_all_chains() {
         let phrase = generate_mnemonic(12).unwrap();
-        let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton"];
+        let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton", "sui"];
         for chain in &chains {
             let addr = derive_address(&phrase, chain, None).unwrap();
             assert!(!addr.is_empty(), "address should be non-empty for {chain}");
@@ -926,7 +963,7 @@ mod tests {
         let vault = dir.path();
         create_wallet("multi-sign", None, None, Some(vault)).unwrap();
 
-        let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark"];
+        let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui"];
         for chain in &chains {
             let result = sign_message(
                 "multi-sign",
@@ -964,7 +1001,7 @@ mod tests {
         solana_tx.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // message payload
         let solana_tx_hex = hex::encode(&solana_tx);
 
-        let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark"];
+        let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui"];
         for chain in &chains {
             let tx = if *chain == "solana" {
                 &solana_tx_hex

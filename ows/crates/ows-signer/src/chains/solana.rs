@@ -40,6 +40,7 @@ impl ChainSigner for SolanaSigner {
         Ok(SignOutput {
             signature: signature.to_bytes().to_vec(),
             recovery_id: None,
+            public_key: None,
         })
     }
 

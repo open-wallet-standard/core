@@ -22,7 +22,7 @@ The package is **fully self-contained** — it embeds the Rust core via native F
 import { createWallet, signMessage } from "@open-wallet-standard/core";
 
 const wallet = createWallet("agent-treasury");
-// => accounts for EVM, Solana, BTC, Cosmos, Tron, TON
+// => accounts for EVM, Solana, Sui, BTC, Cosmos, Tron, TON
 
 const sig = signMessage("agent-treasury", "evm", "hello");
 console.log(sig.signature);
