@@ -9,8 +9,8 @@ pub mod uninstall;
 pub mod update;
 pub mod wallet;
 
-use crate::{vault, CliError};
-use ows_core::KeyType;
+use crate::{passphrase_cache, vault, CliError};
+use ows_core::{EncryptedWallet, KeyType};
 use ows_signer::process_hardening::clear_env_var;
 use ows_signer::{CryptoEnvelope, SecretBytes};
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -81,38 +81,113 @@ pub enum WalletSecret {
     PrivateKeys(SecretBytes),
 }
 
+pub fn read_passphrase_from_env() -> Option<Zeroizing<String>> {
+    clear_env_var("OWS_PASSPHRASE")
+        .or_else(|| clear_env_var("LWS_PASSPHRASE"))
+        .map(Zeroizing::new)
+}
+
+fn prompt_hidden(prompt: &str) -> Result<Zeroizing<String>, CliError> {
+    if !io::stdin().is_terminal() {
+        return Err(CliError::InvalidArgs(
+            "passphrase required; set OWS_PASSPHRASE or use an interactive terminal".into(),
+        ));
+    }
+
+    Ok(Zeroizing::new(rpassword::prompt_password(prompt)?))
+}
+
 /// Read a passphrase from OWS_PASSPHRASE env var (or LWS_PASSPHRASE fallback) or prompt interactively.
-pub fn read_passphrase() -> Zeroizing<String> {
-    if let Some(value) = clear_env_var("OWS_PASSPHRASE").or_else(|| clear_env_var("LWS_PASSPHRASE"))
-    {
-        return Zeroizing::new(value);
+pub fn read_passphrase() -> Result<Zeroizing<String>, CliError> {
+    if let Some(value) = read_passphrase_from_env() {
+        return Ok(value);
     }
-    let stdin = io::stdin();
-    if stdin.is_terminal() {
-        eprint!("Passphrase (empty for none): ");
-        io::stderr().flush().ok();
-        let mut line = String::new();
-        stdin.lock().read_line(&mut line).unwrap_or(0);
-        Zeroizing::new(line.trim().to_string())
-    } else {
-        Zeroizing::new(String::new())
+
+    prompt_hidden("Vault passphrase: ")
+}
+
+/// Read and confirm the passphrase for a newly created/imported wallet.
+pub fn read_new_passphrase() -> Result<Zeroizing<String>, CliError> {
+    if let Some(value) = read_passphrase_from_env() {
+        return Ok(value);
     }
+
+    let passphrase = prompt_hidden("New wallet passphrase (leave empty for none): ")?;
+    let confirm = prompt_hidden("Confirm passphrase: ")?;
+    if passphrase.as_str() != confirm.as_str() {
+        return Err(CliError::InvalidArgs(
+            "passphrase confirmation did not match".into(),
+        ));
+    }
+
+    Ok(passphrase)
+}
+
+fn wallet_envelope(wallet: &EncryptedWallet) -> Result<CryptoEnvelope, CliError> {
+    Ok(serde_json::from_value(wallet.crypto.clone())?)
+}
+
+pub fn wallet_accepts_passphrase(
+    wallet: &EncryptedWallet,
+    passphrase: &str,
+) -> Result<bool, CliError> {
+    match ows_signer::decrypt(&wallet_envelope(wallet)?, passphrase) {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+pub fn ensure_wallet_passphrase(
+    wallet: &EncryptedWallet,
+    passphrase: &str,
+) -> Result<(), CliError> {
+    ows_signer::decrypt(&wallet_envelope(wallet)?, passphrase)?;
+    Ok(())
+}
+
+pub fn resolve_wallet_passphrase(wallet_name: &str) -> Result<Zeroizing<String>, CliError> {
+    let wallet = vault::load_wallet_by_name_or_id(wallet_name)?;
+    resolve_wallet_passphrase_for(&wallet)
+}
+
+fn resolve_wallet_passphrase_for(wallet: &EncryptedWallet) -> Result<Zeroizing<String>, CliError> {
+    if let Some(passphrase) = read_passphrase_from_env() {
+        ensure_wallet_passphrase(wallet, passphrase.as_str())?;
+        return Ok(passphrase);
+    }
+
+    match passphrase_cache::load(None) {
+        Ok(Some(passphrase)) => {
+            if wallet_accepts_passphrase(wallet, passphrase.as_str())? {
+                return Ok(passphrase);
+            }
+            let _ = passphrase_cache::delete(None);
+        }
+        Ok(None) => {}
+        Err(e) => eprintln!("warning: {e}"),
+    }
+
+    if wallet_accepts_passphrase(wallet, "")? {
+        return Ok(Zeroizing::new(String::new()));
+    }
+
+    if !io::stdin().is_terminal() {
+        return Err(CliError::InvalidArgs(
+            "wallet is passphrase-protected; set OWS_PASSPHRASE or run `ows wallet unlock --wallet <name>` interactively".into(),
+        ));
+    }
+
+    let passphrase = prompt_hidden("Vault passphrase: ")?;
+    ensure_wallet_passphrase(wallet, passphrase.as_str())?;
+    Ok(passphrase)
 }
 
 /// Look up a wallet by name or ID, decrypt it, and return the secret.
 /// Handles both mnemonic and private key wallets.
 pub fn resolve_wallet_secret(wallet_name: &str) -> Result<WalletSecret, CliError> {
     let wallet = vault::load_wallet_by_name_or_id(wallet_name)?;
-    let envelope: CryptoEnvelope = serde_json::from_value(wallet.crypto.clone())?;
-
-    // Try empty passphrase first, then prompt if it fails
-    let secret = match ows_signer::decrypt(&envelope, "") {
-        Ok(s) => s,
-        Err(_) => {
-            let passphrase = read_passphrase();
-            ows_signer::decrypt(&envelope, &passphrase)?
-        }
-    };
+    let passphrase = resolve_wallet_passphrase_for(&wallet)?;
+    let secret = ows_signer::decrypt(&wallet_envelope(&wallet)?, passphrase.as_str())?;
 
     match wallet.key_type {
         KeyType::Mnemonic => {

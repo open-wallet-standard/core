@@ -25,6 +25,8 @@ tempfile = "3"
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 zeroize = "1"
+sha2 = "0.10"
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "linux-native-sync-persistent"] }
 
 [dev-dependencies]
 ows-signer = { path = "../ows-signer", version = "=0.3.9", features = ["fast-kdf"] }

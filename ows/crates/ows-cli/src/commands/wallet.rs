@@ -7,7 +7,14 @@ use zeroize::Zeroize;
 pub fn create(name: &str, words: u32, show_mnemonic: bool) -> Result<(), CliError> {
     // Generate mnemonic, then import it to create the wallet
     let mut mnemonic_phrase = ows_lib::generate_mnemonic(words)?;
-    let info = ows_lib::import_wallet_mnemonic(name, &mnemonic_phrase, None, Some(0), None)?;
+    let passphrase = super::read_new_passphrase()?;
+    let info = ows_lib::import_wallet_mnemonic(
+        name,
+        &mnemonic_phrase,
+        Some(passphrase.as_str()),
+        Some(0),
+        None,
+    )?;
 
     audit::log_wallet_created(&info);
 
@@ -27,9 +34,16 @@ pub fn create(name: &str, words: u32, show_mnemonic: bool) -> Result<(), CliErro
         eprintln!("⚠️  Store it securely offline. It will NOT be shown again.");
         eprintln!();
         println!("{mnemonic_phrase}");
+    } else if passphrase.is_empty() {
+        eprintln!();
+        eprintln!("Wallet saved without a passphrase.");
+        eprintln!("Set OWS_PASSPHRASE when creating wallets to avoid accidental empty-passphrase storage.");
     } else {
         eprintln!();
         eprintln!("Mnemonic encrypted and saved to vault.");
+        eprintln!(
+            "Use `ows wallet unlock --wallet {name}` to cache the passphrase in your OS keyring."
+        );
         eprintln!("Use --show-mnemonic at creation time if you need a backup copy.");
     }
 
@@ -65,10 +79,17 @@ pub fn import(
                 .into(),
         ));
     }
+    let passphrase = super::read_new_passphrase()?;
 
     let info = if use_mnemonic {
         let phrase = super::read_mnemonic()?;
-        ows_lib::import_wallet_mnemonic(name, &phrase, None, Some(index), None)?
+        ows_lib::import_wallet_mnemonic(
+            name,
+            &phrase,
+            Some(passphrase.as_str()),
+            Some(index),
+            None,
+        )?
     } else {
         // Read from env/stdin only when both curve keys are not already provided
         let private_key_hex = if both_curve_keys {
@@ -80,7 +101,7 @@ pub fn import(
             name,
             &private_key_hex,
             chain,
-            None,
+            Some(passphrase.as_str()),
             None,
             secp256k1_key,
             ed25519_key,
@@ -109,14 +130,8 @@ pub fn export(wallet_name: &str) -> Result<(), CliError> {
         ));
     }
 
-    // Try empty passphrase first, then prompt if it fails
-    let mut exported = match ows_lib::export_wallet(wallet_name, None, None) {
-        Ok(s) => s,
-        Err(_) => {
-            let passphrase = super::read_passphrase();
-            ows_lib::export_wallet(wallet_name, Some(&passphrase), None)?
-        }
-    };
+    let passphrase = super::resolve_wallet_passphrase(wallet_name)?;
+    let mut exported = ows_lib::export_wallet(wallet_name, Some(passphrase.as_str()), None)?;
 
     let is_key_pair = exported.starts_with('{');
     eprintln!();
@@ -132,6 +147,44 @@ pub fn export(wallet_name: &str) -> Result<(), CliError> {
 
     let info = ows_lib::get_wallet(wallet_name, None)?;
     audit::log_wallet_exported(&info.id);
+    Ok(())
+}
+
+pub fn unlock(wallet_name: &str) -> Result<(), CliError> {
+    let wallet = crate::vault::load_wallet_by_name_or_id(wallet_name)?;
+
+    if super::wallet_accepts_passphrase(&wallet, "")? {
+        println!(
+            "Wallet '{}' uses an empty passphrase. Nothing was cached.",
+            wallet.name
+        );
+        return Ok(());
+    }
+
+    let passphrase = super::read_passphrase()?;
+    super::ensure_wallet_passphrase(&wallet, passphrase.as_str())?;
+    crate::passphrase_cache::store(passphrase.as_str(), None)?;
+
+    println!("Vault unlocked.");
+    println!("Passphrase cached in the OS keyring for interactive CLI workflows.");
+    Ok(())
+}
+
+pub fn lock() -> Result<(), CliError> {
+    if crate::passphrase_cache::delete(None)? {
+        println!("Cleared cached vault passphrase.");
+    } else {
+        println!("No cached vault passphrase found.");
+    }
+    Ok(())
+}
+
+pub fn status() -> Result<(), CliError> {
+    if crate::passphrase_cache::status(None)? {
+        println!("Vault status: unlocked (passphrase cached in OS keyring)");
+    } else {
+        println!("Vault status: locked");
+    }
     Ok(())
 }
 

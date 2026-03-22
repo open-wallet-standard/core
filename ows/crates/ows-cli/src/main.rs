@@ -1,5 +1,6 @@
 mod audit;
 mod commands;
+mod passphrase_cache;
 mod vault;
 
 use clap::{Parser, Subcommand};
@@ -90,6 +91,16 @@ enum WalletCommands {
         #[arg(long)]
         wallet: String,
     },
+    /// Cache the current vault passphrase in the OS keyring
+    Unlock {
+        /// Wallet name or ID used to verify the passphrase
+        #[arg(long)]
+        wallet: String,
+    },
+    /// Remove any cached vault passphrase from the OS keyring
+    Lock,
+    /// Show whether a vault passphrase is currently cached
+    Status,
     /// Delete a wallet from the vault
     Delete {
         /// Wallet name or ID
@@ -224,6 +235,8 @@ enum CliError {
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Json(#[from] serde_json::Error),
+    #[error("passphrase cache unavailable: {0}")]
+    PassphraseCache(String),
     #[error("{0}")]
     InvalidArgs(String),
 }
@@ -274,6 +287,9 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 index,
             } => commands::wallet::import(&name, mnemonic, private_key, chain.as_deref(), index),
             WalletCommands::Export { wallet } => commands::wallet::export(&wallet),
+            WalletCommands::Unlock { wallet } => commands::wallet::unlock(&wallet),
+            WalletCommands::Lock => commands::wallet::lock(),
+            WalletCommands::Status => commands::wallet::status(),
             WalletCommands::Delete { wallet, confirm } => {
                 commands::wallet::delete(&wallet, confirm)
             }

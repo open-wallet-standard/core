@@ -20,7 +20,7 @@ cargo build --workspace --release
 
 ### `ows wallet create`
 
-Create a new wallet. Generates a BIP-39 mnemonic and derives addresses for all supported chains.
+Create a new wallet. Generates a BIP-39 mnemonic, prompts for a vault passphrase, and derives addresses for all supported chains.
 
 ```bash
 ows wallet create --name "my-wallet"
@@ -29,8 +29,14 @@ ows wallet create --name "my-wallet"
 | Flag | Description |
 |------|-------------|
 | `--name <NAME>` | Wallet name (required) |
-| `--passphrase <PASS>` | Encryption passphrase (prompted if omitted) |
 | `--words <12\|24>` | Mnemonic word count (default: 12) |
+| `--show-mnemonic` | Print the generated mnemonic for backup (dangerous) |
+
+Passphrase behavior:
+
+- If `OWS_PASSPHRASE` is set, it is used directly.
+- Otherwise the CLI prompts interactively and asks for confirmation.
+- Press Enter twice only if you intentionally want an empty passphrase.
 
 Output:
 
@@ -57,10 +63,10 @@ echo "4c0883a691..." | ows wallet import --name "from-evm" --private-key
 # Import an Ed25519 key (e.g. from Solana)
 echo "9d61b19d..." | ows wallet import --name "from-sol" --private-key --chain solana
 
-# Import explicit keys for both curves (no stdin needed)
-ows wallet import --name "both" \
-  --secp256k1-key "4c0883a691..." \
-  --ed25519-key "9d61b19d..."
+# Import explicit keys for both curves (via environment)
+OWS_SECP256K1_KEY="4c0883a691..." \
+OWS_ED25519_KEY="9d61b19d..." \
+ows wallet import --name "both"
 ```
 
 | Flag | Description |
@@ -70,10 +76,8 @@ ows wallet import --name "both" \
 | `--private-key` | Import a raw private key |
 | `--chain <CHAIN>` | Source chain for private key import (determines curve, default: evm) |
 | `--index <N>` | Account index for HD derivation (mnemonic only, default: 0) |
-| `--secp256k1-key <HEX>` | Explicit secp256k1 private key. When combined with `--ed25519-key`, `--private-key` is not required. |
-| `--ed25519-key <HEX>` | Explicit Ed25519 private key. When combined with `--secp256k1-key`, `--private-key` is not required. |
 
-Private key imports generate all 6 chain accounts: the provided key is used for its curve's chains, and a random key is generated for the other curve. Use `--secp256k1-key` and `--ed25519-key` together to supply both keys explicitly.
+Private key imports generate all 6 chain accounts: the provided key is used for its curve's chains, and a random key is generated for the other curve. Use `OWS_SECP256K1_KEY` and `OWS_ED25519_KEY` together to supply both keys explicitly.
 
 ### `ows wallet export`
 
@@ -86,7 +90,36 @@ ows wallet export --wallet "my-wallet"
 - Mnemonic wallets output the phrase.
 - Private key wallets output JSON: `{"secp256k1":"hex...","ed25519":"hex..."}`.
 
-If the wallet is passphrase-protected, you will be prompted.
+Passphrase resolution order:
+
+1. `OWS_PASSPHRASE`
+2. cached CLI passphrase from the OS keyring
+3. empty passphrase
+4. interactive prompt
+
+### `ows wallet unlock`
+
+Cache the current vault passphrase in the OS keyring for repeated interactive CLI use.
+
+```bash
+ows wallet unlock --wallet "my-wallet"
+```
+
+### `ows wallet lock`
+
+Remove any cached vault passphrase from the OS keyring.
+
+```bash
+ows wallet lock
+```
+
+### `ows wallet status`
+
+Show whether a vault passphrase is currently cached.
+
+```bash
+ows wallet status
+```
 
 ### `ows wallet list`
 
@@ -119,7 +152,6 @@ ows sign message --wallet "my-wallet" --chain evm --message "hello world"
 | `--wallet <NAME>` | Wallet name or ID |
 | `--chain <CHAIN>` | Chain family: `evm`, `solana`, `bitcoin`, `cosmos`, `tron` |
 | `--message <MSG>` | Message to sign |
-| `--passphrase <PASS>` | Decryption passphrase |
 | `--encoding <ENC>` | Message encoding: `utf8` (default) or `hex` |
 
 ### `ows sign tx`
@@ -135,7 +167,6 @@ ows sign tx --wallet "my-wallet" --chain evm --tx "02f8..."
 | `--wallet <NAME>` | Wallet name or ID |
 | `--chain <CHAIN>` | Chain family |
 | `--tx <HEX>` | Hex-encoded transaction bytes |
-| `--passphrase <PASS>` | Decryption passphrase |
 
 ## Mnemonic Commands
 

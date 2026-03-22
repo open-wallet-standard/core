@@ -15,10 +15,10 @@
 | Subprocess signing enclave (child process) | Not started | Keys are decrypted in-process, not isolated |
 | Unix domain socket / pipe IPC | Not started | No enclave transport |
 | JSON-RPC enclave protocol (`sign`, `sign_message`, `unlock`, `lock`, `status`) | Not started | |
-| Passphrase delivery: interactive prompt | Not started | |
+| Passphrase delivery: interactive prompt | Partial | CLI prompts directly for wallet create/import/export/sign |
 | Passphrase delivery: file descriptor | Not started | |
 | Passphrase delivery: env var (`OWS_PASSPHRASE`) with immediate clear | Partial | Passphrase passed as param, not read from env |
-| Session-based unlock/lock | Not started | Each operation re-decrypts (or uses cache) |
+| Session-based unlock/lock | Partial | CLI-only passphrase cache via OS keyring |
 
 **Note:** The current implementation provides in-process hardening (mlock, zeroize, anti-debug) but does NOT implement the subprocess isolation model described in the spec. Keys are decrypted within the calling process's address space.
 
