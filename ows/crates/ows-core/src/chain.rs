@@ -138,6 +138,21 @@ pub fn parse_chain(s: &str) -> Result<Chain, String> {
         return Ok(*chain);
     }
 
+    // Try namespace match for unknown CAIP-2 IDs (e.g. eip155:4217, eip155:84532).
+    // Uses the same signer as the namespace's default chain. The chain_id string is
+    // leaked to satisfy the 'static lifetime — acceptable since parse_chain is called
+    // with a small, bounded set of user-supplied chain identifiers.
+    if let Some((namespace, _reference)) = s.split_once(':') {
+        if let Some(ct) = ChainType::from_namespace(namespace) {
+            let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
+            return Ok(Chain {
+                name: leaked,
+                chain_type: ct,
+                chain_id: leaked,
+            });
+        }
+    }
+
     Err(format!(
         "unknown chain: '{}'. Use a chain name (ethereum, solana, bitcoin, ...) or CAIP-2 ID (eip155:1, ...)",
         s
