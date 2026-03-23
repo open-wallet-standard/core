@@ -1,4 +1,4 @@
-use ows_core::{ChainType, Config};
+use ows_core::Config;
 
 use crate::CliError;
 
@@ -11,13 +11,7 @@ pub fn run() -> Result<(), CliError> {
     println!("{:<12} {:<10} {:<10}", "Chain", "Namespace", "Coin Type");
     println!("{:<12} {:<10} {:<10}", "-----", "---------", "---------");
 
-    let chains = [
-        ChainType::Evm,
-        ChainType::Solana,
-        ChainType::Bitcoin,
-        ChainType::Cosmos,
-        ChainType::Tron,
-    ];
+    let chains = ows_core::ALL_CHAIN_TYPES;
 
     for chain in chains {
         println!(

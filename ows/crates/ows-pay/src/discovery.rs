@@ -18,6 +18,10 @@ const TESTNETS: &[&str] = &[
 ///
 /// Fetches the x402 directory with the given pagination parameters,
 /// filters testnets, and returns services with pagination metadata.
+///
+/// When a query is provided the upstream API does not support server-side
+/// filtering, so we paginate through pages internally until we have
+/// collected enough matching results (up to `limit`).
 pub async fn discover_all(
     query: Option<&str>,
     limit: Option<u64>,
@@ -26,12 +30,85 @@ pub async fn discover_all(
     let limit = limit.unwrap_or(100);
     let offset = offset.unwrap_or(0);
 
+    if let Some(q) = query {
+        // Client-side search: page through the full directory to find matches.
+        return discover_with_query(q, limit, offset).await;
+    }
+
+    // No query — single page fetch.
     let resp = fetch_x402(limit, offset).await?;
     let total = resp.total;
 
+    let services = filter_services(resp.items, None);
+
+    Ok(DiscoverResult {
+        services,
+        total,
+        limit,
+        offset,
+    })
+}
+
+/// Paginate through the upstream directory collecting services that match
+/// `query` until we have `limit` results (after skipping `offset` matches).
+async fn discover_with_query(
+    query: &str,
+    limit: u64,
+    offset: u64,
+) -> Result<DiscoverResult, PayError> {
+    const PAGE_SIZE: u64 = 500;
+    const MAX_PAGES: u64 = 30; // safety cap: don't fetch more than 15 000 items
+
+    let mut collected: Vec<Service> = Vec::new();
+    let mut skipped: u64 = 0;
+    let mut api_offset: u64 = 0;
+    let mut total: u64 = 0;
+
+    for _ in 0..MAX_PAGES {
+        let resp = fetch_x402(PAGE_SIZE, api_offset).await?;
+        total = resp.total;
+        let page_len = resp.items.len() as u64;
+
+        let matches = filter_services(resp.items, Some(query));
+        for svc in matches {
+            if skipped < offset {
+                skipped += 1;
+                continue;
+            }
+            collected.push(svc);
+            if collected.len() as u64 >= limit {
+                break;
+            }
+        }
+
+        if collected.len() as u64 >= limit {
+            break;
+        }
+
+        api_offset += page_len;
+        if api_offset >= total {
+            break;
+        }
+    }
+
+    Ok(DiscoverResult {
+        services: collected,
+        total,
+        limit,
+        offset,
+    })
+}
+
+/// Filter and convert raw discovered services, optionally matching against a
+/// query string (case-insensitive, checked against URL and descriptions).
+fn filter_services(
+    items: Vec<crate::types::DiscoveredService>,
+    query: Option<&str>,
+) -> Vec<Service> {
+    let q = query.map(|q| q.to_lowercase());
     let mut services = Vec::new();
 
-    for svc in resp.items {
+    for svc in items {
         let accept = match svc.accepts.first() {
             Some(a) => a,
             None => continue,
@@ -42,19 +119,18 @@ pub async fn discover_all(
             continue;
         }
 
-        if let Some(q) = query {
-            let q = q.to_lowercase();
-            let url_match = svc.resource.to_lowercase().contains(&q);
+        if let Some(ref q) = q {
+            let url_match = svc.resource.to_lowercase().contains(q);
             let accepts_desc = accept
                 .description
                 .as_ref()
-                .map(|d| d.to_lowercase().contains(&q))
+                .map(|d| d.to_lowercase().contains(q))
                 .unwrap_or(false);
             let meta_desc = svc
                 .metadata
                 .as_ref()
                 .and_then(|m| m.description.as_ref())
-                .map(|d| d.to_lowercase().contains(&q))
+                .map(|d| d.to_lowercase().contains(q))
                 .unwrap_or(false);
             if !url_match && !accepts_desc && !meta_desc {
                 continue;
@@ -78,12 +154,7 @@ pub async fn discover_all(
         });
     }
 
-    Ok(DiscoverResult {
-        services,
-        total,
-        limit,
-        offset,
-    })
+    services
 }
 
 // ===========================================================================
