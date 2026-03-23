@@ -26,6 +26,7 @@ bs58 = { version = "0.5", features = ["check"] }
 zeroize = { version = "1", features = ["derive"] }
 thiserror = "2"
 hex = "0.4"
+hkdf = "0.12"
 hmac = "0.12"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }

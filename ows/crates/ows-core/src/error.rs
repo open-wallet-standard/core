@@ -8,6 +8,9 @@ pub enum OwsErrorCode {
     InvalidPassphrase,
     InvalidInput,
     CaipParseError,
+    PolicyDenied,
+    ApiKeyNotFound,
+    ApiKeyExpired,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -26,6 +29,15 @@ pub enum OwsError {
 
     #[error("CAIP parse error: {message}")]
     CaipParseError { message: String },
+
+    #[error("policy denied: {reason}")]
+    PolicyDenied { policy_id: String, reason: String },
+
+    #[error("API key not found")]
+    ApiKeyNotFound,
+
+    #[error("API key expired: {id}")]
+    ApiKeyExpired { id: String },
 }
 
 impl OwsError {
@@ -36,6 +48,9 @@ impl OwsError {
             OwsError::InvalidPassphrase => OwsErrorCode::InvalidPassphrase,
             OwsError::InvalidInput { .. } => OwsErrorCode::InvalidInput,
             OwsError::CaipParseError { .. } => OwsErrorCode::CaipParseError,
+            OwsError::PolicyDenied { .. } => OwsErrorCode::PolicyDenied,
+            OwsError::ApiKeyNotFound => OwsErrorCode::ApiKeyNotFound,
+            OwsError::ApiKeyExpired { .. } => OwsErrorCode::ApiKeyExpired,
         }
     }
 }
@@ -92,6 +107,22 @@ mod tests {
             .code(),
             OwsErrorCode::CaipParseError
         );
+        assert_eq!(
+            OwsError::PolicyDenied {
+                policy_id: "x".into(),
+                reason: "x".into()
+            }
+            .code(),
+            OwsErrorCode::PolicyDenied
+        );
+        assert_eq!(
+            OwsError::ApiKeyNotFound.code(),
+            OwsErrorCode::ApiKeyNotFound
+        );
+        assert_eq!(
+            OwsError::ApiKeyExpired { id: "x".into() }.code(),
+            OwsErrorCode::ApiKeyExpired
+        );
     }
 
     #[test]
@@ -120,5 +151,36 @@ mod tests {
         let json = serde_json::to_value(&err).unwrap();
         assert_eq!(json["code"], "CAIP_PARSE_ERROR");
         assert!(json["message"].as_str().unwrap().contains("bad format"));
+    }
+
+    #[test]
+    fn test_policy_denied_serialization() {
+        let err = OwsError::PolicyDenied {
+            policy_id: "spending-limit".into(),
+            reason: "exceeded daily limit".into(),
+        };
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["code"], "POLICY_DENIED");
+        assert!(json["message"]
+            .as_str()
+            .unwrap()
+            .contains("exceeded daily limit"));
+    }
+
+    #[test]
+    fn test_api_key_not_found_serialization() {
+        let err = OwsError::ApiKeyNotFound;
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["code"], "API_KEY_NOT_FOUND");
+    }
+
+    #[test]
+    fn test_api_key_expired_serialization() {
+        let err = OwsError::ApiKeyExpired {
+            id: "key-123".into(),
+        };
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["code"], "API_KEY_EXPIRED");
+        assert!(json["message"].as_str().unwrap().contains("key-123"));
     }
 }

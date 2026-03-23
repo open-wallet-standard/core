@@ -11,7 +11,10 @@ pub mod traits;
 pub mod zeroizing;
 
 pub use chains::signer_for_chain;
-pub use crypto::{decrypt, encrypt, CipherParams, CryptoEnvelope, CryptoError, KdfParams};
+pub use crypto::{
+    decrypt, encrypt, encrypt_with_hkdf, CipherParams, CryptoEnvelope, CryptoError, HkdfKdfParams,
+    KdfParams, KdfParamsVariant,
+};
 pub use curve::Curve;
 pub use hd::HdDeriver;
 pub use mnemonic::{Mnemonic, MnemonicStrength};

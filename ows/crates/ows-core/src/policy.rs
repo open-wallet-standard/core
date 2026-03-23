@@ -1,0 +1,273 @@
+use serde::{Deserialize, Serialize};
+
+/// Action taken when a policy rule matches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyAction {
+    Deny,
+}
+
+/// A declarative policy rule evaluated in-process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PolicyRule {
+    /// Deny if daily spend exceeds `max_native_units` (wei, lamports, satoshis, etc).
+    DailySpendingLimit { max_native_units: String },
+
+    /// Deny if `chain_id` is not in the allowlist.
+    AllowedChains { chain_ids: Vec<String> },
+
+    /// Deny if `transaction.to` is not in the allowlist (case-insensitive, EVM-only initially).
+    AllowedAddresses { addresses: Vec<String> },
+
+    /// Deny if current time is past the timestamp.
+    ExpiresAt { timestamp: String },
+}
+
+/// A stored policy definition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Policy {
+    pub id: String,
+    pub name: String,
+    pub version: u32,
+    pub created_at: String,
+    pub rules: Vec<PolicyRule>,
+    /// Path to a custom executable policy program (optional).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executable: Option<String>,
+    /// Opaque configuration passed to the executable (optional).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    pub action: PolicyAction,
+}
+
+/// Context passed to policy evaluation (and to executable policies via stdin).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyContext {
+    pub chain_id: String,
+    pub wallet_id: String,
+    pub api_key_id: String,
+    pub transaction: TransactionContext,
+    pub spending: SpendingContext,
+    pub timestamp: String,
+}
+
+/// Transaction fields available for policy evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionContext {
+    /// Destination address (if applicable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// Native value in smallest unit (wei, lamports, etc).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Raw transaction hex.
+    pub raw_hex: String,
+    /// Calldata / input data (EVM).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+}
+
+/// Current spending state for the API key on the given chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpendingContext {
+    /// Total already spent today in native units.
+    pub daily_total: String,
+    /// Date for which this total applies (YYYY-MM-DD).
+    pub date: String,
+}
+
+/// Result of policy evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyResult {
+    pub allow: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Which policy produced the denial (if denied).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_id: Option<String>,
+}
+
+impl PolicyResult {
+    pub fn allowed() -> Self {
+        Self {
+            allow: true,
+            reason: None,
+            policy_id: None,
+        }
+    }
+
+    pub fn denied(policy_id: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            allow: false,
+            reason: Some(reason.into()),
+            policy_id: Some(policy_id.into()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_policy_rule_serde_daily_spending_limit() {
+        let rule = PolicyRule::DailySpendingLimit {
+            max_native_units: "1000000000000000000".to_string(),
+        };
+        let json = serde_json::to_value(&rule).unwrap();
+        assert_eq!(json["type"], "daily_spending_limit");
+        assert_eq!(json["max_native_units"], "1000000000000000000");
+
+        let deserialized: PolicyRule = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, rule);
+    }
+
+    #[test]
+    fn test_policy_rule_serde_allowed_chains() {
+        let rule = PolicyRule::AllowedChains {
+            chain_ids: vec!["eip155:8453".into(), "eip155:84532".into()],
+        };
+        let json = serde_json::to_value(&rule).unwrap();
+        assert_eq!(json["type"], "allowed_chains");
+        assert_eq!(json["chain_ids"][0], "eip155:8453");
+
+        let deserialized: PolicyRule = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, rule);
+    }
+
+    #[test]
+    fn test_policy_rule_serde_allowed_addresses() {
+        let rule = PolicyRule::AllowedAddresses {
+            addresses: vec!["0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into()],
+        };
+        let json = serde_json::to_value(&rule).unwrap();
+        assert_eq!(json["type"], "allowed_addresses");
+
+        let deserialized: PolicyRule = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, rule);
+    }
+
+    #[test]
+    fn test_policy_rule_serde_expires_at() {
+        let rule = PolicyRule::ExpiresAt {
+            timestamp: "2026-04-01T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_value(&rule).unwrap();
+        assert_eq!(json["type"], "expires_at");
+        assert_eq!(json["timestamp"], "2026-04-01T00:00:00Z");
+
+        let deserialized: PolicyRule = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, rule);
+    }
+
+    #[test]
+    fn test_policy_serde_roundtrip() {
+        let policy = Policy {
+            id: "base-agent-limits".into(),
+            name: "Base Agent Safety Limits".into(),
+            version: 1,
+            created_at: "2026-03-22T10:00:00Z".into(),
+            rules: vec![
+                PolicyRule::DailySpendingLimit {
+                    max_native_units: "1000000000000000000".into(),
+                },
+                PolicyRule::AllowedChains {
+                    chain_ids: vec!["eip155:8453".into()],
+                },
+            ],
+            executable: None,
+            config: None,
+            action: PolicyAction::Deny,
+        };
+
+        let json = serde_json::to_string(&policy).unwrap();
+        let deserialized: Policy = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, "base-agent-limits");
+        assert_eq!(deserialized.rules.len(), 2);
+        assert!(deserialized.executable.is_none());
+    }
+
+    #[test]
+    fn test_policy_with_executable() {
+        let json = r#"{
+            "id": "sim-policy",
+            "name": "Simulation Policy",
+            "version": 1,
+            "created_at": "2026-03-22T10:00:00Z",
+            "rules": [],
+            "executable": "/usr/local/bin/simulate-tx",
+            "config": {"rpc": "https://mainnet.base.org"},
+            "action": "deny"
+        }"#;
+        let policy: Policy = serde_json::from_str(json).unwrap();
+        assert_eq!(policy.executable.unwrap(), "/usr/local/bin/simulate-tx");
+        assert!(policy.config.is_some());
+    }
+
+    #[test]
+    fn test_policy_context_serde() {
+        let ctx = PolicyContext {
+            chain_id: "eip155:8453".into(),
+            wallet_id: "3198bc9c-6672-5ab3-d995-4942343ae5b6".into(),
+            api_key_id: "7a2f1b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c".into(),
+            transaction: TransactionContext {
+                to: Some("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into()),
+                value: Some("100000000000000000".into()),
+                raw_hex: "0x02f8...".into(),
+                data: None,
+            },
+            spending: SpendingContext {
+                daily_total: "50000000000000000".into(),
+                date: "2026-03-22".into(),
+            },
+            timestamp: "2026-03-22T10:35:22Z".into(),
+        };
+
+        let json = serde_json::to_string(&ctx).unwrap();
+        let deserialized: PolicyContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.chain_id, "eip155:8453");
+        assert_eq!(
+            deserialized.transaction.to.unwrap(),
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C"
+        );
+        // data was None, should be absent from serialized form
+        assert!(!json.contains("\"data\""));
+    }
+
+    #[test]
+    fn test_policy_result_allowed() {
+        let result = PolicyResult::allowed();
+        assert!(result.allow);
+        assert!(result.reason.is_none());
+        assert!(result.policy_id.is_none());
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["allow"], true);
+        assert!(!json.as_object().unwrap().contains_key("reason"));
+    }
+
+    #[test]
+    fn test_policy_result_denied() {
+        let result = PolicyResult::denied(
+            "spending-limit",
+            "Daily spending limit exceeded: 0.95 / 1.0 ETH",
+        );
+        assert!(!result.allow);
+        assert_eq!(
+            result.reason.as_deref(),
+            Some("Daily spending limit exceeded: 0.95 / 1.0 ETH")
+        );
+        assert_eq!(result.policy_id.as_deref(), Some("spending-limit"));
+    }
+
+    #[test]
+    fn test_policy_action_serde() {
+        let action = PolicyAction::Deny;
+        let json = serde_json::to_value(&action).unwrap();
+        assert_eq!(json, "deny");
+
+        let deserialized: PolicyAction = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, PolicyAction::Deny);
+    }
+}
