@@ -340,12 +340,16 @@ Create a MoonPay deposit that generates multi-chain deposit addresses. Send cryp
 ```bash
 ows fund deposit --wallet "my-wallet"
 ows fund deposit --wallet "my-wallet" --chain base
+ows fund deposit --wallet "my-wallet" --chain bsc
+ows fund deposit --wallet "my-wallet" --chain bnb
 ```
+
+OWS uses `bsc` as the canonical chain name for BNB Smart Chain. The funding commands also accept `bnb` as an alias because MoonPay's funding APIs expect the network slug `bnb` for balance and deposit flows. See MoonPay's public currency catalog at `https://api.moonpay.com/v3/currencies` (`bnb_bsc`) and general developer docs at `https://dev.moonpay.com/`.
 
 | Flag | Description |
 |------|-------------|
 | `--wallet <NAME>` | Wallet name (required) |
-| `--chain <CHAIN>` | Target chain (default: base) |
+| `--chain <CHAIN>` | Target chain (default: base). Use `bsc` canonically; `bnb` is also accepted. |
 
 ### `ows fund balance`
 
@@ -353,12 +357,16 @@ Check token balances for a wallet on a given chain.
 
 ```bash
 ows fund balance --wallet "my-wallet" --chain base
+ows fund balance --wallet "my-wallet" --chain bsc
+ows fund balance --wallet "my-wallet" --chain bnb
 ```
+
+For BNB Chain, prefer `bsc` in OWS docs and automation. `bnb` is available as a compatibility alias for MoonPay-backed funding commands.
 
 | Flag | Description |
 |------|-------------|
 | `--wallet <NAME>` | Wallet name (required) |
-| `--chain <CHAIN>` | Chain to query (required) |
+| `--chain <CHAIN>` | Chain to query (required). Use `bsc` canonically; `bnb` is also accepted. |
 
 ## System Commands
 

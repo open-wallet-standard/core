@@ -42,12 +42,16 @@ Deposit crypto from any chain — it auto-converts to USDC on your target chain.
 
 ```bash
 ows fund deposit --wallet agent-treasury --chain base
+ows fund deposit --wallet agent-treasury --chain bsc
 ```
+
+OWS names BNB Smart Chain as `bsc`. The funding commands also accept `bnb` because MoonPay expects the `bnb` network slug behind the scenes.
 
 Check your balance:
 
 ```bash
 ows fund balance --wallet agent-treasury --chain base
+ows fund balance --wallet agent-treasury --chain bsc
 ```
 
 ## Pay for services
