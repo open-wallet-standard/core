@@ -76,6 +76,6 @@ case "$SCOPE" in
   --python) set_python_version ;;
   --node)   set_node_version ;;
   --rust)   set_rust_version ;;
-  --all)    set_python_version; set_node_version; set_rust_version; set_skill_version ;;
+  --all)    set_rust_version; set_python_version; set_node_version; set_skill_version ;;
   *) usage ;;
 esac
