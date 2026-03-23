@@ -1,6 +1,6 @@
 {
   "name": "@open-wallet-standard/core-linux-x64-gnu",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "os": [
     "linux"
   ],
