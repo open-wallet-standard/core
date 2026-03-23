@@ -1037,7 +1037,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "ows-core"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "chrono",
  "serde",
@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "ows-lib"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1070,7 +1070,7 @@ dependencies = [
 
 [[package]]
 name = "ows-python"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "ows-core",
  "ows-lib",
@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "ows-signer"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
