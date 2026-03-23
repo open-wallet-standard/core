@@ -1,6 +1,6 @@
 {
   "name": "@open-wallet-standard/core",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Node.js native bindings for the Open Wallet Standard",
   "main": "index.js",
   "types": "index.d.ts",
@@ -31,10 +31,10 @@
     "@napi-rs/cli": "^2.18.0"
   },
   "optionalDependencies": {
-    "@open-wallet-standard/core-linux-x64-gnu": "0.4.1",
-    "@open-wallet-standard/core-linux-arm64-gnu": "0.4.1",
-    "@open-wallet-standard/core-darwin-x64": "0.4.1",
-    "@open-wallet-standard/core-darwin-arm64": "0.4.1"
+    "@open-wallet-standard/core-linux-x64-gnu": "0.4.2",
+    "@open-wallet-standard/core-linux-arm64-gnu": "0.4.2",
+    "@open-wallet-standard/core-darwin-x64": "0.4.2",
+    "@open-wallet-standard/core-darwin-arm64": "0.4.2"
   },
   "license": "MIT",
   "files": [

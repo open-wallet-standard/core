@@ -1,7 +1,7 @@
 ---
 name: ows
 description: Secure, local-first multi-chain wallet management — create wallets, derive addresses, sign messages and transactions across EVM, Solana, Sui, Bitcoin, Cosmos, Tron, and TON via CLI, Node.js, or Python.
-version: 0.4.1
+version: 0.4.2
 metadata:
   openclaw:
     requires:

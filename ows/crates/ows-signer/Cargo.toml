@@ -1,6 +1,6 @@
 [package]
 name = "ows-signer"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 license = "MIT"
 description = "Cryptographic signing and key management for the Open Wallet Standard"
@@ -12,7 +12,7 @@ default = []
 fast-kdf = []
 
 [dependencies]
-ows-core = { path = "../ows-core", version = "=0.4.1" }
+ows-core = { path = "../ows-core", version = "=0.4.2" }
 k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
 ed25519-dalek = { version = "2", features = ["hazmat"] }
 coins-bip32 = "0.11"
