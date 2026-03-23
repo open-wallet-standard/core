@@ -115,11 +115,20 @@ jobs:
       - name: Verify Cargo.lock is up to date
         run: cargo metadata --locked --format-version 1 > /dev/null
 
+      - name: Create virtualenv
+        run: python -m venv .venv
+
       - name: Install Python dependencies
-        run: pip install maturin pytest
+        run: |
+          source .venv/bin/activate
+          pip install maturin pytest
 
       - name: Build native extension
-        run: maturin develop --features fast-kdf
+        run: |
+          source .venv/bin/activate
+          maturin develop --features fast-kdf
 
       - name: Run tests
-        run: pytest
+        run: |
+          source .venv/bin/activate
+          pytest
