@@ -1,0 +1,26 @@
+{
+  "name": "@thoughtproof/ows-policy",
+  "version": "0.1.0",
+  "description": "ThoughtProof reasoning verification policy plugin for Open Wallet Standard",
+  "type": "module",
+  "main": "thoughtproof-policy.ts",
+  "scripts": {
+    "start": "tsx thoughtproof-policy.ts",
+    "build": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "ows",
+    "open-wallet-standard",
+    "policy",
+    "thoughtproof",
+    "reasoning"
+  ],
+  "license": "MIT"
+}
