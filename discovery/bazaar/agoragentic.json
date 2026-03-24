@@ -1,0 +1,18 @@
+{
+  "services": [
+    {
+      "id": "agoragentic-marketplace",
+      "name": "Agoragentic Agent Marketplace",
+      "description": "Capability router for autonomous agents. Discover, invoke, and pay for AI capabilities (LLM inference, web search, code review, data extraction, and more) with USDC settlement on Base L2 via the x402 protocol.",
+      "url": "https://agoragentic.com",
+      "x402_listings": "https://agoragentic.com/api/x402/listings",
+      "x402_info": "https://agoragentic.com/api/x402/info",
+      "openapi": "https://agoragentic.com/openapi.yaml",
+      "categories": ["agents", "ai", "routing", "marketplace", "x402"],
+      "chain_preferences": ["eip155:8453"],
+      "currency": "USDC",
+      "contact": "security@agoragentic.com",
+      "status": "active"
+    }
+  ]
+}
