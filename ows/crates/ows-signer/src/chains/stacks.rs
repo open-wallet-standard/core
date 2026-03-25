@@ -128,9 +128,7 @@ impl StacksSigner {
         }
 
         // Add leading zero characters
-        for _ in 0..leading_zeros {
-            result.push('0');
-        }
+        result.extend(std::iter::repeat_n('0', leading_zeros));
 
         result.reverse();
         result.into_iter().collect()
