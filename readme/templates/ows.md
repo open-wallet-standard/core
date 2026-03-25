@@ -35,7 +35,7 @@ The bindings are **standalone** — they embed the Rust core via native FFI. No 
 import { createWallet, signMessage } from "@open-wallet-standard/core";
 
 const wallet = createWallet("my-wallet");
-console.log(wallet.accounts); // addresses for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, and Sui
+console.log(wallet.accounts); // addresses for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, Sui, and XRPL
 
 const sig = signMessage("my-wallet", "evm", "hello");
 console.log(sig.signature);
@@ -46,7 +46,7 @@ console.log(sig.signature);
 | Crate | Description |
 |-------|-------------|
 | `ows-core` | Types, CAIP-2/10 parsing, errors, config. Zero crypto dependencies. |
-| `ows-signer` | ChainSigner trait, HD derivation, address derivation for EVM, Solana, Sui, Bitcoin, Cosmos, Tron, TON, Spark, and Filecoin. |
+| `ows-signer` | ChainSigner trait, HD derivation, address derivation for EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, and Filecoin. |
 | `ows-lib` | Library interface used by language bindings and the CLI. |
 | `ows-pay` | x402 payment flows, service discovery, and funding helpers. |
 | `ows-cli` | The `ows` command-line tool. |
@@ -61,6 +61,7 @@ console.log(sig.signature);
 - **Tron** — secp256k1, base58check addresses
 - **TON** — Ed25519, raw/bounceable addresses
 - **Spark** (Bitcoin L2) — secp256k1, spark: prefixed addresses
+- **XRPL** — secp256k1, Base58Check r-addresses
 - **Filecoin** — secp256k1, f1 base32 addresses
 
 ## License

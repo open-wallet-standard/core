@@ -21,7 +21,7 @@ type AssetId = `${ChainId}:${string}`;
 // e.g. "eip155:8453:native" (ETH on Base)
 ```
 
-The `native` token refers to the chain's native currency (ETH, SOL, SUI, BTC, ATOM, TRX, TON, etc.).
+The `native` token refers to the chain's native currency (ETH, SOL, SUI, XRP, BTC, ATOM, TRX, TON, etc.).
 
 ## Chain Families
 
@@ -36,6 +36,7 @@ OWS groups chains into families that share a cryptographic curve and address der
 | Tron | secp256k1 | 195 | `m/44'/195'/0'/0/{index}` | Base58Check (`T...`) | `tron` |
 | TON | ed25519 | 607 | `m/44'/607'/{index}'` | Base64url wallet v5r1 (`UQ...`) | `ton` |
 | Sui | ed25519 | 784 | `m/44'/784'/{index}'/0'/0'` | `0x` + BLAKE2b-256 hex (32 bytes) | `sui` |
+| XRPL | secp256k1 | 144 | `m/44'/144'/0'/0/{index}` | Base58Check (`r...`) | `xrpl` |
 | Spark | secp256k1 | 8797555 | `m/84'/0'/0'/0/{index}` | `spark:` + compressed pubkey hex | `spark` |
 | Filecoin | secp256k1 | 461 | `m/44'/461'/0'/0/{index}` | `f1` + base32(blake2b-160) | `fil` |
 
@@ -65,6 +66,7 @@ Each network has a canonical chain identifier. Endpoint discovery and transport 
 | Tron | `tron:mainnet` |
 | TON | `ton:mainnet` |
 | Sui | `sui:mainnet` |
+| XRPL | `xrpl:testnet` |
 | Spark | `spark:mainnet` |
 | Filecoin | `fil:mainnet` |
 
@@ -88,6 +90,7 @@ cosmos    → cosmos:cosmoshub-4
 tron      → tron:mainnet
 ton       → ton:mainnet
 sui       → sui:mainnet
+xrpl      → xrpl:testnet
 spark     → spark:mainnet
 filecoin  → fil:mainnet
 ```
@@ -111,6 +114,7 @@ Master Seed (512 bits via PBKDF2)
     ├── m/44'/195'/0'/0/0   → Tron Account 0
     ├── m/44'/607'/0'       → TON Account 0
     ├── m/44'/784'/0'/0'/0' → Sui Account 0
+    ├── m/44'/144'/0'/0/0   → XRPL Account 0
     ├── m/84'/0'/0'/0/0     → Spark Account 0
     └── m/44'/461'/0'/0/0   → Filecoin Account 0
 ```

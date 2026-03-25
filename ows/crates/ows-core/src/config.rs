@@ -63,7 +63,10 @@ impl Config {
             "sui:mainnet".into(),
             "https://fullnode.mainnet.sui.io:443".into(),
         );
-        rpc.insert("xrpl:mainnet".into(), "https://xrplcluster.com".into());
+        rpc.insert(
+            "xrpl:mainnet".into(),
+            "https://s.altnet.rippletest.net:51234".into(),
+        );
         rpc
     }
 }

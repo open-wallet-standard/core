@@ -11,7 +11,7 @@ Signs a transaction without broadcasting it. Returns the signed transaction byte
 ```typescript
 interface SignRequest {
   walletId: WalletId;
-  chainId: ChainId;       // CAIP-2 or supported shorthand alias
+  chainId: ChainId; // CAIP-2 or supported shorthand alias
   transactionHex: string; // hex-encoded serialized transaction bytes
 }
 
@@ -22,6 +22,7 @@ interface SignResult {
 ```
 
 **Flow:**
+
 1. Resolve `walletId` → wallet file
 2. Resolve `chainId` → chain plugin
 3. Authenticate caller: owner (passphrase/passkey) or agent (API key)
@@ -65,16 +66,17 @@ interface SignMessageRequest {
   chainId: ChainId;
   message: string | Uint8Array;
   encoding?: "utf8" | "hex";
-  typedData?: TypedData;               // EIP-712 typed data (EVM only)
+  typedData?: TypedData; // EIP-712 typed data (EVM only)
 }
 
 interface SignMessageResult {
   signature: string;
-  recoveryId?: number;                 // for secp256k1 recovery
+  recoveryId?: number; // for secp256k1 recovery
 }
 ```
 
 Message signing follows chain-specific conventions:
+
 - **EVM**: `personal_sign` (EIP-191) or `eth_signTypedData_v4` (EIP-712)
 - **Solana**: Ed25519 signature over the raw message bytes
 - **Sui**: Intent-prefixed (scope=3) BLAKE2b-256 digest, Ed25519 signature
@@ -88,8 +90,8 @@ Signs EIP-712 typed structured data. This is a dedicated operation separate from
 ```typescript
 interface SignTypedDataRequest {
   walletId: WalletId;
-  chainId: ChainId;                    // Must be an EVM chain
-  typedDataJson: string;               // JSON string of EIP-712 typed data
+  chainId: ChainId; // Must be an EVM chain
+  typedDataJson: string; // JSON string of EIP-712 typed data
 }
 ```
 
@@ -99,17 +101,17 @@ The `typedDataJson` field must be a JSON string containing the standard EIP-712 
 {
   "types": {
     "EIP712Domain": [
-      {"name": "name", "type": "string"},
-      {"name": "chainId", "type": "uint256"}
+      { "name": "name", "type": "string" },
+      { "name": "chainId", "type": "uint256" }
     ],
     "Transfer": [
-      {"name": "to", "type": "address"},
-      {"name": "amount", "type": "uint256"}
+      { "name": "to", "type": "address" },
+      { "name": "amount", "type": "uint256" }
     ]
   },
   "primaryType": "Transfer",
-  "domain": {"name": "MyDApp", "chainId": "1"},
-  "message": {"to": "0xabc...", "amount": "1000"}
+  "domain": { "name": "MyDApp", "chainId": "1" },
+  "message": { "to": "0xabc...", "amount": "1000" }
 }
 ```
 
@@ -121,16 +123,16 @@ Current OWS implementations accept **already-serialized transaction bytes encode
 
 ## Error Handling
 
-| Code | Meaning |
-|---|---|
-| `WALLET_NOT_FOUND` | No wallet with the given ID exists |
-| `CHAIN_NOT_SUPPORTED` | No signer is available for the given chain |
-| `INVALID_PASSPHRASE` | Vault passphrase was incorrect |
-| `INVALID_INPUT` | Request payload or arguments were malformed |
-| `CAIP_PARSE_ERROR` | The chain identifier could not be parsed |
-| `POLICY_DENIED` | Request was rejected by the policy engine |
-| `API_KEY_NOT_FOUND` | The provided API token did not resolve to a key |
-| `API_KEY_EXPIRED` | The API key has expired |
+| Code                  | Meaning                                         |
+| --------------------- | ----------------------------------------------- |
+| `WALLET_NOT_FOUND`    | No wallet with the given ID exists              |
+| `CHAIN_NOT_SUPPORTED` | No signer is available for the given chain      |
+| `INVALID_PASSPHRASE`  | Vault passphrase was incorrect                  |
+| `INVALID_INPUT`       | Request payload or arguments were malformed     |
+| `CAIP_PARSE_ERROR`    | The chain identifier could not be parsed        |
+| `POLICY_DENIED`       | Request was rejected by the policy engine       |
+| `API_KEY_NOT_FOUND`   | The provided API token did not resolve to a key |
+| `API_KEY_EXPIRED`     | The API key has expired                         |
 
 ## Concurrency
 

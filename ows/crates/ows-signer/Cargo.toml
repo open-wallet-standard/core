@@ -13,6 +13,7 @@ fast-kdf = []
 
 [dependencies]
 ows-core = { path = "../ows-core", version = "=1.0.0" }
+xrpl-rust = { version = "1.0.0", default-features = false, features = ["core"] }
 k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
 ed25519-dalek = { version = "2", features = ["hazmat"] }
 coins-bip32 = "0.11"

@@ -92,7 +92,7 @@ const solAddr = deriveAddress(mnemonic, "solana");
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `mnemonic` | `string` | &mdash; | BIP-39 mnemonic phrase |
-| `chain` | `string` | &mdash; | `"evm"`, `"solana"`, `"sui"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"` |
+| `chain` | `string` | &mdash; | `"evm"`, `"solana"`, `"xrpl"`, `"sui"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"` |
 | `index` | `number` | `0` | Account index in derivation path |
 
 **Returns:** `string`
@@ -114,6 +114,7 @@ console.log(wallet.accounts);
 //   { chainId: "tron:mainnet", address: "TKLm...", derivationPath: "m/44'/195'/0'/0/0" },
 //   { chainId: "ton:mainnet", address: "UQ...", derivationPath: "m/44'/607'/0'" },
 //   { chainId: "sui:mainnet", address: "0x...", derivationPath: "m/44'/784'/0'/0'/0'" },
+//   { chainId: "xrpl:testnet", address: "r...", derivationPath: "m/44'/144'/0'/0/0" },
 //   { chainId: "fil:mainnet", address: "f1...", derivationPath: "m/44'/461'/0'/0/0" },
 // ]
 ```
@@ -188,7 +189,7 @@ const keys = JSON.parse(keysJson);
 
 #### `importWalletMnemonic(name, mnemonic, passphrase?, index?, vaultPath?)`
 
-Import a wallet from a BIP-39 mnemonic. Derives all 8 chain accounts via HD paths.
+Import a wallet from a BIP-39 mnemonic. Derives all 9 chain accounts via HD paths.
 
 ```javascript
 const wallet = importWalletMnemonic("imported", "goose puzzle decorate ...");
@@ -198,7 +199,7 @@ const wallet = importWalletMnemonic("imported", "goose puzzle decorate ...");
 
 #### `importWalletPrivateKey(name, privateKeyHex, passphrase?, vaultPath?, chain?, secp256k1Key?, ed25519Key?)`
 
-Import a wallet from a hex-encoded private key. All 8 chains are supported: the provided key is used for its curve's chains, and a random key is generated for the other curve.
+Import a wallet from a hex-encoded private key. All 9 chains are supported: the provided key is used for its curve's chains, and a random key is generated for the other curve.
 
 The optional `chain` parameter specifies which chain the key originates from to determine the curve. Defaults to `"evm"` (secp256k1).
 
@@ -207,7 +208,7 @@ Alternatively, provide explicit keys for each curve via `secp256k1Key` and `ed25
 ```javascript
 // Import an EVM private key — generates a random Ed25519 key for Solana/Sui/TON
 const wallet = importWalletPrivateKey("from-evm", "4c0883a691...");
-console.log(wallet.accounts.length); // => 8
+console.log(wallet.accounts.length); // => 9
 
 // Import a Solana private key — generates a random secp256k1 key for EVM/BTC/etc.
 const wallet2 = importWalletPrivateKey(
