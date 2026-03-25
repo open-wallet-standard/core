@@ -301,4 +301,144 @@ mod tests {
         let sig2 = signer.sign_message(&privkey, message).unwrap();
         assert_eq!(sig1.signature, sig2.signature);
     }
+
+    // ================================================================
+    // Issue 2 regression tests: signing full tx vs message-only
+    // ================================================================
+
+    #[test]
+    fn test_signing_full_tx_without_extraction_produces_wrong_signature() {
+        // Demonstrates the footgun: if you sign the full serialized tx
+        // (including sig-slot header) the signature won't verify against
+        // just the message portion.
+        let privkey =
+            hex::decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+                .unwrap();
+        let signer = SolanaSigner;
+
+        let message = b"fake_message_payload";
+        let mut full_tx = vec![0x01]; // 1 sig slot
+        full_tx.extend_from_slice(&[0u8; 64]); // placeholder
+        full_tx.extend_from_slice(message);
+
+        // Sign the FULL tx bytes (wrong — includes header + sig slot)
+        let output = signer.sign_transaction(&privkey, &full_tx).unwrap();
+
+        // The signature should NOT verify against just the message portion
+        let signing_key = SigningKey::from_bytes(&privkey.try_into().unwrap());
+        let verifying_key = signing_key.verifying_key();
+        let sig = ed25519_dalek::Signature::from_bytes(&output.signature.try_into().unwrap());
+        assert!(
+            verifying_key.verify(message, &sig).is_err(),
+            "signing full tx bytes should produce a signature that does NOT \
+             verify against the message portion alone"
+        );
+    }
+
+    #[test]
+    fn test_extract_then_sign_produces_valid_signature() {
+        // The correct pipeline: extract → sign → verify
+        let privkey =
+            hex::decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+                .unwrap();
+        let signer = SolanaSigner;
+
+        let message = b"correct pipeline test";
+        let mut full_tx = vec![0x01];
+        full_tx.extend_from_slice(&[0u8; 64]);
+        full_tx.extend_from_slice(message);
+
+        let signable = signer.extract_signable_bytes(&full_tx).unwrap();
+        let output = signer.sign_transaction(&privkey, signable).unwrap();
+
+        let signing_key = SigningKey::from_bytes(&privkey.try_into().unwrap());
+        let verifying_key = signing_key.verifying_key();
+        let sig = ed25519_dalek::Signature::from_bytes(&output.signature.try_into().unwrap());
+        verifying_key
+            .verify(message, &sig)
+            .expect("extract → sign should produce a valid signature over the message");
+    }
+
+    #[test]
+    fn test_extract_signable_bytes_with_multiple_sig_slots() {
+        let signer = SolanaSigner;
+
+        // 2 signature slots
+        let mut tx = vec![0x02]; // 2 sig slots
+        tx.extend_from_slice(&[0u8; 128]); // 2 × 64 bytes
+        tx.extend_from_slice(b"multi_sig_message");
+
+        let signable = signer.extract_signable_bytes(&tx).unwrap();
+        assert_eq!(signable, b"multi_sig_message");
+    }
+
+    #[test]
+    fn test_extract_signable_bytes_with_three_sig_slots() {
+        let signer = SolanaSigner;
+
+        let mut tx = vec![0x03]; // 3 sig slots
+        tx.extend_from_slice(&[0u8; 192]); // 3 × 64 bytes
+        tx.extend_from_slice(b"three_sig_msg");
+
+        let signable = signer.extract_signable_bytes(&tx).unwrap();
+        assert_eq!(signable, b"three_sig_msg");
+    }
+
+    #[test]
+    fn test_encode_signed_transaction_preserves_other_sig_slots() {
+        let signer = SolanaSigner;
+
+        // 2 signature slots — second one has data (e.g. from another signer)
+        let mut tx = vec![0x02]; // 2 sig slots
+        tx.extend_from_slice(&[0u8; 64]); // first sig slot (empty)
+        tx.extend_from_slice(&[0xAA; 64]); // second sig slot (pre-filled)
+        tx.extend_from_slice(b"multi_sig_message");
+
+        let fake_sig = SignOutput {
+            signature: vec![0xBB; 64],
+            recovery_id: None,
+            public_key: None,
+        };
+
+        let signed = signer.encode_signed_transaction(&tx, &fake_sig).unwrap();
+
+        // First sig slot should be replaced
+        assert_eq!(&signed[1..65], &[0xBB; 64]);
+        // Second sig slot should be preserved
+        assert_eq!(&signed[65..129], &[0xAA; 64]);
+        // Message should be preserved
+        assert_eq!(&signed[129..], b"multi_sig_message");
+    }
+
+    #[test]
+    fn test_full_pipeline_with_multiple_sig_slots() {
+        let privkey =
+            hex::decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+                .unwrap();
+        let signer = SolanaSigner;
+
+        let message = b"multi_slot_pipeline";
+        let mut tx = vec![0x02]; // 2 sig slots
+        tx.extend_from_slice(&[0u8; 64]); // first (ours)
+        tx.extend_from_slice(&[0xCC; 64]); // second (other signer)
+        tx.extend_from_slice(message);
+
+        let signable = signer.extract_signable_bytes(&tx).unwrap();
+        let output = signer.sign_transaction(&privkey, signable).unwrap();
+        let signed = signer.encode_signed_transaction(&tx, &output).unwrap();
+
+        // Verify structure
+        assert_eq!(signed[0], 0x02); // num_sigs preserved
+        assert_eq!(&signed[1..65], &output.signature[..]); // our sig
+        assert_eq!(&signed[65..129], &[0xCC; 64]); // other sig preserved
+        assert_eq!(&signed[129..], message); // message preserved
+
+        // Verify signature correctness
+        let signing_key = SigningKey::from_bytes(&privkey.try_into().unwrap());
+        let verifying_key = signing_key.verifying_key();
+        let sig = ed25519_dalek::Signature::from_bytes(&output.signature.try_into().unwrap());
+        verifying_key
+            .verify(message, &sig)
+            .expect("signature should verify against the message portion");
+    }
 }

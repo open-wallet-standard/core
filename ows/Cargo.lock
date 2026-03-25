@@ -1355,6 +1355,7 @@ name = "ows-lib"
 version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
+ "bs58",
  "chrono",
  "ed25519-dalek",
  "getrandom 0.2.17",
