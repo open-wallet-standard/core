@@ -304,11 +304,9 @@ mod integration_tests {
         }
     }
 
-    // ==========================================================================
     // BIP32-Ed25519 Peikert (g=9) test vectors
     // Verified against xHD-Wallet-API-ts (algorandfoundation/xHD-Wallet-API-ts)
     // All public keys match the passing TypeScript test suite (122/122 tests).
-    // ==========================================================================
 
     const ALGO_MNEMONIC: &str = "salon zoo engage submit smile frost later decide wing sight chaos renew lizard rely canal coral scene hobby scare step bus leaf tobacco slice";
 
@@ -471,6 +469,7 @@ mod integration_tests {
         let seed = algo_seed();
         let key =
             HdDeriver::derive(seed.expose(), "m/44'/283'/0'/0/0", Curve::Ed25519Bip32).unwrap();
+        let key = HdDeriver::derive(seed.expose(), "m/44'/283'/0'/0/0", Curve::Ed25519Bip32).unwrap();
         let signer = signer_for_chain(ChainType::Avm);
 
         let message = b"test message";
