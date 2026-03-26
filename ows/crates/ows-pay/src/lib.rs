@@ -20,7 +20,7 @@ pub mod wallet;
 mod x402;
 
 pub use error::{PayError, PayErrorCode};
-pub use types::{DiscoverResult, PayResult, PaymentInfo, Protocol, Service};
+pub use types::{DiscoverResult, FundProvider, FundRequest, PayResult, PaymentInfo, Protocol, Service};
 pub use wallet::{Account, WalletAccess};
 
 /// Make an HTTP request with automatic payment handling.

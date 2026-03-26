@@ -1,7 +1,7 @@
 use crate::error::{PayError, PayErrorCode};
 use crate::types::{
-    FundResult, MoonPayBalanceRequest, MoonPayBalanceResponse, MoonPayDepositRequest,
-    MoonPayDepositResponse, TokenBalance,
+    FundProvider, FundRequest, FundResult, MoonPayBalanceRequest, MoonPayBalanceResponse,
+    MoonPayDepositRequest, MoonPayDepositResponse, TokenBalance,
 };
 
 const MOONPAY_API: &str = "https://agents.moonpay.com";
@@ -106,13 +106,23 @@ fn resolve_moonpay_chain(chain: Option<&str>) -> Result<&'static MoonPayChain, P
 }
 
 /// Create a MoonPay deposit that auto-converts incoming crypto to USDC.
-pub async fn fund(
+pub async fn deposit(
+    request: &FundRequest,
+) -> Result<FundResult, PayError> {
+    match request.provider {
+        FundProvider::MoonPay => {
+            moonpay_deposit(&request.destination_address, request.chain.as_deref(), &request.asset)
+                .await
+        }
+    }
+}
+
+async fn moonpay_deposit(
     wallet_address: &str,
     chain: Option<&str>,
-    token: Option<&str>,
+    token: &str,
 ) -> Result<FundResult, PayError> {
     let mapping = resolve_moonpay_chain(chain)?;
-    let token = token.unwrap_or("USDC");
 
     let client = reqwest::Client::new();
     let req = MoonPayDepositRequest {
@@ -140,22 +150,35 @@ pub async fn fund(
     let deposit: MoonPayDepositResponse = resp.json().await?;
 
     Ok(FundResult {
+        provider: FundProvider::MoonPay,
         deposit_id: deposit.id,
-        deposit_url: deposit.deposit_url,
+        action_url: Some(deposit.deposit_url),
         wallets: deposit
             .wallets
             .iter()
             .map(|w| (w.chain.clone(), w.address.clone()))
             .collect(),
         instructions: deposit.instructions,
+        details: vec![
+            ("asset".into(), token.to_string()),
+            ("chain".into(), mapping.display_name.to_string()),
+        ],
     })
 }
 
 /// Check token balances for a wallet address via MoonPay.
 pub async fn get_balances(
+    provider: FundProvider,
     wallet_address: &str,
     chain: Option<&str>,
 ) -> Result<Vec<TokenBalance>, PayError> {
+    if provider != FundProvider::MoonPay {
+        return Err(PayError::new(
+            PayErrorCode::InvalidInput,
+            format!("balance is not supported for provider {}", provider),
+        ));
+    }
+
     let mapping = resolve_moonpay_chain(chain)?;
     let client = reqwest::Client::new();
 
