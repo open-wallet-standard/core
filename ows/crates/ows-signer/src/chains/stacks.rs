@@ -3,10 +3,18 @@ use crate::traits::{ChainSigner, SignOutput, SignerError};
 use k256::ecdsa::SigningKey;
 use ows_core::ChainType;
 use ripemd::Ripemd160;
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512_256};
 
 /// Crockford Base32 alphabet used by c32check encoding.
 const C32_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// Byte offset of the 65-byte VRS signature in a serialized Stacks transaction.
+/// Layout: version(1) + chain_id(4) + auth_type(1) + hash_mode(1) + signer(20) +
+///         nonce(8) + fee(8) + key_encoding(1) = 44
+///
+/// This layout applies to standard single-sig (P2PKH) spending conditions only.
+/// Multi-sig and sponsored transactions have a different auth structure.
+pub const STACKS_SIG_OFFSET: usize = 44;
 
 /// Stacks chain signer (c32check addresses, secp256k1).
 pub struct StacksSigner {
@@ -149,10 +157,18 @@ impl ChainSigner for StacksSigner {
     }
 
     fn derive_address(&self, private_key: &[u8]) -> Result<String, SignerError> {
-        let signing_key = Self::signing_key(private_key)?;
+        // Stacks convention: 33-byte key (trailing 0x01) → compressed pubkey,
+        // 32-byte key → uncompressed pubkey. Matches @stacks/transactions behavior.
+        let (key_bytes, compressed) = if private_key.len() == 33 && private_key[32] == 0x01 {
+            (&private_key[..32], true)
+        } else {
+            (private_key, false)
+        };
+
+        let signing_key = Self::signing_key(key_bytes)?;
         let verifying_key = signing_key.verifying_key();
-        let pubkey_compressed = verifying_key.to_encoded_point(true);
-        let pubkey_bytes = pubkey_compressed.as_bytes();
+        let pubkey_point = verifying_key.to_encoded_point(compressed);
+        let pubkey_bytes = pubkey_point.as_bytes();
 
         let hash = Self::hash160(pubkey_bytes);
         let address = Self::c32check_encode(self.version, &hash);
@@ -168,13 +184,22 @@ impl ChainSigner for StacksSigner {
             )));
         }
 
-        let signing_key = Self::signing_key(private_key)?;
+        let key_bytes = if private_key.len() == 33 && private_key[32] == 0x01 {
+            &private_key[..32]
+        } else {
+            private_key
+        };
+
+        let signing_key = Self::signing_key(key_bytes)?;
         let (signature, recovery_id) = signing_key
             .sign_prehash_recoverable(message)
             .map_err(|e| SignerError::SigningFailed(e.to_string()))?;
 
-        let mut sig_bytes = signature.to_bytes().to_vec();
+        // Stacks uses VRS format: recovery_id (1 byte) || r (32 bytes) || s (32 bytes)
+        let r_s = signature.to_bytes();
+        let mut sig_bytes = Vec::with_capacity(65);
         sig_bytes.push(recovery_id.to_byte());
+        sig_bytes.extend_from_slice(&r_s);
 
         Ok(SignOutput {
             signature: sig_bytes,
@@ -188,12 +213,85 @@ impl ChainSigner for StacksSigner {
         private_key: &[u8],
         tx_bytes: &[u8],
     ) -> Result<SignOutput, SignerError> {
-        let hash = Sha256::digest(Sha256::digest(tx_bytes));
-        self.sign(private_key, &hash)
+        // Stacks transaction signing matches @stacks/transactions:
+        //   1. Clear auth fields (nonce, fee, key_encoding, signature) to get "initial" form
+        //   2. initial_sighash = SHA-512/256(cleared_tx)
+        //   3. presign_hash = SHA-512/256(initial_sighash || auth_type || fee || nonce)
+        //   4. sign(presign_hash)
+        if tx_bytes.len() < STACKS_SIG_OFFSET + 65 {
+            return Err(SignerError::InvalidTransaction(
+                "stacks transaction too short".into(),
+            ));
+        }
+
+        let auth_type = tx_bytes[5];
+        let nonce = &tx_bytes[27..35];
+        let fee = &tx_bytes[35..43];
+
+        // 1. Clear auth fields for initial sighash (matching intoInitialSighashAuth)
+        //    clearCondition zeros: nonce, fee, signature. NOT key_encoding.
+        let mut cleared = tx_bytes.to_vec();
+        // Zero nonce (bytes 27-34)
+        cleared[27..35].fill(0);
+        // Zero fee (bytes 35-42)
+        cleared[35..43].fill(0);
+        // key_encoding (byte 43) is NOT cleared — matches @stacks/transactions
+        // Zero signature (bytes 44-108)
+        cleared[STACKS_SIG_OFFSET..STACKS_SIG_OFFSET + 65].fill(0);
+
+        // 2. Initial sighash
+        let initial_sighash = Sha512_256::digest(&cleared);
+
+        // 3. Presign hash: SHA-512/256(sighash || auth_type || fee || nonce)
+        let mut presign_input = Vec::with_capacity(32 + 1 + 8 + 8);
+        presign_input.extend_from_slice(&initial_sighash);
+        presign_input.push(auth_type);
+        presign_input.extend_from_slice(fee);
+        presign_input.extend_from_slice(nonce);
+        let presign_hash = Sha512_256::digest(&presign_input);
+
+        self.sign(private_key, &presign_hash)
+    }
+
+    fn encode_signed_transaction(
+        &self,
+        tx_bytes: &[u8],
+        signature: &SignOutput,
+    ) -> Result<Vec<u8>, SignerError> {
+        if signature.signature.len() != 65 {
+            return Err(SignerError::InvalidTransaction(
+                "expected 65-byte VRS signature".into(),
+            ));
+        }
+        if tx_bytes.len() < STACKS_SIG_OFFSET + 65 {
+            return Err(SignerError::InvalidTransaction(
+                "stacks transaction too short".into(),
+            ));
+        }
+
+        // Copy the unsigned tx and inject the VRS signature at the auth offset
+        let mut signed = tx_bytes.to_vec();
+        signed[STACKS_SIG_OFFSET..STACKS_SIG_OFFSET + 65]
+            .copy_from_slice(&signature.signature);
+        Ok(signed)
     }
 
     fn sign_message(&self, private_key: &[u8], message: &[u8]) -> Result<SignOutput, SignerError> {
-        let hash = Sha256::digest(Sha256::digest(message));
+        // Stacks message signing: SHA-256 of prefixed message
+        // Format: 0x17 + "Stacks Signed Message:\n" + length_byte + message
+        if message.len() > 255 {
+            return Err(SignerError::InvalidMessage(
+                "stacks message signing supports max 255 bytes (single-byte length prefix)".into(),
+            ));
+        }
+
+        let prefix = b"\x17Stacks Signed Message:\n";
+        let mut data = Vec::with_capacity(prefix.len() + 1 + message.len());
+        data.extend_from_slice(prefix);
+        data.push(message.len() as u8);
+        data.extend_from_slice(message);
+
+        let hash = Sha256::digest(&data);
         self.sign(private_key, &hash)
     }
 
@@ -252,10 +350,20 @@ mod tests {
     }
 
     #[test]
-    fn test_known_address_generator_point() {
-        // Private key = 1 (secp256k1 generator point)
-        // Verified against reference c32check implementation
+    fn test_known_address_generator_point_uncompressed() {
+        // Private key = 1 (secp256k1 generator point), 32 bytes → uncompressed pubkey
+        // Verified against @stacks/transactions getAddressFromPrivateKey
         let privkey = test_privkey();
+        let address = StacksSigner::mainnet().derive_address(&privkey).unwrap();
+        assert_eq!(address, "SP28V4JZSYMM8ACMP1B38FAXG6M97P798MMKY9DW1");
+    }
+
+    #[test]
+    fn test_known_address_generator_point_compressed() {
+        // Private key = 1 with 0x01 suffix → compressed pubkey
+        // Verified against @stacks/transactions getAddressFromPrivateKey(key + '01')
+        let mut privkey = test_privkey();
+        privkey.push(0x01);
         let address = StacksSigner::mainnet().derive_address(&privkey).unwrap();
         assert_eq!(address, "SP1THWXQ8368SDN2MJGE4BMDKMCHZ2GSVTS1X0BPM");
     }
@@ -279,12 +387,70 @@ mod tests {
     }
 
     #[test]
+    fn test_sign_message_hash_matches_stacks_js() {
+        // Verify the message hash matches @stacks/encryption hashMessage("hello stacks")
+        // hashMessage = SHA-256(0x17 + "Stacks Signed Message:\n" + len + message)
+        let prefix = b"\x17Stacks Signed Message:\n";
+        let message = b"hello stacks";
+        let mut data = Vec::new();
+        data.extend_from_slice(prefix);
+        data.push(message.len() as u8);
+        data.extend_from_slice(message);
+
+        let hash = Sha256::digest(&data);
+        let hash_hex = hex::encode(hash);
+        // This value was verified against @stacks/encryption hashMessage("hello stacks")
+        assert_eq!(
+            hash_hex,
+            "ce0bff208ed52c820b75cbe920554a6ae3eaba703182aa15051eb108ebdca4c4"
+        );
+    }
+
+    #[test]
     fn test_sign_transaction() {
         let privkey = test_privkey();
         let signer = StacksSigner::mainnet();
-        let result = signer.sign_transaction(&privkey, b"fake tx data").unwrap();
-        assert!(!result.signature.is_empty());
+        // Minimal valid unsigned tx: 180 bytes with zeroed signature at offset 44
+        let mut fake_tx = vec![0u8; 180];
+        fake_tx[5] = 0x04; // auth_type = Standard
+        let result = signer.sign_transaction(&privkey, &fake_tx).unwrap();
+        assert_eq!(result.signature.len(), 65); // VRS
         assert!(result.recovery_id.is_some());
+    }
+
+    #[test]
+    fn test_encode_signed_transaction() {
+        let privkey = test_privkey();
+        let signer = StacksSigner::mainnet();
+        let mut fake_tx = vec![0u8; 180];
+        fake_tx[5] = 0x04;
+        let output = signer.sign_transaction(&privkey, &fake_tx).unwrap();
+        let signed = signer
+            .encode_signed_transaction(&fake_tx, &output)
+            .unwrap();
+        // Same length, signature injected at offset 44
+        assert_eq!(signed.len(), 180);
+        assert_eq!(&signed[STACKS_SIG_OFFSET..STACKS_SIG_OFFSET + 65], &output.signature[..]);
+        // Rest of tx unchanged
+        assert_eq!(&signed[..STACKS_SIG_OFFSET], &fake_tx[..STACKS_SIG_OFFSET]);
+        assert_eq!(&signed[STACKS_SIG_OFFSET + 65..], &fake_tx[STACKS_SIG_OFFSET + 65..]);
+    }
+
+    #[test]
+    fn test_sign_message_rejects_long_message() {
+        let privkey = test_privkey();
+        let signer = StacksSigner::mainnet();
+        let long_msg = vec![0x41u8; 256];
+        let result = signer.sign_message(&privkey, &long_msg);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sign_transaction_rejects_short_input() {
+        let privkey = test_privkey();
+        let signer = StacksSigner::mainnet();
+        let result = signer.sign_transaction(&privkey, b"too short");
+        assert!(result.is_err());
     }
 
     #[test]
@@ -294,4 +460,5 @@ mod tests {
         let result = signer.sign(&privkey, b"too short");
         assert!(result.is_err());
     }
+
 }
