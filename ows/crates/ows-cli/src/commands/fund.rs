@@ -1,98 +1,109 @@
 use crate::CliError;
-use ows_lib::types::AccountInfo;
+use ows_pay::{FundProvider, FundRequest};
 
-/// Returns the wallet account matching the target funding chain.
-fn find_account_for_chain<'a>(
-    accounts: &'a [AccountInfo],
-    chain: &str,
-) -> Result<&'a AccountInfo, CliError> {
-    let chain_prefix = match chain {
-        "solana" => "solana:",
-        _ => "eip155:",
-    };
+fn wallet_address_for_chain(wallet_name: &str, chain: &str) -> Result<String, CliError> {
+    let wallet = ows_lib::get_wallet(wallet_name, None)?;
+    let parsed = crate::parse_chain(chain)?;
 
-    accounts
+    wallet
+        .accounts
         .iter()
-        .find(|a| a.chain_id.starts_with(chain_prefix))
+        .find(|a| a.chain_id == parsed.chain_id)
+        .map(|a| a.address.clone())
         .ok_or_else(|| {
-            CliError::InvalidArgs(format!("wallet has no account for chain \"{chain}\""))
+            CliError::InvalidArgs(format!(
+                "wallet has no account for chain {} ({})",
+                parsed.name, parsed.chain_id
+            ))
         })
 }
 
-/// `ows fund buy --wallet <name> [--chain base] [--token USDC]`
-///
-/// Creates a MoonPay deposit that generates multi-chain deposit addresses.
-/// Anyone can send crypto from any chain — it auto-converts to the target token.
-pub fn run(wallet_name: &str, chain: Option<&str>, token: Option<&str>) -> Result<(), CliError> {
-    let wallet = ows_lib::get_wallet(wallet_name, None)?;
-    let chain_name = chain.unwrap_or("base");
+/// `ows fund deposit --provider moonpay --wallet <name> --asset USDC --chain base`
+pub fn run(
+    provider: &str,
+    wallet_name: &str,
+    chain: Option<&str>,
+    asset: Option<&str>,
+) -> Result<(), CliError> {
+    let provider: FundProvider = provider.parse().map_err(CliError::InvalidArgs)?;
+    let asset = asset.unwrap_or("USDC");
+    let chain_name = match chain {
+        Some(chain) => chain,
+        None => "base",
+    };
+    let address = wallet_address_for_chain(wallet_name, chain_name)?;
 
-    let account = find_account_for_chain(&wallet.accounts, chain_name)?;
-    let address = &account.address;
-    let token_name = token.unwrap_or("USDC");
-
-    eprintln!("Creating deposit for wallet \"{wallet_name}\" ({address})");
-    eprintln!("Target: {token_name} on {chain_name}");
+    eprintln!(
+        "Creating funding flow with provider \"{provider}\" for wallet \"{wallet_name}\" ({address})"
+    );
+    eprintln!("Asset: {asset}");
+    eprintln!("Destination chain: {chain_name}");
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| CliError::InvalidArgs(format!("tokio: {e}")))?;
 
-    let result = rt.block_on(ows_pay::fund::fund(
-        address,
-        Some(chain_name),
-        Some(token_name),
-    ))?;
+    let result = rt.block_on(ows_pay::fund::deposit(&FundRequest {
+        provider,
+        destination_address: address,
+        asset: asset.to_string(),
+        chain: Some(chain_name.to_string()),
+    }))?;
 
     eprintln!();
-    eprintln!("Deposit created (ID: {})", result.deposit_id);
-    eprintln!();
+    eprintln!(
+        "Funding flow created via {} (ID: {})",
+        result.provider, result.deposit_id
+    );
 
-    // Show deposit addresses.
-    if !result.wallets.is_empty() {
-        eprintln!("Send crypto to any of these addresses:");
-        for (chain, addr) in &result.wallets {
-            eprintln!("  {chain:>10}  {addr}");
-        }
+    if !result.details.is_empty() {
         eprintln!();
+        for (key, value) in &result.details {
+            eprintln!("{key:>16}: {value}");
+        }
     }
 
+    if !result.wallets.is_empty() {
+        eprintln!();
+        eprintln!("Relevant addresses:");
+        for (kind, addr) in &result.wallets {
+            eprintln!("  {kind:>10}  {addr}");
+        }
+    }
+
+    eprintln!();
     eprintln!("{}", result.instructions);
     eprintln!();
 
-    // Print the deposit URL (opens in browser for a web flow).
-    println!("{}", result.deposit_url);
+    if let Some(url) = &result.action_url {
+        println!("{url}");
 
-    // Try to open in browser.
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("open")
-            .arg(&result.deposit_url)
-            .spawn();
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let _ = std::process::Command::new("xdg-open")
-            .arg(&result.deposit_url)
-            .spawn();
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open").arg(url).spawn();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+        }
     }
 
     Ok(())
 }
 
-/// `ows fund balance --wallet <name> [--chain base]`
-///
-/// Check token balances via MoonPay.
-pub fn balance(wallet_name: &str, chain: Option<&str>) -> Result<(), CliError> {
-    let wallet = ows_lib::get_wallet(wallet_name, None)?;
+/// `ows fund balance --provider moonpay --wallet <name> --chain base`
+pub fn balance(provider: &str, wallet_name: &str, chain: Option<&str>) -> Result<(), CliError> {
+    let provider: FundProvider = provider.parse().map_err(CliError::InvalidArgs)?;
     let chain_name = chain.unwrap_or("base");
-
-    let account = find_account_for_chain(&wallet.accounts, chain_name)?;
-    let address = &account.address;
+    let address = wallet_address_for_chain(wallet_name, chain_name)?;
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| CliError::InvalidArgs(format!("tokio: {e}")))?;
 
-    let balances = rt.block_on(ows_pay::fund::get_balances(address, Some(chain_name)))?;
+    let balances = rt.block_on(ows_pay::fund::get_balances(
+        provider,
+        &address,
+        Some(chain_name),
+    ))?;
 
     if balances.is_empty() {
         eprintln!("No tokens found for {address} on {chain_name}");
@@ -109,4 +120,8 @@ pub fn balance(wallet_name: &str, chain: Option<&str>) -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+pub fn providers() {
+    println!("moonpay  fiat/hosted deposit flow into wallet tokens on supported EVM chains");
 }

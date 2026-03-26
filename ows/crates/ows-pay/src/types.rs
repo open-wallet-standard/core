@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 // ===========================================================================
 // Unified public types
@@ -206,6 +207,44 @@ pub struct Pagination {
 // MoonPay wire types
 // ===========================================================================
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FundProvider {
+    MoonPay,
+}
+
+impl FundProvider {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FundProvider::MoonPay => "moonpay",
+        }
+    }
+}
+
+impl std::fmt::Display for FundProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for FundProvider {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "moonpay" => Ok(FundProvider::MoonPay),
+            other => Err(format!("unsupported funding provider: {other}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FundRequest {
+    pub provider: FundProvider,
+    pub destination_address: String,
+    pub asset: String,
+    pub chain: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MoonPayDepositRequest {
     pub name: String,
@@ -265,8 +304,10 @@ pub struct BalanceInfo {
 /// Result of `ows fund`.
 #[derive(Debug, Clone)]
 pub struct FundResult {
+    pub provider: FundProvider,
     pub deposit_id: String,
-    pub deposit_url: String,
+    pub action_url: Option<String>,
     pub wallets: Vec<(String, String)>,
     pub instructions: String,
+    pub details: Vec<(String, String)>,
 }

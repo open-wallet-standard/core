@@ -33,7 +33,7 @@ enum Commands {
         #[command(subcommand)]
         subcommand: MnemonicCommands,
     },
-    /// Fund a wallet with USDC via MoonPay
+    /// Fund a wallet via one of the configured providers
     Fund {
         #[command(subcommand)]
         subcommand: FundCommands,
@@ -222,27 +222,35 @@ enum MnemonicCommands {
 
 #[derive(Subcommand)]
 enum FundCommands {
-    /// Create a MoonPay deposit — generates multi-chain deposit addresses that auto-convert to USDC
+    /// Create a provider-specific funding flow into a wallet asset/address
     Deposit {
         /// Wallet name or ID
         #[arg(long, env = "OWS_WALLET")]
         wallet: String,
-        /// Target chain (default: base)
-        #[arg(long, default_value = "base")]
-        chain: String,
-        /// Token to receive (default: USDC)
+        /// Funding provider (currently moonpay)
+        #[arg(long, default_value = "moonpay")]
+        provider: String,
+        /// Asset to receive (default: USDC)
         #[arg(long, default_value = "USDC")]
-        token: String,
+        asset: String,
+        /// Destination chain/network in the wallet (default: base)
+        #[arg(long)]
+        chain: Option<String>,
     },
-    /// Check token balances for a wallet
+    /// Check balances for a wallet via a provider that supports balance lookup
     Balance {
         /// Wallet name or ID
         #[arg(long, env = "OWS_WALLET")]
         wallet: String,
+        /// Funding provider (currently moonpay)
+        #[arg(long, default_value = "moonpay")]
+        provider: String,
         /// Chain to check (default: base)
         #[arg(long, default_value = "base")]
         chain: String,
     },
+    /// List available funding providers
+    Providers,
 }
 
 #[derive(Subcommand)]
@@ -464,11 +472,23 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Commands::Fund { subcommand } => match subcommand {
             FundCommands::Deposit {
                 wallet,
+                provider,
+                asset,
                 chain,
-                token,
-            } => commands::fund::run(&wallet, Some(&chain), Some(&token)),
-            FundCommands::Balance { wallet, chain } => {
-                commands::fund::balance(&wallet, Some(&chain))
+            } => commands::fund::run(
+                &provider,
+                &wallet,
+                chain.as_deref(),
+                Some(&asset),
+            ),
+            FundCommands::Balance {
+                wallet,
+                provider,
+                chain,
+            } => commands::fund::balance(&provider, &wallet, Some(&chain)),
+            FundCommands::Providers => {
+                commands::fund::providers();
+                Ok(())
             }
         },
         Commands::Pay { subcommand } => match subcommand {
