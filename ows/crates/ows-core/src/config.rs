@@ -54,6 +54,10 @@ impl Config {
             "cosmos:cosmoshub-4".into(),
             "https://cosmos-rest.publicnode.com".into(),
         );
+        rpc.insert(
+            "initia:interwoven-1".into(),
+            "https://rpc.initia.xyz".into(),
+        );
         rpc.insert("tron:mainnet".into(), "https://api.trongrid.io".into());
         rpc.insert("ton:mainnet".into(), "https://toncenter.com/api/v2".into());
         rpc.insert(
@@ -195,6 +199,10 @@ mod tests {
             Some("https://cosmos-rest.publicnode.com")
         );
         assert_eq!(
+            config.rpc_url("initia:interwoven-1"),
+            Some("https://rpc.initia.xyz")
+        );
+        assert_eq!(
             config.rpc_url("tron:mainnet"),
             Some("https://api.trongrid.io")
         );
@@ -244,7 +252,7 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 15);
+        assert_eq!(config.rpc.len(), 16);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
     }
 
