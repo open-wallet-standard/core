@@ -14,10 +14,11 @@ pub enum ChainType {
     Spark,
     Filecoin,
     Sui,
+    Initia,
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 8] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 9] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
@@ -26,6 +27,7 @@ pub const ALL_CHAIN_TYPES: [ChainType; 8] = [
     ChainType::Ton,
     ChainType::Filecoin,
     ChainType::Sui,
+    ChainType::Initia,
 ];
 
 /// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
@@ -118,6 +120,11 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_type: ChainType::Sui,
         chain_id: "sui:mainnet",
     },
+    Chain {
+        name: "initia",
+        chain_type: ChainType::Initia,
+        chain_id: "initia:interwoven-1",
+    },
 ];
 
 /// Parse a chain string into a `Chain`. Accepts:
@@ -182,6 +189,7 @@ impl ChainType {
             ChainType::Spark => "spark",
             ChainType::Filecoin => "fil",
             ChainType::Sui => "sui",
+            ChainType::Initia => "initia",
         }
     }
 
@@ -197,6 +205,7 @@ impl ChainType {
             ChainType::Spark => 8797555,
             ChainType::Filecoin => 461,
             ChainType::Sui => 784,
+            ChainType::Initia => 60,
         }
     }
 
@@ -212,6 +221,7 @@ impl ChainType {
             "spark" => Some(ChainType::Spark),
             "fil" => Some(ChainType::Filecoin),
             "sui" => Some(ChainType::Sui),
+            "initia" => Some(ChainType::Initia),
             _ => None,
         }
     }
@@ -229,6 +239,7 @@ impl fmt::Display for ChainType {
             ChainType::Spark => "spark",
             ChainType::Filecoin => "filecoin",
             ChainType::Sui => "sui",
+            ChainType::Initia => "initia",
         };
         write!(f, "{}", s)
     }
@@ -248,6 +259,7 @@ impl FromStr for ChainType {
             "spark" => Ok(ChainType::Spark),
             "filecoin" => Ok(ChainType::Filecoin),
             "sui" => Ok(ChainType::Sui),
+            "initia" => Ok(ChainType::Initia),
             _ => Err(format!("unknown chain type: {}", s)),
         }
     }
@@ -278,6 +290,7 @@ mod tests {
             (ChainType::Spark, "\"spark\""),
             (ChainType::Filecoin, "\"filecoin\""),
             (ChainType::Sui, "\"sui\""),
+            (ChainType::Initia, "\"initia\""),
         ] {
             let json = serde_json::to_string(&chain).unwrap();
             assert_eq!(json, expected);
@@ -297,6 +310,7 @@ mod tests {
         assert_eq!(ChainType::Spark.namespace(), "spark");
         assert_eq!(ChainType::Filecoin.namespace(), "fil");
         assert_eq!(ChainType::Sui.namespace(), "sui");
+        assert_eq!(ChainType::Initia.namespace(), "initia");
     }
 
     #[test]
@@ -310,6 +324,7 @@ mod tests {
         assert_eq!(ChainType::Spark.default_coin_type(), 8797555);
         assert_eq!(ChainType::Filecoin.default_coin_type(), 461);
         assert_eq!(ChainType::Sui.default_coin_type(), 784);
+        assert_eq!(ChainType::Initia.default_coin_type(), 60);
     }
 
     #[test]
@@ -326,6 +341,7 @@ mod tests {
         assert_eq!(ChainType::from_namespace("spark"), Some(ChainType::Spark));
         assert_eq!(ChainType::from_namespace("fil"), Some(ChainType::Filecoin));
         assert_eq!(ChainType::from_namespace("sui"), Some(ChainType::Sui));
+        assert_eq!(ChainType::from_namespace("initia"), Some(ChainType::Initia));
         assert_eq!(ChainType::from_namespace("unknown"), None);
     }
 
@@ -401,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 8);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 9);
     }
 
     #[test]

@@ -689,6 +689,7 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
             "broadcast not yet supported for Filecoin".into(),
         )),
         ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
+        ChainType::Initia => broadcast_cosmos(rpc_url, signed_bytes),
     }
 }
 
@@ -925,7 +926,9 @@ mod tests {
     #[test]
     fn derive_address_all_chains() {
         let phrase = generate_mnemonic(12).unwrap();
-        let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton", "sui"];
+        let chains = [
+            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "sui", "initia",
+        ];
         for chain in &chains {
             let addr = derive_address(&phrase, chain, None).unwrap();
             assert!(!addr.is_empty(), "address should be non-empty for {chain}");
@@ -1006,7 +1009,7 @@ mod tests {
         create_wallet("multi-sign", None, None, Some(vault)).unwrap();
 
         let chains = [
-            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui",
+            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "initia",
         ];
         for chain in &chains {
             let result = sign_message(
@@ -1046,7 +1049,7 @@ mod tests {
         let solana_tx_hex = hex::encode(&solana_tx);
 
         let chains = [
-            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui",
+            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "initia",
         ];
         for chain in &chains {
             let tx = if *chain == "solana" {

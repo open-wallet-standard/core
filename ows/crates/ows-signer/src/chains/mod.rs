@@ -2,6 +2,7 @@ pub mod bitcoin;
 pub mod cosmos;
 pub mod evm;
 pub mod filecoin;
+pub mod initia;
 pub mod solana;
 pub mod spark;
 pub mod sui;
@@ -12,6 +13,7 @@ pub use self::bitcoin::BitcoinSigner;
 pub use self::cosmos::CosmosSigner;
 pub use self::evm::EvmSigner;
 pub use self::filecoin::FilecoinSigner;
+pub use self::initia::InitiaSigner;
 pub use self::solana::SolanaSigner;
 pub use self::spark::SparkSigner;
 pub use self::sui::SuiSigner;
@@ -33,5 +35,6 @@ pub fn signer_for_chain(chain: ChainType) -> Box<dyn ChainSigner> {
         ChainType::Spark => Box::new(SparkSigner),
         ChainType::Filecoin => Box::new(FilecoinSigner),
         ChainType::Sui => Box::new(SuiSigner),
+        ChainType::Initia => Box::new(InitiaSigner::mainnet()),
     }
 }
