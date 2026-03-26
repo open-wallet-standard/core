@@ -463,6 +463,36 @@ pub fn sign_transaction(
     })
 }
 
+/// Sign a Bitcoin PSBT and return the updated base64-encoded PSBT.
+///
+/// Currently supports owner-mode signing for native SegWit P2WPKH inputs that
+/// match the wallet's Bitcoin key. API-token signing is intentionally not
+/// supported yet because PSBT policy evaluation needs a dedicated surface.
+pub fn sign_psbt(
+    wallet: &str,
+    psbt_base64: &str,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    vault_path: Option<&Path>,
+) -> Result<crate::types::PsbtSignResult, OwsLibError> {
+    let credential = passphrase.unwrap_or("");
+
+    if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
+        return Err(OwsLibError::InvalidInput(
+            "Bitcoin PSBT signing via API key is not yet supported".into(),
+        ));
+    }
+
+    let key = decrypt_signing_key(wallet, ChainType::Bitcoin, credential, index, vault_path)?;
+    let signer = ows_signer::chains::BitcoinSigner::mainnet();
+    let (signed_psbt, signed_inputs) = signer.sign_psbt(key.expose(), psbt_base64)?;
+
+    Ok(crate::types::PsbtSignResult {
+        psbt: signed_psbt,
+        signed_inputs,
+    })
+}
+
 /// Sign a message. Returns hex-encoded signature.
 ///
 /// The `passphrase` parameter accepts either the owner's passphrase or an
@@ -858,6 +888,12 @@ fn extract_json_field(json_str: &str, field: &str) -> Result<String, OwsLibError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::absolute::LockTime;
+    use bitcoin::hashes::Hash;
+    use bitcoin::psbt::Psbt;
+    use bitcoin::transaction::Version;
+    use bitcoin::{Amount, OutPoint, Sequence, Transaction, TxIn, TxOut, Txid, Witness};
+    use std::str::FromStr;
 
     // ---- helpers ----
 
@@ -1127,6 +1163,54 @@ mod tests {
         let tx = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
         let sig = sign_transaction("pk-tx", "evm", tx, None, None, Some(dir.path())).unwrap();
         assert!(!sig.signature.is_empty());
+    }
+
+    #[test]
+    fn privkey_wallet_sign_psbt() {
+        let dir = tempfile::tempdir().unwrap();
+        save_privkey_wallet("pk-psbt", TEST_PRIVKEY, "", dir.path());
+
+        let wallet = get_wallet("pk-psbt", Some(dir.path())).unwrap();
+        let bitcoin_account = wallet
+            .accounts
+            .iter()
+            .find(|account| account.chain_id.starts_with("bip122:"))
+            .expect("bitcoin account should exist");
+
+        let address = bitcoin::Address::from_str(&bitcoin_account.address)
+            .unwrap()
+            .assume_checked();
+        let script_pubkey = address.script_pubkey();
+
+        let unsigned_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: Txid::all_zeros(),
+                    vout: 0,
+                },
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(40_000),
+                script_pubkey: script_pubkey.clone(),
+            }],
+        };
+
+        let mut psbt = Psbt::from_unsigned_tx(unsigned_tx).unwrap();
+        psbt.inputs[0].witness_utxo = Some(TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey,
+        });
+
+        let result = sign_psbt("pk-psbt", &psbt.to_string(), None, None, Some(dir.path())).unwrap();
+        assert_eq!(result.signed_inputs, 1);
+
+        let signed_psbt = Psbt::from_str(&result.psbt).unwrap();
+        assert_eq!(signed_psbt.inputs[0].partial_sigs.len(), 1);
     }
 
     #[test]

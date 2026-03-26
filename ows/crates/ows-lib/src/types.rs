@@ -24,6 +24,13 @@ pub struct SignResult {
     pub recovery_id: Option<u8>,
 }
 
+/// Result from a Bitcoin PSBT signing operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PsbtSignResult {
+    pub psbt: String,
+    pub signed_inputs: u32,
+}
+
 /// Result from a sign-and-send operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendResult {

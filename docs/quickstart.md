@@ -80,6 +80,9 @@ ows sign message --wallet agent-treasury --chain evm --message "hello"
 
 # Sign a transaction
 ows sign tx --wallet agent-treasury --chain solana --tx "deadbeef..."
+
+# Sign a Bitcoin PSBT (owner mode, P2WPKH inputs only)
+ows sign psbt --wallet agent-treasury --psbt "cHNidP8BA..."
 ```
 
 ## Use in code
@@ -87,7 +90,7 @@ ows sign tx --wallet agent-treasury --chain solana --tx "deadbeef..."
 ### Node.js
 
 ```javascript
-import { createWallet, signMessage, signTransaction } from "@open-wallet-standard/core";
+import { createWallet, signMessage, signPsbt, signTransaction } from "@open-wallet-standard/core";
 
 // Create a wallet (once)
 const wallet = createWallet("agent-treasury");
@@ -99,12 +102,16 @@ console.log(sig.signature);
 // Sign a transaction
 const tx = signTransaction("agent-treasury", "evm", "02f8...");
 console.log(tx.signature);
+
+// Sign a Bitcoin PSBT
+const psbt = signPsbt("agent-treasury", "cHNidP8BA...");
+console.log(psbt.signedInputs);
 ```
 
 ### Python
 
 ```python
-from open_wallet_standard import create_wallet, sign_message, sign_transaction
+from open_wallet_standard import create_wallet, sign_message, sign_psbt, sign_transaction
 
 # Create a wallet (once)
 wallet = create_wallet("agent-treasury")
@@ -116,6 +123,10 @@ print(sig["signature"])
 # Sign a transaction
 tx = sign_transaction("agent-treasury", "evm", "02f8...")
 print(tx["signature"])
+
+# Sign a Bitcoin PSBT
+psbt = sign_psbt("agent-treasury", "cHNidP8BA...")
+print(psbt["signed_inputs"])
 ```
 
 ## Set up agent access

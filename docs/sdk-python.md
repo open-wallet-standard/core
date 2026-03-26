@@ -60,6 +60,12 @@ All functions return Python dicts. Wallet functions return:
     "recovery_id": 0,                 # EVM/Tron only (None for others)
 }
 
+# PsbtSignResult
+{
+    "psbt": "cHNidP8BA...",           # Updated base64-encoded PSBT
+    "signed_inputs": 1,               # Number of inputs signed by this wallet
+}
+
 # SendResult
 {
     "tx_hash": "0xabc...",
@@ -255,6 +261,18 @@ Sign a raw transaction (hex-encoded bytes).
 ```python
 result = sign_transaction("agent-treasury", "evm", "02f8...")
 print(result["signature"])
+```
+
+#### `sign_psbt(wallet, psbt_base64, passphrase=None, index=None, vault_path=None)`
+
+Sign a Bitcoin PSBT and return an updated base64-encoded PSBT.
+
+Current implementations support owner-mode signing for native SegWit P2WPKH inputs that belong to the wallet. API-token PSBT signing is not yet supported.
+
+```python
+result = sign_psbt("agent-treasury", "cHNidP8BA...")
+print(result["psbt"])
+print(result["signed_inputs"])
 ```
 
 #### `sign_and_send(wallet, chain, tx_hex, passphrase=None, index=None, rpc_url=None, vault_path=None)`

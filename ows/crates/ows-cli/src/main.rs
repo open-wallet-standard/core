@@ -178,6 +178,21 @@ enum SignCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Sign a Bitcoin PSBT (P2WPKH inputs only) and return an updated PSBT
+    Psbt {
+        /// Wallet name or ID (uses stored encrypted mnemonic)
+        #[arg(long, env = "OWS_WALLET")]
+        wallet: String,
+        /// Base64-encoded PSBT
+        #[arg(long)]
+        psbt: String,
+        /// Account index
+        #[arg(long, default_value = "0")]
+        index: u32,
+        /// Output structured JSON instead of raw PSBT
+        #[arg(long)]
+        json: bool,
+    },
     /// Sign and broadcast a transaction
     SendTx {
         /// Chain (ethereum, plasma, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID)
@@ -445,6 +460,12 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 index,
                 json,
             } => commands::sign_transaction::run(&chain, &wallet, &tx, index, json),
+            SignCommands::Psbt {
+                wallet,
+                psbt,
+                index,
+                json,
+            } => commands::sign_psbt::run(&wallet, &psbt, index, json),
             SignCommands::SendTx {
                 chain,
                 wallet,

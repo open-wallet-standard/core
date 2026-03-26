@@ -44,6 +44,7 @@ print(sig["signature"])
 | `sign_message(wallet, chain, message, passphrase?, encoding?, index?, vault_path?)` | Sign a message with chain-specific formatting |
 | `sign_typed_data(wallet, chain, typed_data_json, passphrase?, index?, vault_path?)` | Sign EIP-712 typed data (EVM only) |
 | `sign_transaction(wallet, chain, tx_hex, passphrase?, index?, vault_path?)` | Sign a raw transaction |
+| `sign_psbt(wallet, psbt_base64, passphrase?, index?, vault_path?)` | Sign a Bitcoin PSBT |
 | `sign_and_send(wallet, chain, tx_hex, passphrase?, index?, rpc_url?, vault_path?)` | Sign and broadcast a transaction |
 | `generate_mnemonic(words?)` | Generate a BIP-39 mnemonic phrase |
 | `derive_address(mnemonic, chain, index?)` | Derive an address from a mnemonic |

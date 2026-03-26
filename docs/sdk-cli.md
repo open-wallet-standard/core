@@ -279,6 +279,26 @@ ows sign tx --wallet "my-wallet" --chain evm --tx "02f8..."
 
 Passphrases and API tokens are supplied via `OWS_PASSPHRASE` or an interactive prompt, not a dedicated `--passphrase` flag.
 
+### `ows sign psbt`
+
+Sign a Bitcoin PSBT and return an updated base64-encoded PSBT.
+
+Current implementations support owner-mode signing for native SegWit P2WPKH inputs that belong to the wallet. API-token PSBT signing is not yet supported.
+
+```bash
+ows sign psbt --wallet "my-wallet" --psbt "cHNidP8BA..."
+ows sign psbt --wallet "my-wallet" --psbt "cHNidP8BA..." --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `--wallet <NAME>` | Wallet name or ID |
+| `--psbt <BASE64>` | Base64-encoded PSBT |
+| `--index <N>` | Account index (default: 0) |
+| `--json` | Output structured JSON with `psbt` and `signed_inputs` |
+
+Passphrases are supplied via `OWS_PASSPHRASE` or an interactive prompt. API tokens are currently rejected for PSBT signing.
+
 ## Mnemonic Commands
 
 ### `ows mnemonic generate`

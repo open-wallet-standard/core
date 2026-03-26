@@ -37,5 +37,6 @@ blake2 = "0.10"
 digest = "0.10"
 libc = "0.2"
 signal-hook = "0.4"
+bitcoin = { version = "0.32", features = ["base64"] }
 
 [dev-dependencies]

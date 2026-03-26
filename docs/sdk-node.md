@@ -55,6 +55,11 @@ interface SignResult {
   recoveryId?: number;    // EVM/Tron recovery ID (v value)
 }
 
+interface PsbtSignResult {
+  psbt: string;           // Updated base64-encoded PSBT
+  signedInputs: number;   // Number of inputs signed by this wallet
+}
+
 interface SendResult {
   txHash: string;         // Transaction hash
 }
@@ -309,6 +314,28 @@ console.log(result.signature);
 ```
 
 **Returns:** `SignResult`
+
+#### `signPsbt(wallet, psbtBase64, passphrase?, index?, vaultPath?)`
+
+Sign a Bitcoin PSBT and return an updated base64-encoded PSBT.
+
+Current implementations support owner-mode signing for native SegWit P2WPKH inputs that belong to the wallet. API-token PSBT signing is not yet supported.
+
+```javascript
+const result = signPsbt("agent-treasury", "cHNidP8BA...");
+console.log(result.psbt);
+console.log(result.signedInputs); // number of inputs signed
+```
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `wallet` | `string` | &mdash; | Wallet name or ID |
+| `psbtBase64` | `string` | &mdash; | Base64-encoded PSBT |
+| `passphrase` | `string` | `undefined` | Decryption passphrase |
+| `index` | `number` | `0` | Account index |
+| `vaultPath` | `string` | `~/.ows` | Custom vault directory root |
+
+**Returns:** `PsbtSignResult`
 
 #### `signAndSend(wallet, chain, txHex, passphrase?, index?, rpcUrl?, vaultPath?)`
 

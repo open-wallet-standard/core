@@ -8,6 +8,7 @@ pub mod pay;
 pub mod policy;
 pub mod send_transaction;
 pub mod sign_message;
+pub mod sign_psbt;
 pub mod sign_transaction;
 pub mod uninstall;
 pub mod update;

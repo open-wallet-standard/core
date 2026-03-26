@@ -41,6 +41,9 @@ ows sign message --wallet agent-treasury --chain evm --message "hello"
 
 # Sign a transaction
 ows sign tx --wallet agent-treasury --chain evm --tx "deadbeef..."
+
+# Sign a Bitcoin PSBT
+ows sign psbt --wallet agent-treasury --psbt "cHNidP8BA..."
 ```
 
 {{> supported-chains}}

@@ -36,3 +36,4 @@ k256 = { version = "0.13", features = ["ecdsa"] }
 ed25519-dalek = "2"
 bs58 = "0.5"
 ows-signer = { path = "../ows-signer", version = "=1.1.2", features = ["fast-kdf"] }
+bitcoin = { version = "0.32", features = ["base64"] }
