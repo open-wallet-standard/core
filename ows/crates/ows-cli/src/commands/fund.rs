@@ -123,5 +123,7 @@ pub fn balance(provider: &str, wallet_name: &str, chain: Option<&str>) -> Result
 }
 
 pub fn providers() {
-    println!("moonpay  fiat/hosted deposit flow into wallet tokens on supported EVM chains");
+    println!(
+        "moonpay  default provider: fiat/hosted deposit flow into wallet tokens on supported EVM chains"
+    );
 }

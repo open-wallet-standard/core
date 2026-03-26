@@ -227,7 +227,7 @@ enum FundCommands {
         /// Wallet name or ID
         #[arg(long, env = "OWS_WALLET")]
         wallet: String,
-        /// Funding provider (currently moonpay)
+        /// Funding provider (default: moonpay)
         #[arg(long, default_value = "moonpay")]
         provider: String,
         /// Asset to receive (default: USDC)
@@ -242,7 +242,7 @@ enum FundCommands {
         /// Wallet name or ID
         #[arg(long, env = "OWS_WALLET")]
         wallet: String,
-        /// Funding provider (currently moonpay)
+        /// Funding provider (default: moonpay)
         #[arg(long, default_value = "moonpay")]
         provider: String,
         /// Chain to check (default: base)
