@@ -245,6 +245,23 @@ pub struct FundRequest {
     pub chain: Option<String>,
 }
 
+/// Minimal wallet account view needed for provider funding resolution.
+#[derive(Debug, Clone)]
+pub struct WalletAccountRef {
+    pub chain_id: String,
+    pub address: String,
+}
+
+/// Resolved funding target after provider-aware wallet/account selection.
+#[derive(Debug, Clone)]
+pub struct ResolvedFundTarget {
+    pub destination_address: String,
+    pub asset: String,
+    pub chain: Option<String>,
+    pub wallet_chain_id: String,
+    pub wallet_chain_name: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MoonPayDepositRequest {
     pub name: String,

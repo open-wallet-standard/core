@@ -1,5 +1,5 @@
 use crate::CliError;
-use ows_pay::{FundProvider, FundRequest};
+use ows_pay::{FundProvider, FundRequest, WalletAccountRef};
 
 fn wallet_address_for_chain(wallet_name: &str, chain: &str) -> Result<String, CliError> {
     let wallet = ows_lib::get_wallet(wallet_name, None)?;
@@ -27,26 +27,33 @@ pub fn run(
 ) -> Result<(), CliError> {
     let provider: FundProvider = provider.parse().map_err(CliError::InvalidArgs)?;
     let asset = asset.unwrap_or("USDC");
-    let chain_name = match chain {
-        Some(chain) => chain,
-        None => "base",
-    };
-    let address = wallet_address_for_chain(wallet_name, chain_name)?;
+    let wallet = ows_lib::get_wallet(wallet_name, None)?;
+    let wallet_accounts: Vec<WalletAccountRef> = wallet
+        .accounts
+        .iter()
+        .map(|account| WalletAccountRef {
+            chain_id: account.chain_id.clone(),
+            address: account.address.clone(),
+        })
+        .collect();
+    let target = ows_pay::fund::resolve_deposit_target(provider, &wallet_accounts, chain, asset)
+        .map_err(|e| CliError::InvalidArgs(e.message))?;
 
     eprintln!(
-        "Creating funding flow with provider \"{provider}\" for wallet \"{wallet_name}\" ({address})"
+        "Creating funding flow with provider \"{provider}\" for wallet \"{wallet_name}\" ({})",
+        target.destination_address
     );
-    eprintln!("Asset: {asset}");
-    eprintln!("Destination chain: {chain_name}");
+    eprintln!("Asset: {}", target.asset);
+    eprintln!("Destination chain: {}", target.wallet_chain_name);
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| CliError::InvalidArgs(format!("tokio: {e}")))?;
 
     let result = rt.block_on(ows_pay::fund::deposit(&FundRequest {
         provider,
-        destination_address: address,
-        asset: asset.to_string(),
-        chain: Some(chain_name.to_string()),
+        destination_address: target.destination_address,
+        asset: target.asset,
+        chain: target.chain,
     }))?;
 
     eprintln!();
