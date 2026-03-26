@@ -36,10 +36,20 @@
     "@open-wallet-standard/core-darwin-x64": "1.0.0",
     "@open-wallet-standard/core-darwin-arm64": "1.0.0"
   },
+  "peerDependencies": {
+    "viem": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "viem": {
+      "optional": true
+    }
+  },
   "license": "MIT",
   "files": [
     "index.js",
     "index.d.ts",
+    "viem.js",
+    "viem.d.ts",
     "bin/ows",
     "README.md"
   ]

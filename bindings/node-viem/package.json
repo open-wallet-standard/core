@@ -1,0 +1,21 @@
+{
+  "name": "@open-wallet-standard/viem",
+  "version": "1.0.0",
+  "description": "Viem account adapter for the Open Wallet Standard",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "scripts": {
+    "test": "node --test __test__/index.spec.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "dependencies": {
+    "@open-wallet-standard/core": "^1.0.0"
+  },
+  "peerDependencies": {
+    "viem": ">=2.0.0"
+  },
+  "license": "MIT",
+  "files": [
+    "src"
+  ]
+}

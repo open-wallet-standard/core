@@ -86,6 +86,80 @@ jobs:
       - name: Run tests
         run: npm test
 
+  node-viem:
+    runs-on: ubuntu-latest
+    needs: node
+    defaults:
+      run:
+        working-directory: bindings/node-viem
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "22"
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup install
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            bindings/node/target
+          key: ${{ runner.os }}-node-cargo-${{ hashFiles('bindings/node/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-node-cargo-
+
+      - name: Build core native addon
+        working-directory: bindings/node
+        run: npm install && npx napi build --platform --release --features fast-kdf
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: npm test
+
+  node-solana:
+    runs-on: ubuntu-latest
+    needs: node
+    defaults:
+      run:
+        working-directory: bindings/node-solana
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "22"
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup install
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            bindings/node/target
+          key: ${{ runner.os }}-node-cargo-${{ hashFiles('bindings/node/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-node-cargo-
+
+      - name: Build core native addon
+        working-directory: bindings/node
+        run: npm install && npx napi build --platform --release --features fast-kdf
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: npm test
+
   python:
     runs-on: ubuntu-latest
     defaults:

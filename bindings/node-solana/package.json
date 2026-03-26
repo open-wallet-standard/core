@@ -1,0 +1,21 @@
+{
+  "name": "@open-wallet-standard/solana",
+  "version": "1.0.0",
+  "description": "Solana Keypair adapter for the Open Wallet Standard",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "scripts": {
+    "test": "node --test __test__/index.spec.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "dependencies": {
+    "@open-wallet-standard/core": "^1.0.0"
+  },
+  "peerDependencies": {
+    "@solana/web3.js": ">=1.0.0"
+  },
+  "license": "MIT",
+  "files": [
+    "src"
+  ]
+}
