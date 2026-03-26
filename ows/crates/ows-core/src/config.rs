@@ -74,6 +74,11 @@ impl Config {
             "https://s.devnet.rippletest.net:51234".into(),
         );
         rpc.insert("nano:mainnet".into(), "https://rpc.nano.to".into());
+        rpc.insert("eip155:4217".into(), "https://rpc.tempo.xyz".into());
+        rpc.insert(
+            "eip155:999".into(),
+            "https://rpc.hyperliquid.xyz/evm".into(),
+        );
         rpc
     }
 }
@@ -212,12 +217,20 @@ mod tests {
             config.rpc_url("ton:mainnet"),
             Some("https://toncenter.com/api/v2")
         );
+        assert_eq!(
+            config.rpc_url("eip155:4217"),
+            Some("https://rpc.tempo.xyz")
+        );
+        assert_eq!(
+            config.rpc_url("eip155:999"),
+            Some("https://rpc.hyperliquid.xyz/evm")
+        );
     }
 
     #[test]
     fn test_rpc_lookup_miss() {
         let config = Config::default();
-        assert_eq!(config.rpc_url("eip155:999"), None);
+        assert_eq!(config.rpc_url("eip155:99999"), None);
     }
 
     #[test]
@@ -254,7 +267,7 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 19);
+        assert_eq!(config.rpc.len(), 21);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
     }
 
