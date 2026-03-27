@@ -27,3 +27,4 @@ thiserror = "2"
 
 # Random nonce generation
 getrandom = "0.2"
+strsim = "0.11"

@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
+use strsim::levenshtein;
 
 const MOONPAY_API: &str = "https://agents.moonpay.com";
 const NANSWAP_API: &str = "https://api.nanswap.com/v1";
@@ -152,15 +153,13 @@ fn resolve_nanswap_target(
     chain: Option<&str>,
     asset: &str,
 ) -> Result<ResolvedFundTarget, PayError> {
-    let chain = chain.ok_or_else(|| {
-        PayError::new(
-            PayErrorCode::InvalidInput,
-            "nanswap requires --chain",
-        )
-    })?;
+    let chain = chain
+        .ok_or_else(|| PayError::new(PayErrorCode::InvalidInput, "nanswap requires --chain"))?;
 
     let chain_lower = chain.to_ascii_lowercase();
-    let parsed_chain_id = ows_core::parse_chain(chain).ok().map(|parsed| parsed.chain_id);
+    let parsed_chain_id = ows_core::parse_chain(chain)
+        .ok()
+        .map(|parsed| parsed.chain_id);
     let account = wallet_accounts
         .iter()
         .find(|account| account.chain_id.eq_ignore_ascii_case(chain))
@@ -197,13 +196,15 @@ fn resolve_nanswap_target(
 }
 
 /// Create a MoonPay deposit that auto-converts incoming crypto to USDC.
-pub async fn deposit(
-    request: &FundRequest,
-) -> Result<FundResult, PayError> {
+pub async fn deposit(request: &FundRequest) -> Result<FundResult, PayError> {
     match request.provider {
         FundProvider::MoonPay => {
-            moonpay_deposit(&request.destination_address, request.chain.as_deref(), &request.asset)
-                .await
+            moonpay_deposit(
+                &request.destination_address,
+                request.chain.as_deref(),
+                &request.asset,
+            )
+            .await
         }
         FundProvider::Nanswap => {
             nanswap_deposit(
@@ -278,12 +279,8 @@ async fn nanswap_deposit(
             "nanswap requires --source-asset (example: USDC-BASE)",
         )
     })?;
-    let amount = amount.ok_or_else(|| {
-        PayError::new(
-            PayErrorCode::InvalidInput,
-            "nanswap requires --amount",
-        )
-    })?;
+    let amount = amount
+        .ok_or_else(|| PayError::new(PayErrorCode::InvalidInput, "nanswap requires --amount"))?;
     let api_key = std::env::var("OWS_NANSWAP_API_KEY").map_err(|_| {
         PayError::new(
             PayErrorCode::InvalidInput,
@@ -386,7 +383,10 @@ async fn resolve_nanswap_source_asset(
     requested: &str,
 ) -> Result<String, PayError> {
     let assets = get_nanswap_source_assets(client).await?;
-    if let Some(exact) = assets.iter().find(|asset| asset.eq_ignore_ascii_case(requested)) {
+    if let Some(exact) = assets
+        .iter()
+        .find(|asset| asset.eq_ignore_ascii_case(requested))
+    {
         return Ok(exact.clone());
     }
 
@@ -463,7 +463,10 @@ fn store_cached_source_assets(provider: FundProvider, assets: &[String]) -> Resu
         fs::create_dir_all(parent).map_err(|err| {
             PayError::new(
                 PayErrorCode::DiscoveryFailed,
-                format!("failed to create provider cache dir {}: {err}", parent.display()),
+                format!(
+                    "failed to create provider cache dir {}: {err}",
+                    parent.display()
+                ),
             )
         })?;
     }
@@ -566,34 +569,6 @@ fn symbol_forms(value: &str) -> Vec<String> {
     forms.sort();
     forms.dedup();
     forms
-}
-
-fn levenshtein(left: &str, right: &str) -> usize {
-    if left == right {
-        return 0;
-    }
-    if left.is_empty() {
-        return right.chars().count();
-    }
-    if right.is_empty() {
-        return left.chars().count();
-    }
-
-    let right_chars: Vec<char> = right.chars().collect();
-    let mut prev: Vec<usize> = (0..=right_chars.len()).collect();
-
-    for (i, left_char) in left.chars().enumerate() {
-        let mut curr = vec![i + 1; right_chars.len() + 1];
-        for (j, right_char) in right_chars.iter().enumerate() {
-            let substitution_cost = usize::from(left_char != *right_char);
-            curr[j + 1] = (prev[j + 1] + 1)
-                .min(curr[j] + 1)
-                .min(prev[j] + substitution_cost);
-        }
-        prev = curr;
-    }
-
-    prev[right_chars.len()]
 }
 
 /// Check token balances for a wallet address via MoonPay.
