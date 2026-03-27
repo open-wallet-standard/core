@@ -217,10 +217,7 @@ mod tests {
             config.rpc_url("ton:mainnet"),
             Some("https://toncenter.com/api/v2")
         );
-        assert_eq!(
-            config.rpc_url("eip155:4217"),
-            Some("https://rpc.tempo.xyz")
-        );
+        assert_eq!(config.rpc_url("eip155:4217"), Some("https://rpc.tempo.xyz"));
         assert_eq!(
             config.rpc_url("eip155:999"),
             Some("https://rpc.hyperliquid.xyz/evm")
