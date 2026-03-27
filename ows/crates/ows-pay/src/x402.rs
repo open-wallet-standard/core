@@ -139,7 +139,7 @@ fn build_evm_exact(
             "value": req.amount,
             "validAfter": valid_after.to_string(),
             "validBefore": valid_before.to_string(),
-            "nonce": nonce_hex.clone()
+            "nonce": &nonce_hex
         }
     })
     .to_string();
@@ -664,6 +664,47 @@ mod tests {
 
         assert_eq!(info.network, "base");
         assert_eq!(info.token, "USDC");
+    }
+
+    #[test]
+    fn build_evm_exact_produces_valid_v2_payload() {
+        let req = base_requirement();
+        let resource = serde_json::json!({
+            "url": "https://example.com/api",
+            "description": "test",
+            "mimeType": "application/json"
+        });
+        let (payload, _) =
+            build_evm_exact(&EvmWallet, &req, "eip155:8453", 2, Some(resource.clone())).unwrap();
+
+        let v2 = match &payload {
+            PaymentPayload::V2(p) => p,
+            PaymentPayload::V1(_) => panic!("expected V2"),
+        };
+        assert_eq!(v2.x402_version, 2);
+        assert_eq!(v2.accepted.scheme, req.scheme);
+        assert_eq!(v2.accepted.network, req.network);
+        assert_eq!(v2.accepted.pay_to, req.pay_to);
+        assert_eq!(v2.resource, Some(resource));
+
+        assert!(v2.payload.get("signature").is_some());
+        let auth = &v2.payload["authorization"];
+        assert_eq!(auth["from"], "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+        assert_eq!(auth["to"], req.pay_to);
+        assert_eq!(auth["value"], req.amount);
+    }
+
+    #[test]
+    fn build_evm_exact_v2_with_no_resource() {
+        let req = base_requirement();
+        let (payload, _) = build_evm_exact(&EvmWallet, &req, "eip155:8453", 2, None).unwrap();
+
+        let v2 = match &payload {
+            PaymentPayload::V2(p) => p,
+            PaymentPayload::V1(_) => panic!("expected V2"),
+        };
+        assert_eq!(v2.x402_version, 2);
+        assert!(v2.resource.is_none());
     }
 
     #[test]
