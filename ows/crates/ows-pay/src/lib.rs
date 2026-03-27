@@ -35,8 +35,8 @@ pub async fn pay(
 ) -> Result<PayResult, PayError> {
     let client = reqwest::Client::new();
 
-    // Step 1: Fire the initial request.
-    let initial = x402::build_request(&client, url, method, body, None)?
+    // Step 1: Fire the initial request (no payment header, version doesn't matter).
+    let initial = x402::build_request(&client, url, method, body, None, x402::X402Version::V2)?
         .send()
         .await?;
 

@@ -8,8 +8,13 @@ use crate::types::{
 };
 use crate::wallet::WalletAccess;
 
-const HEADER_PAYMENT_REQUIRED: &str = "x-payment-required";
-const HEADER_PAYMENT: &str = "X-PAYMENT";
+// v2 headers (current spec)
+const HEADER_PAYMENT_REQUIRED_V2: &str = "payment-required";
+const HEADER_PAYMENT_V2: &str = "PAYMENT-SIGNATURE";
+
+// v1 headers (legacy)
+const HEADER_PAYMENT_REQUIRED_V1: &str = "x-payment-required";
+const HEADER_PAYMENT_V1: &str = "X-PAYMENT";
 
 /// Handle x402 payment for a 402 response we already received.
 pub(crate) async fn handle_x402(
@@ -20,16 +25,22 @@ pub(crate) async fn handle_x402(
     resp_headers: &reqwest::header::HeaderMap,
     body_402: &str,
 ) -> Result<PayResult, PayError> {
-    let requirements = parse_requirements(resp_headers, body_402)?;
+    let (requirements, version) = parse_requirements(resp_headers, body_402)?;
     let (req, network) = pick_payment_option(wallet, &requirements)?;
 
-    let (payload, payment_info) = build_signed_payment(wallet, req, &network)?;
+    let version_num = match version {
+        X402Version::V1 => 1,
+        X402Version::V2 => 2,
+    };
+
+    let (mut payload, payment_info) = build_signed_payment(wallet, req, &network)?;
+    payload.x402_version = version_num;
 
     let payload_json = serde_json::to_string(&payload)?;
     let payload_b64 = B64.encode(payload_json.as_bytes());
 
     let client = reqwest::Client::new();
-    let retry = build_request(&client, url, method, req_body, Some(&payload_b64))?
+    let retry = build_request(&client, url, method, req_body, Some(&payload_b64), version)?
         .send()
         .await?;
 
@@ -173,22 +184,29 @@ fn build_evm_exact(
 // Requirement parsing & chain selection
 // ---------------------------------------------------------------------------
 
+/// Detected x402 protocol version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum X402Version {
+    V1,
+    V2,
+}
+
+/// Parse payment requirements from 402 response, returning the detected version.
 fn parse_requirements(
     headers: &reqwest::header::HeaderMap,
     body_text: &str,
-) -> Result<Vec<PaymentRequirements>, PayError> {
-    if let Some(header_val) = headers.get(HEADER_PAYMENT_REQUIRED) {
-        if let Ok(header_str) = header_val.to_str() {
-            if let Ok(decoded) = B64.decode(header_str) {
-                if let Ok(parsed) = serde_json::from_slice::<X402Response>(&decoded) {
-                    if !parsed.accepts.is_empty() {
-                        return Ok(parsed.accepts);
-                    }
-                }
-            }
-        }
+) -> Result<(Vec<PaymentRequirements>, X402Version), PayError> {
+    // Try v2 header first (PAYMENT-REQUIRED).
+    if let Some(reqs) = try_parse_header(headers, HEADER_PAYMENT_REQUIRED_V2) {
+        return Ok((reqs, X402Version::V2));
     }
 
+    // Try v1 header (x-payment-required).
+    if let Some(reqs) = try_parse_header(headers, HEADER_PAYMENT_REQUIRED_V1) {
+        return Ok((reqs, X402Version::V1));
+    }
+
+    // Fall back to response body.
     let parsed: X402Response = serde_json::from_str(body_text).map_err(|e| {
         PayError::new(
             PayErrorCode::ProtocolMalformed,
@@ -203,7 +221,28 @@ fn parse_requirements(
         ));
     }
 
-    Ok(parsed.accepts)
+    // Body-only responses: use version from body if present, otherwise v1.
+    let version = match parsed.x402_version {
+        Some(v) if v >= 2 => X402Version::V2,
+        _ => X402Version::V1,
+    };
+
+    Ok((parsed.accepts, version))
+}
+
+/// Try to decode payment requirements from a specific header name.
+fn try_parse_header(
+    headers: &reqwest::header::HeaderMap,
+    header_name: &str,
+) -> Option<Vec<PaymentRequirements>> {
+    let header_val = headers.get(header_name)?;
+    let header_str = header_val.to_str().ok()?;
+    let decoded = B64.decode(header_str).ok()?;
+    let parsed: X402Response = serde_json::from_slice(&decoded).ok()?;
+    if parsed.accepts.is_empty() {
+        return None;
+    }
+    Some(parsed.accepts)
 }
 
 /// Payment schemes we know how to handle.
@@ -256,6 +295,7 @@ pub(crate) fn build_request(
     method: &str,
     body: Option<&str>,
     payment_header: Option<&str>,
+    version: X402Version,
 ) -> Result<reqwest::RequestBuilder, PayError> {
     let mut req = match method.to_uppercase().as_str() {
         "GET" => client.get(url),
@@ -278,7 +318,11 @@ pub(crate) fn build_request(
     }
 
     if let Some(payment) = payment_header {
-        req = req.header(HEADER_PAYMENT, payment);
+        let header_name = match version {
+            X402Version::V2 => HEADER_PAYMENT_V2,
+            X402Version::V1 => HEADER_PAYMENT_V1,
+        };
+        req = req.header(header_name, payment);
     }
 
     Ok(req)
@@ -377,7 +421,7 @@ mod tests {
     fn build_request_valid_methods() {
         let client = reqwest::Client::new();
         for method in &["GET", "POST", "PUT", "DELETE", "PATCH"] {
-            let result = build_request(&client, "https://example.com", method, None, None);
+            let result = build_request(&client, "https://example.com", method, None, None, X402Version::V2);
             assert!(result.is_ok(), "method {method} should be valid");
         }
     }
@@ -386,7 +430,7 @@ mod tests {
     fn build_request_case_insensitive() {
         let client = reqwest::Client::new();
         for method in &["get", "Post", "pUT", "dElEtE", "patch"] {
-            let result = build_request(&client, "https://example.com", method, None, None);
+            let result = build_request(&client, "https://example.com", method, None, None, X402Version::V2);
             assert!(
                 result.is_ok(),
                 "method {method} should be valid (case-insensitive)"
@@ -397,7 +441,7 @@ mod tests {
     #[test]
     fn build_request_invalid_method() {
         let client = reqwest::Client::new();
-        let result = build_request(&client, "https://example.com", "FOOBAR", None, None);
+        let result = build_request(&client, "https://example.com", "FOOBAR", None, None, X402Version::V2);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code, PayErrorCode::InvalidInput);
@@ -407,7 +451,7 @@ mod tests {
     #[test]
     fn build_request_head_is_invalid() {
         let client = reqwest::Client::new();
-        let result = build_request(&client, "https://example.com", "HEAD", None, None);
+        let result = build_request(&client, "https://example.com", "HEAD", None, None, X402Version::V2);
         assert!(result.is_err());
     }
 
@@ -430,14 +474,38 @@ mod tests {
         })
         .to_string();
 
-        let reqs = parse_requirements(&headers, &body).unwrap();
+        let (reqs, version) = parse_requirements(&headers, &body).unwrap();
         assert_eq!(reqs.len(), 1);
         assert_eq!(reqs[0].scheme, "exact");
         assert_eq!(reqs[0].network, "eip155:8453");
+        assert_eq!(version, X402Version::V1); // no version in body defaults to v1
     }
 
     #[test]
-    fn parse_requirements_from_header() {
+    fn parse_requirements_from_v2_header() {
+        let x402 = serde_json::json!({
+            "x402Version": 2,
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:8453",
+                "amount": "5000",
+                "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                "payTo": "0xdef"
+            }]
+        });
+        let encoded = B64.encode(serde_json::to_string(&x402).unwrap().as_bytes());
+
+        let mut headers = HeaderMap::new();
+        headers.insert("payment-required", encoded.parse().unwrap());
+
+        let (reqs, version) = parse_requirements(&headers, "not json").unwrap();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].pay_to, "0xdef");
+        assert_eq!(version, X402Version::V2);
+    }
+
+    #[test]
+    fn parse_requirements_from_v1_header() {
         let x402 = serde_json::json!({
             "accepts": [{
                 "scheme": "exact",
@@ -452,9 +520,40 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-payment-required", encoded.parse().unwrap());
 
-        let reqs = parse_requirements(&headers, "not json").unwrap();
+        let (reqs, version) = parse_requirements(&headers, "not json").unwrap();
         assert_eq!(reqs.len(), 1);
         assert_eq!(reqs[0].pay_to, "0xdef");
+        assert_eq!(version, X402Version::V1);
+    }
+
+    #[test]
+    fn parse_requirements_v2_header_takes_priority() {
+        let v2 = serde_json::json!({
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:8453",
+                "amount": "5000",
+                "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                "payTo": "0xv2"
+            }]
+        });
+        let v1 = serde_json::json!({
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:8453",
+                "amount": "5000",
+                "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                "payTo": "0xv1"
+            }]
+        });
+
+        let mut headers = HeaderMap::new();
+        headers.insert("payment-required", B64.encode(serde_json::to_string(&v2).unwrap().as_bytes()).parse().unwrap());
+        headers.insert("x-payment-required", B64.encode(serde_json::to_string(&v1).unwrap().as_bytes()).parse().unwrap());
+
+        let (reqs, version) = parse_requirements(&headers, "not json").unwrap();
+        assert_eq!(reqs[0].pay_to, "0xv2");
+        assert_eq!(version, X402Version::V2);
     }
 
     #[test]
@@ -473,7 +572,7 @@ mod tests {
         })
         .to_string();
 
-        let reqs = parse_requirements(&headers, &body).unwrap();
+        let (reqs, _) = parse_requirements(&headers, &body).unwrap();
         assert_eq!(reqs[0].pay_to, "0xbbb");
     }
 
@@ -481,14 +580,14 @@ mod tests {
     fn parse_requirements_empty_accepts_errors() {
         let headers = HeaderMap::new();
         let body = r#"{"accepts":[]}"#;
-        let err = parse_requirements(&headers, body).unwrap_err();
+        let err = parse_requirements(&headers, body).map(|_| ()).unwrap_err();
         assert_eq!(err.code, PayErrorCode::ProtocolMalformed);
     }
 
     #[test]
     fn parse_requirements_bad_json_errors() {
         let headers = HeaderMap::new();
-        let err = parse_requirements(&headers, "this is not json").unwrap_err();
+        let err = parse_requirements(&headers, "this is not json").map(|_| ()).unwrap_err();
         assert_eq!(err.code, PayErrorCode::ProtocolMalformed);
     }
 
@@ -623,7 +722,7 @@ mod tests {
         .to_string();
 
         let headers = HeaderMap::new();
-        let reqs = parse_requirements(&headers, &body).unwrap();
+        let (reqs, _) = parse_requirements(&headers, &body).unwrap();
         let (req, network) = pick_payment_option(&EvmWallet, &reqs).unwrap();
         assert_eq!(req.pay_to, "0x7d9d1821d15B9e0b8Ab98A058361233E255E405D");
         assert_eq!(network, "eip155:8453"); // "base" resolved to CAIP-2
