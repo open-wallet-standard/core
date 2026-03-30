@@ -120,6 +120,7 @@ pub fn sign_with_api_key(
         },
         spending: noop_spending_context(&date),
         timestamp: now.to_rfc3339(),
+        typed_data: None,
     };
 
     // 5. Evaluate policies
@@ -183,6 +184,7 @@ pub fn sign_message_with_api_key(
         },
         spending: noop_spending_context(&date),
         timestamp: now.to_rfc3339(),
+        typed_data: None,
     };
 
     let result = policy_engine::evaluate_policies(&policies, &context);
@@ -243,6 +245,7 @@ pub fn enforce_policy_and_decrypt_key(
         },
         spending: noop_spending_context(&date),
         timestamp: now.to_rfc3339(),
+        typed_data: None,
     };
 
     let result = policy_engine::evaluate_policies(&policies, &context);

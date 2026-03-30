@@ -14,6 +14,6 @@ pub use chain::{
 };
 pub use config::Config;
 pub use error::{OwsError, OwsErrorCode};
-pub use policy::{Policy, PolicyAction, PolicyContext, PolicyResult, PolicyRule};
+pub use policy::{Policy, PolicyAction, PolicyContext, PolicyResult, PolicyRule, TypedDataContext};
 pub use types::*;
 pub use wallet_file::*;

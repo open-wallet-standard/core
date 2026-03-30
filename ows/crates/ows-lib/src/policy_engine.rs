@@ -204,6 +204,7 @@ mod tests {
                 date: "2026-03-22".to_string(),
             },
             timestamp: "2026-03-22T10:35:22Z".to_string(),
+            typed_data: None,
         }
     }
 

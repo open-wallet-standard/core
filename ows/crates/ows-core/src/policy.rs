@@ -44,6 +44,9 @@ pub struct PolicyContext {
     pub transaction: TransactionContext,
     pub spending: SpendingContext,
     pub timestamp: String,
+    /// EIP-712 typed data context (only present for `sign_typed_data` calls).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub typed_data: Option<TypedDataContext>,
 }
 
 /// Transaction fields available for policy evaluation.
@@ -69,6 +72,27 @@ pub struct SpendingContext {
     pub daily_total: String,
     /// Date string (YYYY-MM-DD).
     pub date: String,
+}
+
+/// EIP-712 typed data context for policy evaluation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypedDataContext {
+    /// The `domain.verifyingContract` address (if present in the EIP-712 domain).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verifying_contract: Option<String>,
+    /// The `domain.chainId` (if present in the EIP-712 domain).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_chain_id: Option<u64>,
+    /// The EIP-712 `primaryType` (e.g. "Permit", "Order").
+    pub primary_type: String,
+    /// The `domain.name` (if present).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_name: Option<String>,
+    /// The `domain.version` (if present).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_version: Option<String>,
+    /// The full typed data JSON for executable policies to inspect.
+    pub raw_json: String,
 }
 
 /// Result of policy evaluation.
@@ -191,6 +215,7 @@ mod tests {
                 date: "2026-03-22".into(),
             },
             timestamp: "2026-03-22T10:35:22Z".into(),
+            typed_data: None,
         };
 
         let json = serde_json::to_string(&ctx).unwrap();
@@ -238,5 +263,68 @@ mod tests {
 
         let deserialized: PolicyAction = serde_json::from_value(json).unwrap();
         assert_eq!(deserialized, PolicyAction::Deny);
+    }
+
+    #[test]
+    fn test_typed_data_context_serde() {
+        let ctx = TypedDataContext {
+            verifying_contract: Some("0x000000000022D473030F116dDEE9F6B43aC78BA3".into()),
+            domain_chain_id: Some(8453),
+            primary_type: "PermitSingle".into(),
+            domain_name: Some("Permit2".into()),
+            domain_version: Some("1".into()),
+            raw_json: r#"{"types":{},"primaryType":"PermitSingle","domain":{},"message":{}}"#.into(),
+        };
+
+        let json = serde_json::to_string(&ctx).unwrap();
+        let deserialized: TypedDataContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.primary_type, "PermitSingle");
+        assert_eq!(
+            deserialized.verifying_contract.as_deref(),
+            Some("0x000000000022D473030F116dDEE9F6B43aC78BA3")
+        );
+        assert_eq!(deserialized.domain_chain_id, Some(8453));
+    }
+
+    #[test]
+    fn test_typed_data_context_optional_fields_omitted() {
+        let ctx = TypedDataContext {
+            verifying_contract: None,
+            domain_chain_id: None,
+            primary_type: "Mail".into(),
+            domain_name: None,
+            domain_version: None,
+            raw_json: "{}".into(),
+        };
+
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(!json.contains("verifying_contract"));
+        assert!(!json.contains("domain_chain_id"));
+        assert!(!json.contains("domain_name"));
+        assert!(!json.contains("domain_version"));
+    }
+
+    #[test]
+    fn test_policy_context_typed_data_none_omitted() {
+        let ctx = PolicyContext {
+            chain_id: "eip155:8453".into(),
+            wallet_id: "w".into(),
+            api_key_id: "k".into(),
+            transaction: TransactionContext {
+                to: None,
+                value: None,
+                raw_hex: "0x00".into(),
+                data: None,
+            },
+            spending: SpendingContext {
+                daily_total: "0".into(),
+                date: "2026-03-30".into(),
+            },
+            timestamp: "2026-03-30T12:00:00Z".into(),
+            typed_data: None,
+        };
+
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(!json.contains("typed_data"));
     }
 }
