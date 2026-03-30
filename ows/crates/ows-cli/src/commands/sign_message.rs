@@ -18,10 +18,16 @@ pub fn run(
         .as_deref()
         .is_some_and(|p| p.starts_with(ows_lib::key_store::TOKEN_PREFIX))
     {
-        if typed_data.is_some() {
-            return Err(CliError::InvalidArgs(
-                "EIP-712 typed data signing via API key is not yet supported".into(),
-            ));
+        if let Some(td_json) = typed_data {
+            let result = ows_lib::sign_typed_data(
+                wallet_name,
+                chain_str,
+                td_json,
+                passphrase.as_deref(),
+                Some(index),
+                None,
+            )?;
+            return print_result(&result.signature, result.recovery_id, json_output);
         }
         let result = ows_lib::sign_message(
             wallet_name,

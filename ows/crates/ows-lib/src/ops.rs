@@ -513,8 +513,8 @@ pub fn sign_message(
 /// Sign EIP-712 typed structured data. Returns hex-encoded signature.
 /// Only supported for EVM chains.
 ///
-/// Note: API token signing is not supported for typed data (EVM-specific
-/// operation that requires full context). Use `sign_transaction` instead.
+/// Accepts either the owner's passphrase or an API token (`ows_key_...`).
+/// When a token is provided, policy enforcement occurs before signing.
 pub fn sign_typed_data(
     wallet: &str,
     chain: &str,
@@ -533,10 +533,14 @@ pub fn sign_typed_data(
     }
 
     if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
-        return Err(OwsLibError::InvalidInput(
-            "EIP-712 typed data signing via API key is not yet supported; use sign_transaction"
-                .into(),
-        ));
+        return crate::key_ops::sign_typed_data_with_api_key(
+            credential,
+            wallet,
+            &chain,
+            typed_data_json,
+            index,
+            vault_path,
+        );
     }
 
     let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;

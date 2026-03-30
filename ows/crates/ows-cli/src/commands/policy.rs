@@ -65,6 +65,9 @@ pub fn show(id: &str) -> Result<(), CliError> {
                 ows_core::PolicyRule::ExpiresAt { timestamp } => {
                     format!("  expires_at: {timestamp}")
                 }
+                ows_core::PolicyRule::AllowedTypedDataContracts { contracts } => {
+                    format!("  allowed_typed_data_contracts: {}", contracts.join(", "))
+                }
             };
             println!("{desc}");
         }
