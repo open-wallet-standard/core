@@ -35,6 +35,34 @@ impl StacksSigner {
         Self::new(26)
     }
 
+    /// Validate that the transaction uses standard single-sig (P2PKH) auth layout,
+    /// which is the only layout compatible with the fixed byte offsets in this signer.
+    fn validate_single_sig_tx(tx_bytes: &[u8]) -> Result<(), SignerError> {
+        if tx_bytes.len() < STACKS_SIG_OFFSET + 65 {
+            return Err(SignerError::InvalidTransaction(
+                "stacks transaction too short".into(),
+            ));
+        }
+
+        let auth_type = tx_bytes[5];
+        let hash_mode = tx_bytes[6];
+
+        if auth_type != 0x04 {
+            return Err(SignerError::InvalidTransaction(format!(
+                "unsupported stacks auth type 0x{:02x}: only standard auth (0x04) is supported",
+                auth_type
+            )));
+        }
+        if hash_mode != 0x00 {
+            return Err(SignerError::InvalidTransaction(format!(
+                "unsupported stacks hash mode 0x{:02x}: only P2PKH single-sig (0x00) is supported",
+                hash_mode
+            )));
+        }
+
+        Ok(())
+    }
+
     fn signing_key(private_key: &[u8]) -> Result<SigningKey, SignerError> {
         SigningKey::from_slice(private_key)
             .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))
@@ -218,11 +246,7 @@ impl ChainSigner for StacksSigner {
         //   2. initial_sighash = SHA-512/256(cleared_tx)
         //   3. presign_hash = SHA-512/256(initial_sighash || auth_type || fee || nonce)
         //   4. sign(presign_hash)
-        if tx_bytes.len() < STACKS_SIG_OFFSET + 65 {
-            return Err(SignerError::InvalidTransaction(
-                "stacks transaction too short".into(),
-            ));
-        }
+        Self::validate_single_sig_tx(tx_bytes)?;
 
         let auth_type = tx_bytes[5];
         let nonce = &tx_bytes[27..35];
@@ -263,11 +287,7 @@ impl ChainSigner for StacksSigner {
                 "expected 65-byte VRS signature".into(),
             ));
         }
-        if tx_bytes.len() < STACKS_SIG_OFFSET + 65 {
-            return Err(SignerError::InvalidTransaction(
-                "stacks transaction too short".into(),
-            ));
-        }
+        Self::validate_single_sig_tx(tx_bytes)?;
 
         // Copy the unsigned tx and inject the VRS signature at the auth offset
         let mut signed = tx_bytes.to_vec();
@@ -458,6 +478,47 @@ mod tests {
         let privkey = test_privkey();
         let signer = StacksSigner::mainnet();
         let result = signer.sign(&privkey, b"too short");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sign_transaction_rejects_sponsored_auth() {
+        let privkey = test_privkey();
+        let signer = StacksSigner::mainnet();
+        let mut fake_tx = vec![0u8; 180];
+        fake_tx[5] = 0x05; // auth_type = Sponsored (not Standard)
+        fake_tx[6] = 0x00; // hash_mode = P2PKH
+        let result = signer.sign_transaction(&privkey, &fake_tx);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unsupported stacks auth type"), "got: {err}");
+    }
+
+    #[test]
+    fn test_sign_transaction_rejects_multisig_hash_mode() {
+        let privkey = test_privkey();
+        let signer = StacksSigner::mainnet();
+        let mut fake_tx = vec![0u8; 180];
+        fake_tx[5] = 0x04; // auth_type = Standard
+        fake_tx[6] = 0x01; // hash_mode = P2SH multisig
+        let result = signer.sign_transaction(&privkey, &fake_tx);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unsupported stacks hash mode"), "got: {err}");
+    }
+
+    #[test]
+    fn test_encode_signed_transaction_rejects_non_single_sig() {
+        let signer = StacksSigner::mainnet();
+        let mut fake_tx = vec![0u8; 180];
+        fake_tx[5] = 0x05; // Sponsored
+        fake_tx[6] = 0x00;
+        let fake_sig = SignOutput {
+            signature: vec![0u8; 65],
+            recovery_id: Some(0),
+            public_key: None,
+        };
+        let result = signer.encode_signed_transaction(&fake_tx, &fake_sig);
         assert!(result.is_err());
     }
 
