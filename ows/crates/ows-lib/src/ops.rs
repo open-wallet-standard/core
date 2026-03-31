@@ -697,6 +697,7 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
             "broadcast not yet supported for Filecoin".into(),
         )),
         ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
+        ChainType::Xrp => Err(OwsLibError::InvalidInput("broadcast not yet supported for XRP".into())),
     }
 }
 

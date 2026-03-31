@@ -14,10 +14,11 @@ pub enum ChainType {
     Spark,
     Filecoin,
     Sui,
+    Xrp,
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 8] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 9] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
@@ -26,6 +27,7 @@ pub const ALL_CHAIN_TYPES: [ChainType; 8] = [
     ChainType::Ton,
     ChainType::Filecoin,
     ChainType::Sui,
+    ChainType::Xrp,
 ];
 
 /// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
@@ -123,6 +125,11 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_type: ChainType::Sui,
         chain_id: "sui:mainnet",
     },
+    Chain {
+        name: "xrp",
+        chain_type: ChainType::Xrp,
+        chain_id: "xrpl:mainnet",
+    },
 ];
 
 /// Parse a chain string into a `Chain`. Accepts:
@@ -187,6 +194,7 @@ impl ChainType {
             ChainType::Spark => "spark",
             ChainType::Filecoin => "fil",
             ChainType::Sui => "sui",
+            ChainType::Xrp => "xrpl",
         }
     }
 
@@ -202,6 +210,7 @@ impl ChainType {
             ChainType::Spark => 8797555,
             ChainType::Filecoin => 461,
             ChainType::Sui => 784,
+            ChainType::Xrp => 144,
         }
     }
 
@@ -217,6 +226,7 @@ impl ChainType {
             "spark" => Some(ChainType::Spark),
             "fil" => Some(ChainType::Filecoin),
             "sui" => Some(ChainType::Sui),
+            "xrpl" => Some(ChainType::Xrp),
             _ => None,
         }
     }
@@ -234,6 +244,7 @@ impl fmt::Display for ChainType {
             ChainType::Spark => "spark",
             ChainType::Filecoin => "filecoin",
             ChainType::Sui => "sui",
+            ChainType::Xrp => "xrp",
         };
         write!(f, "{}", s)
     }
@@ -253,6 +264,7 @@ impl FromStr for ChainType {
             "spark" => Ok(ChainType::Spark),
             "filecoin" => Ok(ChainType::Filecoin),
             "sui" => Ok(ChainType::Sui),
+            "xrp" | "ripple" | "xrpl" => Ok(ChainType::Xrp),
             _ => Err(format!("unknown chain type: {}", s)),
         }
     }
@@ -414,7 +426,7 @@ mod tests {
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 8);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 9);
     }
 
     #[test]
