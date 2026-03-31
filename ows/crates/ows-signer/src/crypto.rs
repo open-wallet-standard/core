@@ -62,6 +62,13 @@ pub enum CryptoError {
     InvalidParams(String),
 }
 
+// Prevent fast-kdf from being used in release builds — weak KDF is test-only.
+#[cfg(all(feature = "fast-kdf", not(debug_assertions)))]
+compile_error!(
+    "The `fast-kdf` feature reduces scrypt to 2^10 iterations and must not be used in release builds. \
+     Use dev-dependencies to enable it for tests only."
+);
+
 // Production: log_n=16 (~5s per call, down from ~20s at log_n=18)
 // Tests: log_n=10 (<10ms per call)
 #[cfg(any(test, feature = "fast-kdf"))]

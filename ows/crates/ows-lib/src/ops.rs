@@ -425,7 +425,8 @@ pub fn sign_transaction(
     let chain = parse_chain(chain)?;
     let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
     let signer = signer_for_chain(chain.chain_type);
-    let output = signer.sign_transaction(key.expose(), &tx_bytes)?;
+    let signable = signer.extract_signable_bytes(&tx_bytes)?;
+    let output = signer.sign_transaction(key.expose(), signable)?;
 
     Ok(SignResult {
         signature: hex::encode(&output.signature),
@@ -704,15 +705,19 @@ fn broadcast_evm(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibErr
     extract_json_field(&resp, "result")
 }
 
-fn broadcast_solana(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
+fn build_solana_rpc_body(signed_bytes: &[u8]) -> serde_json::Value {
     use base64::Engine;
     let b64_tx = base64::engine::general_purpose::STANDARD.encode(signed_bytes);
-    let body = serde_json::json!({
+    serde_json::json!({
         "jsonrpc": "2.0",
         "method": "sendTransaction",
-        "params": [b64_tx],
+        "params": [b64_tx, {"encoding": "base64"}],
         "id": 1
-    });
+    })
+}
+
+fn broadcast_solana(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
+    let body = build_solana_rpc_body(signed_bytes);
     let resp = curl_post_json(rpc_url, &body.to_string())?;
     extract_json_field(&resp, "result")
 }
@@ -2663,5 +2668,264 @@ mod tests {
             hex::encode(&direct.signature),
             "sign_message owner path must match direct signer"
         );
+    }
+
+    // ================================================================
+    // SOLANA BROADCAST ENCODING (Issue 1)
+    // ================================================================
+
+    #[test]
+    fn solana_broadcast_body_includes_encoding_param() {
+        let dummy_tx = vec![0x01; 100];
+        let body = build_solana_rpc_body(&dummy_tx);
+
+        assert_eq!(body["method"], "sendTransaction");
+        assert_eq!(
+            body["params"][1]["encoding"], "base64",
+            "sendTransaction must specify encoding=base64 so Solana RPC \
+             does not default to base58"
+        );
+    }
+
+    #[test]
+    fn solana_broadcast_body_uses_base64_encoding() {
+        use base64::Engine;
+        let dummy_tx = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03];
+        let body = build_solana_rpc_body(&dummy_tx);
+
+        let encoded = body["params"][0].as_str().unwrap();
+        // Must round-trip through base64
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("params[0] should be valid base64");
+        assert_eq!(
+            decoded, dummy_tx,
+            "base64 should round-trip to original bytes"
+        );
+    }
+
+    #[test]
+    fn solana_broadcast_body_is_not_hex_or_base58() {
+        // Use bytes that would produce different strings in hex vs base64
+        let dummy_tx = vec![0xFF; 50];
+        let body = build_solana_rpc_body(&dummy_tx);
+
+        let encoded = body["params"][0].as_str().unwrap();
+        let hex_encoded = hex::encode(&dummy_tx);
+        assert_ne!(encoded, hex_encoded, "broadcast should use base64, not hex");
+        // base58 never contains '+' or '/' but base64 can
+        // More importantly, verify it's NOT valid base58 for these bytes
+        assert!(
+            encoded.contains('/') || encoded.contains('+') || encoded.ends_with('='),
+            "base64 of 0xFF bytes should contain characters absent from base58"
+        );
+    }
+
+    #[test]
+    fn solana_broadcast_body_jsonrpc_structure() {
+        let body = build_solana_rpc_body(&[0u8; 10]);
+        assert_eq!(body["jsonrpc"], "2.0");
+        assert_eq!(body["id"], 1);
+        assert_eq!(body["method"], "sendTransaction");
+        assert!(body["params"].is_array());
+        assert_eq!(
+            body["params"].as_array().unwrap().len(),
+            2,
+            "params should have [tx_data, options_object]"
+        );
+    }
+
+    // ================================================================
+    // SOLANA SIGN_TRANSACTION EXTRACTION (Issue 2)
+    // ================================================================
+
+    #[test]
+    fn solana_sign_transaction_extracts_signable_bytes() {
+        // After the fix, sign_transaction should automatically extract
+        // the message portion from a full Solana transaction envelope.
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        create_wallet("sol-extract", None, None, Some(vault)).unwrap();
+
+        let message_payload = b"test solana message for extraction";
+        let mut full_tx = vec![0x01u8]; // 1 sig slot
+        full_tx.extend_from_slice(&[0u8; 64]); // placeholder signature
+        full_tx.extend_from_slice(message_payload);
+        let tx_hex = hex::encode(&full_tx);
+
+        // sign_transaction through the public API (should now extract first)
+        let sig_result =
+            sign_transaction("sol-extract", "solana", &tx_hex, None, None, Some(vault)).unwrap();
+        let sig_bytes = hex::decode(&sig_result.signature).unwrap();
+
+        // Verify the signature is over the MESSAGE portion, not the full tx
+        let key =
+            decrypt_signing_key("sol-extract", ChainType::Solana, "", None, Some(vault)).unwrap();
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&key.expose().try_into().unwrap());
+        let verifying_key = signing_key.verifying_key();
+        let ed_sig = ed25519_dalek::Signature::from_bytes(&sig_bytes.try_into().unwrap());
+
+        verifying_key
+            .verify_strict(message_payload, &ed_sig)
+            .expect("sign_transaction should sign the message portion, not the full envelope");
+    }
+
+    #[test]
+    fn solana_sign_transaction_full_tx_matches_extracted_sign() {
+        // Signing a full Solana tx via sign_transaction should produce the
+        // same signature as manually extracting then signing.
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        create_wallet("sol-match", None, None, Some(vault)).unwrap();
+
+        let message_payload = b"matching signatures test";
+        let mut full_tx = vec![0x01u8];
+        full_tx.extend_from_slice(&[0u8; 64]);
+        full_tx.extend_from_slice(message_payload);
+        let tx_hex = hex::encode(&full_tx);
+
+        // Path A: through public sign_transaction API
+        let api_sig =
+            sign_transaction("sol-match", "solana", &tx_hex, None, None, Some(vault)).unwrap();
+
+        // Path B: manual extract + sign
+        let key =
+            decrypt_signing_key("sol-match", ChainType::Solana, "", None, Some(vault)).unwrap();
+        let signer = signer_for_chain(ChainType::Solana);
+        let signable = signer.extract_signable_bytes(&full_tx).unwrap();
+        let direct = signer.sign_transaction(key.expose(), signable).unwrap();
+
+        assert_eq!(
+            api_sig.signature,
+            hex::encode(&direct.signature),
+            "sign_transaction API and manual extract+sign must produce the same signature"
+        );
+    }
+
+    #[test]
+    fn evm_sign_transaction_unaffected_by_extraction() {
+        // Regression: EVM's extract_signable_bytes is a no-op, so the fix
+        // should not change EVM signing behavior.
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        create_wallet("evm-regress", None, None, Some(vault)).unwrap();
+
+        let items: Vec<u8> = [
+            ows_signer::rlp::encode_bytes(&[1]),
+            ows_signer::rlp::encode_bytes(&[]),
+            ows_signer::rlp::encode_bytes(&[1]),
+            ows_signer::rlp::encode_bytes(&[100]),
+            ows_signer::rlp::encode_bytes(&[0x52, 0x08]),
+            ows_signer::rlp::encode_bytes(&[0xDE, 0xAD]),
+            ows_signer::rlp::encode_bytes(&[]),
+            ows_signer::rlp::encode_bytes(&[]),
+            ows_signer::rlp::encode_list(&[]),
+        ]
+        .concat();
+        let mut unsigned_tx = vec![0x02u8];
+        unsigned_tx.extend_from_slice(&ows_signer::rlp::encode_list(&items));
+        let tx_hex = hex::encode(&unsigned_tx);
+
+        // Sign twice — should be deterministic and work fine
+        let sig1 =
+            sign_transaction("evm-regress", "evm", &tx_hex, None, None, Some(vault)).unwrap();
+        let sig2 =
+            sign_transaction("evm-regress", "evm", &tx_hex, None, None, Some(vault)).unwrap();
+        assert_eq!(sig1.signature, sig2.signature);
+        assert_eq!(hex::decode(&sig1.signature).unwrap().len(), 65);
+    }
+
+    // ================================================================
+    // SOLANA DEVNET INTEGRATION
+    // ================================================================
+
+    #[test]
+    #[ignore] // requires network access to Solana devnet
+    fn solana_devnet_broadcast_encoding_accepted() {
+        // Send a properly-structured Solana transaction to devnet.
+        // The account is unfunded so the tx will fail, but the error should
+        // NOT be about base58 encoding — proving the encoding fix works.
+
+        // 1. Fetch a recent blockhash from devnet
+        let bh_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "getLatestBlockhash",
+            "params": [],
+            "id": 1
+        });
+        let bh_resp =
+            curl_post_json("https://api.devnet.solana.com", &bh_body.to_string()).unwrap();
+        let bh_parsed: serde_json::Value = serde_json::from_str(&bh_resp).unwrap();
+        let blockhash_b58 = bh_parsed["result"]["value"]["blockhash"]
+            .as_str()
+            .expect("devnet should return a blockhash");
+        let blockhash = bs58::decode(blockhash_b58).into_vec().unwrap();
+        assert_eq!(blockhash.len(), 32);
+
+        // 2. Derive sender pubkey from test key
+        let privkey =
+            hex::decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+                .unwrap();
+        let signing_key =
+            ed25519_dalek::SigningKey::from_bytes(&privkey.clone().try_into().unwrap());
+        let sender_pubkey = signing_key.verifying_key().to_bytes();
+
+        // 3. Build a minimal SOL transfer message
+        let recipient_pubkey = [0x01; 32]; // arbitrary recipient
+        let system_program = [0u8; 32]; // 11111..1 in base58 = all zeros
+
+        let mut message = vec![
+            1, // num_required_signatures
+            0, // num_readonly_signed_accounts
+            1, // num_readonly_unsigned_accounts
+            3, // num_account_keys (compact-u16)
+        ];
+        message.extend_from_slice(&sender_pubkey);
+        message.extend_from_slice(&recipient_pubkey);
+        message.extend_from_slice(&system_program);
+        // Recent blockhash
+        message.extend_from_slice(&blockhash);
+        // Instructions
+        message.push(1); // num_instructions (compact-u16)
+        message.push(2); // program_id_index (system program)
+        message.push(2); // num_accounts
+        message.push(0); // from
+        message.push(1); // to
+        message.push(12); // data_length
+        message.extend_from_slice(&2u32.to_le_bytes()); // transfer opcode
+        message.extend_from_slice(&1u64.to_le_bytes()); // 1 lamport
+
+        // 4. Build full transaction envelope
+        let mut tx_bytes = vec![0x01u8]; // 1 signature slot
+        tx_bytes.extend_from_slice(&[0u8; 64]); // placeholder
+        tx_bytes.extend_from_slice(&message);
+
+        // 5. Sign + encode + broadcast to devnet
+        let result = sign_encode_and_broadcast(
+            &privkey,
+            "solana",
+            &tx_bytes,
+            Some("https://api.devnet.solana.com"),
+        );
+
+        // 6. Verify we don't get an encoding error
+        match result {
+            Ok(send_result) => {
+                // Unlikely (unfunded) but fine
+                assert!(!send_result.tx_hash.is_empty());
+            }
+            Err(e) => {
+                let err_str = format!("{e}");
+                assert!(
+                    !err_str.contains("base58"),
+                    "should not get base58 encoding error: {err_str}"
+                );
+                assert!(
+                    !err_str.contains("InvalidCharacter"),
+                    "should not get InvalidCharacter error: {err_str}"
+                );
+                // We expect errors like "insufficient funds" or simulation failure
+            }
+        }
     }
 }

@@ -15,6 +15,9 @@ pub enum HdError {
 
     #[error("ed25519 requires hardened-only derivation")]
     Ed25519NonHardened,
+
+    #[error("invalid seed length: expected 16-64 bytes, got {0}")]
+    InvalidSeedLength(usize),
 }
 
 /// HD key deriver supporting BIP-32 (secp256k1) and SLIP-10 (ed25519).
@@ -22,7 +25,12 @@ pub struct HdDeriver;
 
 impl HdDeriver {
     /// Derive a child private key from a seed and derivation path.
+    ///
+    /// Seed must be 16-64 bytes (BIP-32 §2).
     pub fn derive(seed: &[u8], path: &str, curve: Curve) -> Result<SecretBytes, HdError> {
+        if seed.len() < 16 || seed.len() > 64 {
+            return Err(HdError::InvalidSeedLength(seed.len()));
+        }
         Self::validate_path(path)?;
 
         match curve {
@@ -266,6 +274,204 @@ mod tests {
             HdError::Ed25519NonHardened => {}
             other => panic!("expected Ed25519NonHardened, got {:?}", other),
         }
+    }
+
+    // === BIP-32 spec test vectors (secp256k1) ===
+    // Source: https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki#test-vectors
+
+    #[test]
+    fn test_bip32_vector1_chain() {
+        let seed = hex::decode("000102030405060708090a0b0c0d0e0f").unwrap();
+
+        let cases = [
+            (
+                "m/0'",
+                "edb2e14f9ee77d26dd93b4ecede8d16ed408ce149b6cd80b0715a2d911a0afea",
+            ),
+            (
+                "m/0'/1",
+                "3c6cb8d0f6a264c91ea8b5030fadaa8e538b020f0a387421a12de9319dc93368",
+            ),
+            (
+                "m/0'/1/2'",
+                "cbce0d719ecf7431d88e6a89fa1483e02e35092af60c042b1df2ff59fa424dca",
+            ),
+            (
+                "m/0'/1/2'/2",
+                "0f479245fb19a38a1954c5c7c0ebab2f9bdfd96a17563ef28a6a4b1a2a764ef4",
+            ),
+            (
+                "m/0'/1/2'/2/1000000000",
+                "471b76e389e528d6de6d816857e012c5455051cad6660850e58372a6c3e6e7c8",
+            ),
+        ];
+
+        for (path, expected_hex) in cases {
+            let key = HdDeriver::derive(&seed, path, Curve::Secp256k1)
+                .unwrap_or_else(|e| panic!("failed to derive {}: {}", path, e));
+            assert_eq!(
+                hex::encode(key.expose()),
+                expected_hex,
+                "BIP-32 vector 1 mismatch at {}",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn test_bip32_vector2_chain() {
+        let seed = hex::decode(
+            "fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a2\
+             9f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542",
+        )
+        .unwrap();
+
+        let cases = [
+            (
+                "m/0",
+                "abe74a98f6c7eabee0428f53798f0ab8aa1bd37873999041703c742f15ac7e1e",
+            ),
+            (
+                "m/0/2147483647'",
+                "877c779ad9687164e9c2f4f0f4ff0340814392330693ce95a58fe18fd52e6e93",
+            ),
+            (
+                "m/0/2147483647'/1",
+                "704addf544a06e5ee4bea37098463c23613da32020d604506da8c0518e1da4b7",
+            ),
+            (
+                "m/0/2147483647'/1/2147483646'",
+                "f1c7c871a54a804afe328b4c83a1c33b8e5ff48f5087273f04efa83b247d6a2d",
+            ),
+            (
+                "m/0/2147483647'/1/2147483646'/2",
+                "bb7d39bdb83ecf58f2fd82b6d918341cbef428661ef01ab97c28a4842125ac23",
+            ),
+        ];
+
+        for (path, expected_hex) in cases {
+            let key = HdDeriver::derive(&seed, path, Curve::Secp256k1)
+                .unwrap_or_else(|e| panic!("failed to derive {}: {}", path, e));
+            assert_eq!(
+                hex::encode(key.expose()),
+                expected_hex,
+                "BIP-32 vector 2 mismatch at {}",
+                path
+            );
+        }
+    }
+
+    // === SLIP-10 spec test vectors (ed25519) ===
+    // Source: https://github.com/satoshilabs/slips/blob/master/slip-0010.md#test-vectors
+
+    #[test]
+    fn test_slip10_vector1_chain() {
+        let seed = hex::decode("000102030405060708090a0b0c0d0e0f").unwrap();
+
+        let cases = [
+            (
+                "m/0'",
+                "68e0fe46dfb67e368c75379acec591dad19df3cde26e63b93a8e704f1dade7a3",
+            ),
+            (
+                "m/0'/1'",
+                "b1d0bad404bf35da785a64ca1ac54b2617211d2777696fbffaf208f746ae84f2",
+            ),
+            (
+                "m/0'/1'/2'",
+                "92a5b23c0b8a99e37d07df3fb9966917f5d06e02ddbd909c7e184371463e9fc9",
+            ),
+            (
+                "m/0'/1'/2'/2'",
+                "30d1dc7e5fc04c31219ab25a27ae00b50f6fd66622f6e9c913253d6511d1e662",
+            ),
+            (
+                "m/0'/1'/2'/2'/1000000000'",
+                "8f94d394a8e8fd6b1bc2f3f49f5c47e385281d5c17e65324b0f62483e37e8793",
+            ),
+        ];
+
+        for (path, expected_hex) in cases {
+            let key = HdDeriver::derive(&seed, path, Curve::Ed25519)
+                .unwrap_or_else(|e| panic!("failed to derive {}: {}", path, e));
+            assert_eq!(
+                hex::encode(key.expose()),
+                expected_hex,
+                "SLIP-10 vector 1 mismatch at {}",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn test_slip10_vector2_chain() {
+        let seed = hex::decode(
+            "fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a2\
+             9f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542",
+        )
+        .unwrap();
+
+        let cases = [
+            (
+                "m/0'",
+                "1559eb2bbec5790b0c65d8693e4d0875b1747f4970ae8b650486ed7470845635",
+            ),
+            (
+                "m/0'/2147483647'",
+                "ea4f5bfe8694d8bb74b7b59404632fd5968b774ed545e810de9c32a4fb4192f4",
+            ),
+            (
+                "m/0'/2147483647'/1'",
+                "3757c7577170179c7868353ada796c839135b3d30554bbb74a4b1e4a5a58505c",
+            ),
+            (
+                "m/0'/2147483647'/1'/2147483646'",
+                "5837736c89570de861ebc173b1086da4f505d4adb387c6a1b1342d5e4ac9ec72",
+            ),
+            (
+                "m/0'/2147483647'/1'/2147483646'/2'",
+                "551d333177df541ad876a60ea71f00447931c0a9da16f227c11ea080d7391b8d",
+            ),
+        ];
+
+        for (path, expected_hex) in cases {
+            let key = HdDeriver::derive(&seed, path, Curve::Ed25519)
+                .unwrap_or_else(|e| panic!("failed to derive {}: {}", path, e));
+            assert_eq!(
+                hex::encode(key.expose()),
+                expected_hex,
+                "SLIP-10 vector 2 mismatch at {}",
+                path
+            );
+        }
+    }
+
+    // === Seed length validation ===
+
+    #[test]
+    fn test_seed_length_too_short() {
+        let seed = [0u8; 15];
+        let result = HdDeriver::derive(&seed, "m/0'", Curve::Secp256k1);
+        assert!(matches!(result, Err(HdError::InvalidSeedLength(15))));
+    }
+
+    #[test]
+    fn test_seed_length_too_long() {
+        let seed = [0u8; 65];
+        let result = HdDeriver::derive(&seed, "m/0'", Curve::Secp256k1);
+        assert!(matches!(result, Err(HdError::InvalidSeedLength(65))));
+    }
+
+    #[test]
+    fn test_seed_length_minimum_accepted() {
+        let seed = [0u8; 16];
+        assert!(HdDeriver::derive(&seed, "m/0'", Curve::Secp256k1).is_ok());
+    }
+
+    #[test]
+    fn test_seed_length_maximum_accepted() {
+        let seed = [0u8; 64];
+        assert!(HdDeriver::derive(&seed, "m/0'", Curve::Secp256k1).is_ok());
     }
 
     // === Characterization tests: lock down current behavior before refactoring ===

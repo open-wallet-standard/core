@@ -66,6 +66,11 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_id: "eip155:8453",
     },
     Chain {
+        name: "plasma",
+        chain_type: ChainType::Evm,
+        chain_id: "eip155:9745",
+    },
+    Chain {
         name: "bsc",
         chain_type: ChainType::Evm,
         chain_id: "eip155:56",
@@ -74,6 +79,11 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         name: "avalanche",
         chain_type: ChainType::Evm,
         chain_id: "eip155:43114",
+    },
+    Chain {
+        name: "etherlink",
+        chain_type: ChainType::Evm,
+        chain_id: "eip155:42793",
     },
     Chain {
         name: "solana",
@@ -362,10 +372,42 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_chain_plasma_alias() {
+        let chain = parse_chain("plasma").unwrap();
+        assert_eq!(chain.name, "plasma");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+        assert_eq!(chain.chain_id, "eip155:9745");
+    }
+
+    #[test]
+    fn test_parse_chain_etherlink_alias() {
+        let chain = parse_chain("etherlink").unwrap();
+        assert_eq!(chain.name, "etherlink");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+        assert_eq!(chain.chain_id, "eip155:42793");
+    }
+
+    #[test]
     fn test_parse_chain_caip2() {
         let chain = parse_chain("eip155:42161").unwrap();
         assert_eq!(chain.name, "arbitrum");
         assert_eq!(chain.chain_type, ChainType::Evm);
+    }
+
+    #[test]
+    fn test_parse_chain_plasma_caip2() {
+        let chain = parse_chain("eip155:9745").unwrap();
+        assert_eq!(chain.name, "plasma");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+        assert_eq!(chain.chain_id, "eip155:9745");
+    }
+
+    #[test]
+    fn test_parse_chain_unknown_evm_caip2() {
+        let chain = parse_chain("eip155:9746").unwrap();
+        assert_eq!(chain.name, "eip155:9746");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+        assert_eq!(chain.chain_id, "eip155:9746");
     }
 
     #[test]

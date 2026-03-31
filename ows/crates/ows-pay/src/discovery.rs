@@ -215,7 +215,15 @@ pub(crate) fn format_usdc(amount_str: &str) -> String {
 fn truncate(s: &str, max: usize) -> String {
     let first_line = s.lines().next().unwrap_or("");
     if first_line.len() > max {
-        format!("{}...", &first_line[..max.saturating_sub(3)])
+        let cutoff = first_line
+            .char_indices()
+            .map(|(idx, _)| idx)
+            .chain(std::iter::once(first_line.len()))
+            .take_while(|&idx| idx <= max.saturating_sub(3))
+            .last()
+            .unwrap_or(0);
+
+        format!("{}...", &first_line[..cutoff])
     } else {
         first_line.to_string()
     }
@@ -284,6 +292,15 @@ mod tests {
         let result = truncate(&long, 20);
         assert!(result.len() <= 20);
         assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn truncate_long_utf8_string_respects_char_boundaries() {
+        let prefix = "a".repeat(76);
+        let input = format!("{prefix}“🙂 rest");
+        let result = truncate(&input, 80);
+
+        assert_eq!(result, format!("{prefix}..."));
     }
 
     #[test]

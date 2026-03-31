@@ -4,7 +4,8 @@
 //! core dumps, debugger attachment, or memory swapping.
 //!
 //! Also provides signal-based cleanup hooks so that cached key material
-//! is zeroized on SIGTERM, SIGINT, or SIGHUP before the process exits.
+//! is zeroized on SIGTERM, SIGINT, SIGHUP, or SIGQUIT before the process exits.
+//! A panic hook ensures cleanup also runs on Rust panics (covering the SIGABRT path).
 
 use std::sync::{Mutex, OnceLock};
 
@@ -46,14 +47,19 @@ fn run_cleanup_hooks() {
     }
 }
 
-/// Install signal handlers for SIGTERM, SIGINT, and SIGHUP.
+/// Install signal handlers for SIGTERM, SIGINT, SIGHUP, and SIGQUIT.
 ///
 /// Spawns a background thread that waits for any of these signals,
 /// runs all registered cleanup hooks (zeroizing cached keys), then exits.
+///
+/// Also installs a panic hook so that cleanup runs on Rust panics
+/// (the primary path to SIGABRT, which cannot be safely intercepted
+/// via signal handlers).
+///
 /// Must be called at most once; subsequent calls are no-ops.
 #[cfg(unix)]
 pub fn install_signal_handlers() {
-    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+    use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
     use signal_hook::iterator::Signals;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -62,8 +68,15 @@ pub fn install_signal_handlers() {
         return;
     }
 
-    let mut signals =
-        Signals::new([SIGTERM, SIGINT, SIGHUP]).expect("failed to register signal handlers");
+    // Capture the default panic hook so we can chain after cleanup.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        run_cleanup_hooks();
+        default_hook(info);
+    }));
+
+    let mut signals = Signals::new([SIGTERM, SIGINT, SIGHUP, SIGQUIT])
+        .expect("failed to register signal handlers");
 
     std::thread::Builder::new()
         .name("ows-signal-handler".into())

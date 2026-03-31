@@ -1,4 +1,23 @@
 use crate::CliError;
+use ows_lib::types::AccountInfo;
+
+/// Returns the wallet account matching the target funding chain.
+fn find_account_for_chain<'a>(
+    accounts: &'a [AccountInfo],
+    chain: &str,
+) -> Result<&'a AccountInfo, CliError> {
+    let chain_prefix = match chain {
+        "solana" => "solana:",
+        _ => "eip155:",
+    };
+
+    accounts
+        .iter()
+        .find(|a| a.chain_id.starts_with(chain_prefix))
+        .ok_or_else(|| {
+            CliError::InvalidArgs(format!("wallet has no account for chain \"{chain}\""))
+        })
+}
 
 /// `ows fund buy --wallet <name> [--chain base] [--token USDC]`
 ///
@@ -6,14 +25,10 @@ use crate::CliError;
 /// Anyone can send crypto from any chain — it auto-converts to the target token.
 pub fn run(wallet_name: &str, chain: Option<&str>, token: Option<&str>) -> Result<(), CliError> {
     let wallet = ows_lib::get_wallet(wallet_name, None)?;
-    let evm_account = wallet
-        .accounts
-        .iter()
-        .find(|a| a.chain_id.starts_with("eip155:"))
-        .ok_or_else(|| CliError::InvalidArgs("wallet has no EVM account".into()))?;
-
-    let address = &evm_account.address;
     let chain_name = chain.unwrap_or("base");
+
+    let account = find_account_for_chain(&wallet.accounts, chain_name)?;
+    let address = &account.address;
     let token_name = token.unwrap_or("USDC");
 
     eprintln!("Creating deposit for wallet \"{wallet_name}\" ({address})");
@@ -69,14 +84,10 @@ pub fn run(wallet_name: &str, chain: Option<&str>, token: Option<&str>) -> Resul
 /// Check token balances via MoonPay.
 pub fn balance(wallet_name: &str, chain: Option<&str>) -> Result<(), CliError> {
     let wallet = ows_lib::get_wallet(wallet_name, None)?;
-    let evm_account = wallet
-        .accounts
-        .iter()
-        .find(|a| a.chain_id.starts_with("eip155:"))
-        .ok_or_else(|| CliError::InvalidArgs("wallet has no EVM account".into()))?;
-
-    let address = &evm_account.address;
     let chain_name = chain.unwrap_or("base");
+
+    let account = find_account_for_chain(&wallet.accounts, chain_name)?;
+    let address = &account.address;
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| CliError::InvalidArgs(format!("tokio: {e}")))?;

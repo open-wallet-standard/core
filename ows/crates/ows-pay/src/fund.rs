@@ -8,6 +8,8 @@ const MOONPAY_API: &str = "https://agents.moonpay.com";
 
 /// MoonPay-specific chain mapping. This is separate from the protocol-level
 /// CAIP-2 utilities because MoonPay has its own chain name scheme.
+/// MoonPay expects the BNB Chain funding slug to be `bnb`, while OWS uses `bsc` as the canonical chain name.
+#[derive(Debug)]
 struct MoonPayChain {
     display_name: &'static str,
     moonpay_name: &'static str,
@@ -50,10 +52,31 @@ const MOONPAY_CHAINS: &[(&str, MoonPayChain)] = &[
         },
     ),
     (
+        "bsc",
+        MoonPayChain {
+            display_name: "BNB Chain",
+            moonpay_name: "bnb",
+        },
+    ),
+    (
+        "bnb",
+        MoonPayChain {
+            display_name: "BNB Chain",
+            moonpay_name: "bnb",
+        },
+    ),
+    (
         "base-sepolia",
         MoonPayChain {
             display_name: "Base Sepolia",
             moonpay_name: "base-sepolia",
+        },
+    ),
+    (
+        "solana",
+        MoonPayChain {
+            display_name: "Solana",
+            moonpay_name: "solana",
         },
     ),
 ];
@@ -79,6 +102,44 @@ fn resolve_moonpay_chain(chain: Option<&str>) -> Result<&'static MoonPayChain, P
                 })
         }
         None => Ok(DEFAULT_MOONPAY_CHAIN),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_bsc_to_bnb() {
+        let chain = resolve_moonpay_chain(Some("bsc")).unwrap();
+        assert_eq!(chain.display_name, "BNB Chain");
+        assert_eq!(chain.moonpay_name, "bnb");
+    }
+
+    #[test]
+    fn resolve_bnb_alias() {
+        let chain = resolve_moonpay_chain(Some("bnb")).unwrap();
+        assert_eq!(chain.display_name, "BNB Chain");
+        assert_eq!(chain.moonpay_name, "bnb");
+    }
+
+    #[test]
+    fn resolve_chain_is_case_insensitive() {
+        let chain = resolve_moonpay_chain(Some("BnB")).unwrap();
+        assert_eq!(chain.moonpay_name, "bnb");
+    }
+
+    #[test]
+    fn resolve_unknown_chain_errors() {
+        let err = resolve_moonpay_chain(Some("unknown")).unwrap_err();
+        assert_eq!(err.code, PayErrorCode::UnsupportedChain);
+    }
+
+    #[test]
+    fn resolve_defaults_to_base() {
+        let chain = resolve_moonpay_chain(None).unwrap();
+        assert_eq!(chain.display_name, "Base");
+        assert_eq!(chain.moonpay_name, "base");
     }
 }
 

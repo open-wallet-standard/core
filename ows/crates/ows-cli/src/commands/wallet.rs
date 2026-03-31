@@ -174,7 +174,10 @@ pub fn list() -> Result<(), CliError> {
         println!("Name:    {}", w.name);
         println!("Secured: ✓ (encrypted)");
         for acct in &w.accounts {
-            println!("  {} → {}", acct.chain_id, acct.address);
+            let label = ows_core::parse_chain(&acct.chain_id)
+                .map(|c| format!(" ({})", c.name))
+                .unwrap_or_default();
+            println!("  {}{} → {}", acct.chain_id, label, acct.address);
         }
         println!("Created: {}", w.created_at);
         println!();

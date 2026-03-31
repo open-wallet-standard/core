@@ -65,6 +65,7 @@ jobs:
           - Python binding version (\`pyproject.toml\`, \`Cargo.toml\`)
           - Node binding version (\`package.json\`, \`Cargo.toml\`, platform packages)
           - Skill manifest version (\`SKILL.md\`)
+          - Docs site version badge and heading (\`website-docs/\`)
           - Regenerated READMEs" \
             --base main \
             --head "$BRANCH"

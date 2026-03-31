@@ -273,7 +273,7 @@ ows sign tx --wallet "my-wallet" --chain evm --tx "02f8..."
 | Flag | Description |
 |------|-------------|
 | `--wallet <NAME>` | Wallet name or ID |
-| `--chain <CHAIN>` | Chain family |
+| `--chain <CHAIN>` | Chain family or supported alias / CAIP-2 ID |
 | `--tx <HEX>` | Hex-encoded transaction bytes |
 | `--json` | Output structured JSON |
 

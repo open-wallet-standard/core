@@ -94,7 +94,7 @@ Each wallet is stored as a single JSON file extending the Ethereum Keystore v3 s
 
 ## API Key File Format
 
-Each API key is stored as a JSON file in `~/.ows/keys/`. The key file contains metadata, policy attachments, and **encrypted copies of wallet secrets** re-encrypted under the API token (see [Policy Engine](03-policy-engine.md) for the full cryptographic design).
+Each API key is stored as a JSON file in `~/.ows/keys/`. The key file contains metadata, policy attachments, and **encrypted copies of wallet secrets** re-encrypted under the API token (see [Policy Engine](03-policy-engine) for the full cryptographic design).
 
 ```json
 {

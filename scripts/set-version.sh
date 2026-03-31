@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 <version> --python|--node|--rust|--all" >&2
+  echo "Usage: $0 <version> --python|--node|--rust|--docs|--all" >&2
   exit 1
 }
 
@@ -72,10 +72,29 @@ set_skill_version() {
   rm -f "$REPO_ROOT/skills/ows/SKILL.md.bak"
 }
 
+set_docs_version() {
+  local short_version
+  short_version="$(echo "$VERSION" | sed 's/\([0-9]*\.[0-9]*\).*/\1/')"
+
+  # website-docs/index.html — sidebar badge and page heading
+  sed -i.bak \
+    -e "s/<span class=\"version\">v[^<]*</<span class=\"version\">v${short_version}</" \
+    -e "s/Open Wallet Standard v[0-9][0-9.a-zA-Z-]*/Open Wallet Standard v${VERSION}/" \
+    "$REPO_ROOT/website-docs/index.html"
+  rm -f "$REPO_ROOT/website-docs/index.html.bak"
+
+  # website-docs/js/docs.js — sidebar badge in JS
+  sed -i.bak \
+    "s/<span class=\"version\">v[^<]*</<span class=\"version\">v${short_version}</" \
+    "$REPO_ROOT/website-docs/js/docs.js"
+  rm -f "$REPO_ROOT/website-docs/js/docs.js.bak"
+}
+
 case "$SCOPE" in
   --python) set_python_version ;;
   --node)   set_node_version ;;
   --rust)   set_rust_version ;;
-  --all)    set_rust_version; set_python_version; set_node_version; set_skill_version ;;
+  --docs)   set_docs_version ;;
+  --all)    set_rust_version; set_python_version; set_node_version; set_skill_version; set_docs_version ;;
   *) usage ;;
 esac

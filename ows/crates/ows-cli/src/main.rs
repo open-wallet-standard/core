@@ -138,7 +138,7 @@ enum WalletCommands {
 enum SignCommands {
     /// Sign a message with chain-specific formatting (EIP-191, Bitcoin message signing, etc.)
     Message {
-        /// Chain (ethereum, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID)
+        /// Chain (ethereum, plasma, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID)
         #[arg(long)]
         chain: String,
         /// Wallet name or ID (uses stored encrypted mnemonic)
@@ -162,7 +162,7 @@ enum SignCommands {
     },
     /// Sign a transaction (accepts hex-encoded unsigned transaction bytes)
     Tx {
-        /// Chain (ethereum, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID)
+        /// Chain (ethereum, plasma, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID)
         #[arg(long)]
         chain: String,
         /// Wallet name or ID (uses stored encrypted mnemonic)
@@ -180,7 +180,7 @@ enum SignCommands {
     },
     /// Sign and broadcast a transaction
     SendTx {
-        /// Chain (ethereum, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID)
+        /// Chain (ethereum, plasma, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID)
         #[arg(long)]
         chain: String,
         /// Wallet name or ID (uses stored encrypted mnemonic)
@@ -211,7 +211,7 @@ enum MnemonicCommands {
     },
     /// Derive an address from a mnemonic (reads from OWS_MNEMONIC env or stdin)
     Derive {
-        /// Chain (ethereum, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID). If omitted, derives all chains.
+        /// Chain (ethereum, plasma, arbitrum, solana, bitcoin, cosmos, tron, or CAIP-2 ID). If omitted, derives all chains.
         #[arg(long)]
         chain: Option<String>,
         /// Account index

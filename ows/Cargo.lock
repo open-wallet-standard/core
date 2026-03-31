@@ -1319,7 +1319,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "ows-cli"
-version = "1.0.0"
+version = "1.1.2"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1340,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "ows-core"
-version = "1.0.0"
+version = "1.1.2"
 dependencies = [
  "chrono",
  "serde",
@@ -1352,9 +1352,10 @@ dependencies = [
 
 [[package]]
 name = "ows-lib"
-version = "1.0.0"
+version = "1.1.2"
 dependencies = [
  "base64 0.22.1",
+ "bs58",
  "chrono",
  "ed25519-dalek",
  "getrandom 0.2.17",
@@ -1378,7 +1379,7 @@ dependencies = [
 
 [[package]]
 name = "ows-pay"
-version = "1.0.0"
+version = "1.1.2"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.2.17",
@@ -1393,7 +1394,7 @@ dependencies = [
 
 [[package]]
 name = "ows-signer"
-version = "1.0.0"
+version = "1.1.2"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",

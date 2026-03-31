@@ -136,9 +136,10 @@ pub fn sign_with_api_key(
     // 6. Decrypt mnemonic from key file using HKDF(token)
     let key = decrypt_key_from_api_key(&key_file, &wallet.id, token, chain.chain_type, index)?;
 
-    // 7. Sign
+    // 7. Sign (extract signable portion first — e.g. strips Solana sig-slot headers)
     let signer = signer_for_chain(chain.chain_type);
-    let output = signer.sign_transaction(key.expose(), tx_bytes)?;
+    let signable = signer.extract_signable_bytes(tx_bytes)?;
+    let output = signer.sign_transaction(key.expose(), signable)?;
 
     Ok(crate::types::SignResult {
         signature: hex::encode(&output.signature),
