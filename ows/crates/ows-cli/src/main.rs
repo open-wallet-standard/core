@@ -7,6 +7,7 @@ use ows_core::OwsError;
 use ows_signer::hd::HdError;
 use ows_signer::mnemonic::MnemonicError;
 use ows_signer::{CryptoError, SignerError};
+use std::path::PathBuf;
 
 /// Open Wallet Standard CLI
 #[derive(Parser)]
@@ -57,6 +58,11 @@ enum Commands {
     Config {
         #[command(subcommand)]
         subcommand: ConfigCommands,
+    },
+    /// Contributor development helpers
+    Dev {
+        #[command(subcommand)]
+        subcommand: DevCommands,
     },
     /// Update ows to the latest release
     Update {
@@ -341,6 +347,49 @@ enum ConfigCommands {
     Show,
 }
 
+#[derive(Subcommand)]
+enum DevCommands {
+    /// Scaffold a contributor kit for adding a supported chain
+    ScaffoldChain {
+        /// Contributor-facing chain slug (lowercase letters, numbers, hyphens)
+        #[arg(long)]
+        slug: String,
+        /// Closest existing OWS chain family to borrow derivation and signing defaults from
+        #[arg(long)]
+        family: ows_core::ChainType,
+        /// Optional human-friendly display name used inside the generated files
+        #[arg(long)]
+        display_name: Option<String>,
+        /// Optional curve placeholder override for the generated templates
+        #[arg(long, value_parser = ["secp256k1", "ed25519"])]
+        curve: Option<String>,
+        /// Optional address format placeholder override
+        #[arg(long)]
+        address_format: Option<String>,
+        /// Optional coin type placeholder override
+        #[arg(long)]
+        coin_type: Option<u32>,
+        /// Optional default derivation path placeholder override
+        #[arg(long)]
+        derivation_path: Option<String>,
+        /// Optional CAIP namespace placeholder override
+        #[arg(long)]
+        caip_namespace: Option<String>,
+        /// Optional CAIP reference placeholder override
+        #[arg(long)]
+        caip_reference: Option<String>,
+        /// Optional output directory inside the repository
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Create files on disk instead of printing a dry run
+        #[arg(long)]
+        write: bool,
+        /// Overwrite the target directory if it already exists
+        #[arg(long)]
+        force: bool,
+    },
+}
+
 #[derive(Debug, thiserror::Error)]
 enum CliError {
     #[error("{0}")]
@@ -510,7 +559,154 @@ fn run(cli: Cli) -> Result<(), CliError> {
         Commands::Config { subcommand } => match subcommand {
             ConfigCommands::Show => commands::config::show(),
         },
+        Commands::Dev { subcommand } => match subcommand {
+            DevCommands::ScaffoldChain {
+                slug,
+                family,
+                display_name,
+                curve,
+                address_format,
+                coin_type,
+                derivation_path,
+                caip_namespace,
+                caip_reference,
+                output,
+                write,
+                force,
+            } => commands::dev::scaffold_chain(commands::dev::ScaffoldChainOptions {
+                slug: &slug,
+                family,
+                display_name: display_name.as_deref(),
+                curve: curve.as_deref(),
+                address_format: address_format.as_deref(),
+                coin_type,
+                derivation_path: derivation_path.as_deref(),
+                caip_namespace: caip_namespace.as_deref(),
+                caip_reference: caip_reference.as_deref(),
+                output: output.as_deref(),
+                write,
+                force,
+            }),
+        },
         Commands::Update { force } => commands::update::run(force),
         Commands::Uninstall { purge } => commands::uninstall::run(purge),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::{CommandFactory, Parser};
+
+    fn render_scaffold_chain_help() -> String {
+        let mut command = Cli::command();
+        let dev = command.find_subcommand_mut("dev").unwrap();
+        let scaffold = dev.find_subcommand_mut("scaffold-chain").unwrap();
+        let mut help = Vec::new();
+        scaffold.write_long_help(&mut help).unwrap();
+        String::from_utf8(help).unwrap()
+    }
+
+    #[test]
+    fn cli_parses_dev_scaffold_chain_arguments() {
+        let cli = Cli::try_parse_from([
+            "ows",
+            "dev",
+            "scaffold-chain",
+            "--slug",
+            "aptos",
+            "--family",
+            "sui",
+            "--display-name",
+            "Aptos",
+            "--curve",
+            "ed25519",
+            "--address-format",
+            "0x-prefixed hex account address",
+            "--coin-type",
+            "637",
+            "--derivation-path",
+            "m/44'/637'/0'/0'/0'",
+            "--caip-namespace",
+            "aptos",
+            "--caip-reference",
+            "mainnet",
+            "--write",
+            "--force",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Dev { subcommand } => match subcommand {
+                DevCommands::ScaffoldChain {
+                    slug,
+                    family,
+                    display_name,
+                    curve,
+                    address_format,
+                    coin_type,
+                    derivation_path,
+                    caip_namespace,
+                    caip_reference,
+                    output,
+                    write,
+                    force,
+                } => {
+                    assert_eq!(slug, "aptos");
+                    assert_eq!(family, ows_core::ChainType::Sui);
+                    assert_eq!(display_name.as_deref(), Some("Aptos"));
+                    assert_eq!(curve.as_deref(), Some("ed25519"));
+                    assert_eq!(
+                        address_format.as_deref(),
+                        Some("0x-prefixed hex account address")
+                    );
+                    assert_eq!(coin_type, Some(637));
+                    assert_eq!(derivation_path.as_deref(), Some("m/44'/637'/0'/0'/0'"));
+                    assert_eq!(caip_namespace.as_deref(), Some("aptos"));
+                    assert_eq!(caip_reference.as_deref(), Some("mainnet"));
+                    assert!(output.is_none());
+                    assert!(write);
+                    assert!(force);
+                }
+            },
+            _ => panic!("expected dev scaffold-chain command"),
+        }
+    }
+
+    #[test]
+    fn cli_rejects_unknown_scaffold_chain_family() {
+        let error = Cli::try_parse_from([
+            "ows",
+            "dev",
+            "scaffold-chain",
+            "--slug",
+            "aptos",
+            "--family",
+            "aptos",
+        ])
+        .err()
+        .unwrap();
+
+        let rendered = error.to_string();
+        assert!(rendered.contains("--family"));
+        assert!(rendered.contains("aptos"));
+    }
+
+    #[test]
+    fn scaffold_chain_help_output_lists_expected_flags() {
+        let help = render_scaffold_chain_help();
+
+        assert!(help.contains("Scaffold a contributor kit for adding a supported chain"));
+        assert!(help.contains("--slug <SLUG>"));
+        assert!(help.contains("--family <FAMILY>"));
+        assert!(help.contains("Closest existing OWS chain family"));
+        assert!(help.contains("--display-name <DISPLAY_NAME>"));
+        assert!(help.contains("--curve <CURVE>"));
+        assert!(help.contains("--address-format <ADDRESS_FORMAT>"));
+        assert!(help.contains("--coin-type <COIN_TYPE>"));
+        assert!(help.contains("--caip-namespace <CAIP_NAMESPACE>"));
+        assert!(help.contains("--caip-reference <CAIP_REFERENCE>"));
+        assert!(help.contains("--write"));
+        assert!(help.contains("--force"));
     }
 }

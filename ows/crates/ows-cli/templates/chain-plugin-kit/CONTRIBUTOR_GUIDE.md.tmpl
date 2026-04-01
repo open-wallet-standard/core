@@ -1,0 +1,58 @@
+# {{display_name}} Contributor Guide
+
+Use this scaffold as a working area before touching OWS runtime files.
+
+## What To Fill In First
+
+1. `chain-profile.toml`
+   Capture the chain's identity, family, curve, address format, and high-level
+   implementation notes.
+2. `caip-mapping.toml`
+   Confirm the CAIP-2 namespace/reference and write down CAIP-10 account format
+   expectations.
+3. `derivation-rules.toml`
+   Confirm BIP purpose, coin type, hardened vs non-hardened levels, and index
+   examples.
+4. `sign.stub.rs` and `serialize.stub.rs`
+   Decide what bytes are signed, how domain separation works, and what wire
+   format should be emitted.
+5. `test-vectors/`
+   Replace the sample JSON placeholders with real machine-readable cases.
+
+## Repo Terminology
+
+- Closest existing OWS family baseline: `{{family}}`
+- CAIP-2 chain id: `{{namespace}}:{{reference_hint}}`
+- CAIP-10 account id example: `{{namespace}}:{{reference_hint}}:TODO_ACCOUNT_ADDRESS`
+
+If your chain does not cleanly match an existing OWS family, use the closest
+existing OWS family as a scaffold baseline only and document the mismatch in
+`chain-profile.toml`.
+
+## Suggested Contributor Workflow
+
+1. Fill in every `TODO` marker in this scaffold.
+2. Confirm the supported-chain entry in `docs/supported-chain-entry.md`.
+3. Add real vectors for derivation, message signing, and transaction
+   serialization.
+4. Only then prepare the follow-up integration PR against OWS runtime files.
+
+## Likely OWS Follow-Up Touchpoints
+
+- `ows/crates/ows-core/src/chain.rs`
+  Add or update the supported-chain metadata, CAIP mapping, and parse/display hooks.
+- `ows/crates/ows-signer/src/chains/`
+  Turn the signing and serialization stubs into a real signer implementation.
+- `ows/crates/ows-signer/src/chains/mod.rs`
+  Register the chain-specific signer so OWS can dispatch to it.
+- `ows/crates/ows-lib/src/ops.rs`
+  Review any chain-specific signing, derivation, or broadcast flow assumptions.
+- `docs/07-supported-chains.md`
+  Convert the docs skeleton into a supported-chain entry for the main docs set.
+
+## Common Questions To Resolve
+
+- Is the default derivation path actually BIP-44 style, or a variant?
+- Does message signing require domain separation or prefixing?
+- Does transaction signing use raw bytes, signable bytes, or a canonical hash?
+- Does serialization require a canonical byte encoding before signing?

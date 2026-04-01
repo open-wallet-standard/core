@@ -37,6 +37,7 @@ pub fn register_cleanup(f: impl Fn() + Send + 'static) {
 }
 
 /// Run all registered cleanup hooks. Called by the signal handler thread.
+#[cfg(unix)]
 fn run_cleanup_hooks() {
     if let Some(hooks) = CLEANUP_HOOKS.get() {
         if let Ok(hooks) = hooks.lock() {
