@@ -72,6 +72,16 @@ impl EvmSigner {
                 decoded[first_nonzero..].to_vec()
             }
         } else {
+            // A decimal number fitting in `max_len` bytes has at most
+            // ceil(max_len * log10(256)) ≈ max_len * 2.41 digits.
+            // We use 3 * max_len + 1 as a conservative upper bound to
+            // reject impossibly large inputs before the O(n·m) conversion.
+            let max_digits = max_len * 3 + 1;
+            if trimmed.len() > max_digits {
+                return Err(SignerError::InvalidMessage(format!(
+                    "{field} exceeds {max_len} bytes"
+                )));
+            }
             Self::parse_decimal_bytes(trimmed, field)?
         };
 
@@ -361,6 +371,17 @@ mod tests {
         let signer = EvmSigner;
         let result = signer.sign_message(&privkey, b"Hello World").unwrap();
         assert_eq!(result.signature.len(), 65);
+    }
+
+    #[test]
+    fn test_oversized_decimal_nonce_rejected_early() {
+        let signer = EvmSigner;
+        // A nonce string far exceeding u64 range should be rejected, not churn CPU.
+        let huge_nonce = "9".repeat(10_000);
+        let err = signer
+            .authorization_payload("8453", "0x1111111111111111111111111111111111111111", &huge_nonce)
+            .unwrap_err();
+        assert!(err.to_string().contains("exceeds"), "expected size error, got: {err}");
     }
 
     #[test]
