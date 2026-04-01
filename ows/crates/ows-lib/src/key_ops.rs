@@ -248,11 +248,7 @@ pub fn sign_typed_data_with_api_key(
 
     // 5b. Validate domain.chainId matches the requested chain (if present)
     // Prevents bypassing AllowedChains by submitting typed data with a different chainId
-    if let Some(domain_chain_id) = parsed.domain.get("chainId").and_then(|v| {
-        v.as_str()
-            .and_then(|s| s.parse::<u64>().ok())
-            .or_else(|| v.as_u64())
-    }) {
+    if let Some(domain_chain_id) = parsed.domain.get("chainId").and_then(parse_domain_chain_id) {
         let expected_chain_id = chain
             .chain_id
             .split(':')
@@ -277,11 +273,7 @@ pub fn sign_typed_data_with_api_key(
             .get("verifyingContract")
             .and_then(|v| v.as_str())
             .map(String::from),
-        domain_chain_id: parsed.domain.get("chainId").and_then(|v| {
-            v.as_str()
-                .and_then(|s| s.parse::<u64>().ok())
-                .or_else(|| v.as_u64())
-        }),
+        domain_chain_id: parsed.domain.get("chainId").and_then(parse_domain_chain_id),
         primary_type: parsed.primary_type.clone(),
         domain_name: parsed
             .domain
@@ -390,6 +382,14 @@ pub fn enforce_policy_and_decrypt_key(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Parse a serde_json Value as a u64 chain ID.
+/// Handles both string ("8453") and number (8453) representations.
+fn parse_domain_chain_id(v: &serde_json::Value) -> Option<u64> {
+    v.as_str()
+        .and_then(|s| s.parse::<u64>().ok())
+        .or_else(|| v.as_u64())
+}
 
 fn noop_spending_context(date: &str) -> ows_core::policy::SpendingContext {
     ows_core::policy::SpendingContext {
