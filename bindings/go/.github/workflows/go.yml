@@ -69,7 +69,8 @@ jobs:
       - name: Format Go code
         working-directory: bindings/go
         run: |
-          go fmt ./ows/... ./examples/...
+          go fmt ./ows/...
+          gofmt -w ./examples/demo.go
           git diff --exit-code
 
       - name: Vet Go code
