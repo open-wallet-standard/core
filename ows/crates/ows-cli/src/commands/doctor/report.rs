@@ -363,7 +363,12 @@ mod tests {
     fn test_overall_status_all_skipped() {
         let findings = vec![
             DoctorFinding::skipped(ID, OWS_DOCTOR_VAULT_MISSING, "Skipped", "Not applicable"),
-            DoctorFinding::skipped(ID, OWS_DOCTOR_CONFIG_MISSING, "Skipped 2", "Also not applicable"),
+            DoctorFinding::skipped(
+                ID,
+                OWS_DOCTOR_CONFIG_MISSING,
+                "Skipped 2",
+                "Also not applicable",
+            ),
         ];
         let report = DoctorReport::new(findings);
         assert_eq!(report.overall_status, DoctorStatus::Skipped);
@@ -402,15 +407,19 @@ mod tests {
 
     #[test]
     fn test_finding_builder_with_path() {
-        let finding =
-            DoctorFinding::ok(ID, "Title", "Detail").with_path(std::path::PathBuf::from("/test/path"));
+        let finding = DoctorFinding::ok(ID, "Title", "Detail")
+            .with_path(std::path::PathBuf::from("/test/path"));
         assert!(finding.path.is_some());
-        assert_eq!(finding.path.unwrap(), std::path::PathBuf::from("/test/path"));
+        assert_eq!(
+            finding.path.unwrap(),
+            std::path::PathBuf::from("/test/path")
+        );
     }
 
     #[test]
     fn test_skipped_has_code() {
-        let finding = DoctorFinding::skipped(ID, OWS_DOCTOR_VAULT_MISSING, "Skipped", "Vault absent");
+        let finding =
+            DoctorFinding::skipped(ID, OWS_DOCTOR_VAULT_MISSING, "Skipped", "Vault absent");
         assert_eq!(finding.code, Some(OWS_DOCTOR_VAULT_MISSING));
         assert_eq!(finding.status, DoctorStatus::Skipped);
     }

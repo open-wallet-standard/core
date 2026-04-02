@@ -168,8 +168,8 @@ pub fn check_config() -> Vec<DoctorFinding> {
 #[cfg(unix)]
 pub fn check_vault_permissions() -> Vec<DoctorFinding> {
     use crate::commands::doctor::report::{
-        OWS_DOCTOR_PERM_VAULT_INSECURE, OWS_DOCTOR_PERM_WALLET_FILE_INSECURE,
-        OWS_DOCTOR_PERM_WALLETS_INSECURE,
+        OWS_DOCTOR_PERM_VAULT_INSECURE, OWS_DOCTOR_PERM_WALLETS_INSECURE,
+        OWS_DOCTOR_PERM_WALLET_FILE_INSECURE,
     };
     use std::os::unix::fs::PermissionsExt;
 
