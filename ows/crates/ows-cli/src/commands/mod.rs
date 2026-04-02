@@ -1,5 +1,6 @@
 pub mod config;
 pub mod derive;
+pub mod doctor;
 pub mod fund;
 pub mod generate;
 pub mod info;
