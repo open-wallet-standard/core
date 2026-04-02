@@ -1,16 +1,16 @@
 # Use this file to pin down CAIP identifiers before implementing code.
 
-slug = "{{slug}}"
-display_name = "{{display_name}}"
-family = "{{family}}"
-namespace = "{{namespace}}"
-reference = "{{reference_hint}}"
+slug = "{{slug_string}}"
+display_name = "{{display_name_string}}"
+family = "{{family_string}}"
+namespace = "{{namespace_string}}"
+reference = "{{reference_hint_string}}"
 
 [canonical]
 # CAIP-2 format: namespace:reference
-name = "{{slug}}"
-chain_id = "{{namespace}}:{{reference_hint}}"
-caip10_account_format = "{{namespace}}:{{reference_hint}}:TODO_ACCOUNT_ADDRESS"
+name = "{{slug_string}}"
+chain_id = "{{namespace_string}}:{{reference_hint_string}}"
+caip10_account_format = "{{namespace_string}}:{{reference_hint_string}}:TODO_ACCOUNT_ADDRESS"
 
 [account_format_notes]
 # Document how the account component is encoded in CAIP-10 examples.
@@ -19,20 +19,20 @@ encoding = "TODO"
 notes = "TODO: note checksum, casing, HRP, or namespace-specific CAIP-10 rules."
 
 [aliases]
-primary = "{{slug}}"
+primary = "{{slug_string}}"
 additional = []
 
 [[examples]]
 kind = "caip2"
-value = "{{namespace}}:{{reference_hint}}"
+value = "{{namespace_string}}:{{reference_hint_string}}"
 notes = "Replace the reference placeholder with the real CAIP-2 reference."
 
 [[examples]]
 kind = "caip10"
-value = "{{namespace}}:{{reference_hint}}:TODO_ACCOUNT_ADDRESS"
+value = "{{namespace_string}}:{{reference_hint_string}}:TODO_ACCOUNT_ADDRESS"
 notes = "Replace TODO_ACCOUNT_ADDRESS with the canonical CAIP-10 account component."
 
 [[networks]]
 label = "mainnet"
-chain_id = "{{namespace}}:{{reference_hint}}"
-notes = "TODO: replace with the real CAIP-2 reference for {{display_name}}"
+chain_id = "{{namespace_string}}:{{reference_hint_string}}"
+notes = "TODO: replace with the real CAIP-2 reference for {{display_name_string}}"

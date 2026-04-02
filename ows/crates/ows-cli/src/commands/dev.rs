@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use ows_core::ChainType;
 use ows_signer::{signer_for_chain, Curve};
@@ -98,6 +98,7 @@ pub fn scaffold_chain(options: ScaffoldChainOptions<'_>) -> Result<(), CliError>
 
 #[derive(Debug)]
 struct ScaffoldPlan {
+    safe_output_root: PathBuf,
     target_dir: PathBuf,
     target_exists: bool,
     context: ScaffoldContext,
@@ -140,7 +141,8 @@ fn build_plan(
     validate_optional_token("--caip-namespace", options.caip_namespace)?;
     validate_optional_token("--caip-reference", options.caip_reference)?;
 
-    let target_dir = resolve_output_dir(repo_root, options.slug, options.output)?;
+    let safe_output_root = resolve_safe_output_root(repo_root)?;
+    let target_dir = resolve_output_dir(&safe_output_root, options.slug, options.output)?;
     let target_exists = target_dir.exists();
     if target_exists && !options.force {
         return Err(CliError::InvalidArgs(format!(
@@ -210,6 +212,7 @@ fn build_plan(
     ];
 
     Ok(ScaffoldPlan {
+        safe_output_root,
         target_dir,
         target_exists,
         context,
@@ -218,6 +221,8 @@ fn build_plan(
 }
 
 fn write_plan(plan: &ScaffoldPlan, force: bool) -> Result<(), CliError> {
+    validate_safe_scaffold_target(&plan.safe_output_root, &plan.target_dir)?;
+
     if plan.target_dir.exists() {
         if !force {
             return Err(CliError::InvalidArgs(format!(
@@ -225,6 +230,8 @@ fn write_plan(plan: &ScaffoldPlan, force: bool) -> Result<(), CliError> {
                 plan.target_dir.display()
             )));
         }
+
+        validate_safe_force_delete_target(&plan.safe_output_root, &plan.target_dir)?;
 
         if plan.target_dir.is_dir() {
             fs::remove_dir_all(&plan.target_dir)?;
@@ -293,20 +300,65 @@ fn build_context(options: &ScaffoldChainOptions<'_>) -> ScaffoldContext {
 fn render_template(template: &str, context: &ScaffoldContext) -> String {
     template
         .replace("{{slug}}", &context.slug)
+        .replace("{{slug_string}}", &escape_basic_string(&context.slug))
         .replace("{{slug_ident}}", &context.slug_ident)
         .replace("{{display_name}}", &context.display_name)
+        .replace(
+            "{{display_name_string}}",
+            &escape_basic_string(&context.display_name),
+        )
         .replace("{{family}}", &context.family_display)
+        .replace(
+            "{{family_string}}",
+            &escape_basic_string(&context.family_display),
+        )
         .replace("{{family_variant}}", context.family_variant)
         .replace("{{namespace}}", &context.namespace)
+        .replace(
+            "{{namespace_string}}",
+            &escape_basic_string(&context.namespace),
+        )
         .replace("{{reference_hint}}", &context.reference_hint)
+        .replace(
+            "{{reference_hint_string}}",
+            &escape_basic_string(&context.reference_hint),
+        )
         .replace("{{curve}}", &context.curve_display)
+        .replace(
+            "{{curve_string}}",
+            &escape_basic_string(&context.curve_display),
+        )
         .replace("{{curve_variant}}", context.curve_variant)
         .replace("{{coin_type}}", &context.coin_type.to_string())
         .replace(
             "{{default_derivation_path}}",
             &context.default_derivation_path,
         )
+        .replace(
+            "{{default_derivation_path_string}}",
+            &escape_basic_string(&context.default_derivation_path),
+        )
         .replace("{{address_format}}", &context.address_format)
+        .replace(
+            "{{address_format_string}}",
+            &escape_basic_string(&context.address_format),
+        )
+}
+
+fn escape_basic_string(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            c if c.is_control() => escaped.push_str(&format!("\\u{:04X}", c as u32)),
+            c => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 fn find_repo_root(start: &Path) -> Result<PathBuf, CliError> {
@@ -418,48 +470,114 @@ fn validate_optional_text(flag: &str, value: Option<&str>) -> Result<(), CliErro
     Ok(())
 }
 
+fn resolve_safe_output_root(repo_root: &Path) -> Result<PathBuf, CliError> {
+    resolve_path_for_creation(&repo_root.join(".ows-dev").join("chain-plugin-kit"))
+}
+
 fn resolve_output_dir(
-    repo_root: &Path,
+    safe_output_root: &Path,
     slug: &str,
     output: Option<&Path>,
 ) -> Result<PathBuf, CliError> {
-    let default_dir = PathBuf::from(".ows-dev")
-        .join("chain-plugin-kit")
-        .join(slug);
+    let default_dir = safe_output_root.join(slug);
     let requested = output.unwrap_or(default_dir.as_path());
     let candidate = if requested.is_absolute() {
         requested.to_path_buf()
     } else {
-        repo_root.join(requested)
+        safe_output_root
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or(safe_output_root)
+            .join(requested)
     };
 
-    let normalized_root = normalize_path(repo_root);
-    let normalized_candidate = normalize_path(&candidate);
+    let resolved_candidate = resolve_path_for_creation(&candidate)?;
+    ensure_path_in_safe_scaffold_area(requested, safe_output_root, &resolved_candidate)?;
+    Ok(resolved_candidate)
+}
 
-    if !normalized_candidate.starts_with(&normalized_root) {
+// Resolve as many components as currently exist so symlinked parents cannot
+// lexically smuggle scaffold output outside the dedicated safe area.
+fn resolve_path_for_creation(path: &Path) -> Result<PathBuf, CliError> {
+    let mut missing_components = Vec::new();
+    let mut current = path.to_path_buf();
+
+    loop {
+        if current.exists() {
+            let mut resolved = clean_canonical_path(fs::canonicalize(&current)?);
+            for component in missing_components.iter().rev() {
+                resolved.push(component);
+            }
+            return Ok(resolved);
+        }
+
+        let name = current.file_name().ok_or_else(|| {
+            CliError::InvalidArgs(format!("output path '{}' is invalid", path.display()))
+        })?;
+        missing_components.push(PathBuf::from(name));
+        current = current
+            .parent()
+            .ok_or_else(|| {
+                CliError::InvalidArgs(format!("output path '{}' is invalid", path.display()))
+            })?
+            .to_path_buf();
+    }
+}
+
+#[cfg(windows)]
+fn clean_canonical_path(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(stripped) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{stripped}"))
+    } else if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path
+    }
+}
+
+#[cfg(not(windows))]
+fn clean_canonical_path(path: PathBuf) -> PathBuf {
+    path
+}
+
+fn ensure_path_in_safe_scaffold_area(
+    requested: &Path,
+    safe_output_root: &Path,
+    resolved_candidate: &Path,
+) -> Result<(), CliError> {
+    if resolved_candidate == safe_output_root || !resolved_candidate.starts_with(safe_output_root) {
         return Err(CliError::InvalidArgs(format!(
-            "output path '{}' must stay inside the repository",
-            requested.display()
+            "output path '{}' is unsafe; scaffold output must live under '{}' and may not target the safe scaffold area root",
+            requested.display(),
+            safe_output_root.display()
         )));
     }
 
-    Ok(normalized_candidate)
+    Ok(())
 }
 
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
-            Component::RootDir => normalized.push(component.as_os_str()),
-            Component::Normal(part) => normalized.push(part),
-        }
+fn validate_safe_scaffold_target(
+    safe_output_root: &Path,
+    target_dir: &Path,
+) -> Result<(), CliError> {
+    let resolved_target = resolve_path_for_creation(target_dir)?;
+    ensure_path_in_safe_scaffold_area(target_dir, safe_output_root, &resolved_target)
+}
+
+fn validate_safe_force_delete_target(
+    safe_output_root: &Path,
+    target_dir: &Path,
+) -> Result<(), CliError> {
+    let metadata = fs::symlink_metadata(target_dir)?;
+    if metadata.file_type().is_symlink() {
+        return Err(CliError::InvalidArgs(format!(
+            "output path '{}' is unsafe; scaffold targets must not be symlinks",
+            target_dir.display()
+        )));
     }
-    normalized
+
+    validate_safe_scaffold_target(safe_output_root, target_dir)
 }
 
 fn default_reference_hint(family: ChainType) -> &'static str {
@@ -547,6 +665,23 @@ fn to_ident_name(slug: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    #[cfg(unix)]
+    fn create_dir_symlink(link: &Path, target: &Path) {
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn create_dir_symlink(link: &Path, target: &Path) {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
 
     fn expected_tree_entries() -> Vec<PathBuf> {
         vec![
@@ -593,7 +728,7 @@ mod tests {
         }
     }
 
-    fn make_repo_root() -> tempfile::TempDir {
+    fn make_repo_root() -> TempDir {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".git")).unwrap();
         fs::create_dir_all(dir.path().join("ows").join("crates").join("ows-cli")).unwrap();
@@ -824,6 +959,51 @@ mod tests {
     }
 
     #[test]
+    fn output_dot_is_rejected() {
+        let repo = make_repo_root();
+        let mut options = test_options();
+        options.output = Some(Path::new("."));
+        let error = build_plan(repo.path(), &options).unwrap_err();
+
+        match error {
+            CliError::InvalidArgs(message) => {
+                assert!(
+                    message.contains(".ows-dev\\chain-plugin-kit")
+                        || message.contains(".ows-dev/chain-plugin-kit")
+                );
+            }
+            other => panic!("expected InvalidArgs, got {other}"),
+        }
+    }
+
+    #[test]
+    fn protected_top_level_outputs_are_rejected() {
+        let repo = make_repo_root();
+
+        for output in [
+            PathBuf::from("ows"),
+            PathBuf::from("docs"),
+            PathBuf::from(".git"),
+            PathBuf::from(".ows-dev"),
+            PathBuf::from(".ows-dev").join("chain-plugin-kit"),
+        ] {
+            let mut options = test_options();
+            options.output = Some(output.as_path());
+            let error = build_plan(repo.path(), &options).unwrap_err();
+
+            match error {
+                CliError::InvalidArgs(message) => {
+                    assert!(
+                        message.contains(".ows-dev\\chain-plugin-kit")
+                            || message.contains(".ows-dev/chain-plugin-kit")
+                    );
+                }
+                other => panic!("expected InvalidArgs, got {other}"),
+            }
+        }
+    }
+
+    #[test]
     fn output_path_cannot_escape_repo_root() {
         let repo = make_repo_root();
         let output = Path::new("..").join("outside");
@@ -833,7 +1013,35 @@ mod tests {
 
         match error {
             CliError::InvalidArgs(message) => {
-                assert!(message.contains("must stay inside the repository"));
+                assert!(
+                    message.contains(".ows-dev\\chain-plugin-kit")
+                        || message.contains(".ows-dev/chain-plugin-kit")
+                );
+            }
+            other => panic!("expected InvalidArgs, got {other}"),
+        }
+    }
+
+    #[test]
+    fn symlink_escape_outside_safe_output_area_is_rejected() {
+        let repo = make_repo_root();
+        let external = tempfile::tempdir().unwrap();
+        let safe_base = repo.path().join(".ows-dev").join("chain-plugin-kit");
+        fs::create_dir_all(&safe_base).unwrap();
+        let link = safe_base.join("escape-link");
+        create_dir_symlink(&link, external.path());
+
+        let mut options = test_options();
+        let output = PathBuf::from(".ows-dev")
+            .join("chain-plugin-kit")
+            .join("escape-link")
+            .join("nested");
+        options.output = Some(output.as_path());
+        let error = build_plan(repo.path(), &options).unwrap_err();
+
+        match error {
+            CliError::InvalidArgs(message) => {
+                assert!(message.contains("safe scaffold area") || message.contains("symlink"));
             }
             other => panic!("expected InvalidArgs, got {other}"),
         }
@@ -941,6 +1149,35 @@ mod tests {
     }
 
     #[test]
+    fn force_rejects_deleting_safe_base_root() {
+        let repo = make_repo_root();
+        let safe_base = repo.path().join(".ows-dev").join("chain-plugin-kit");
+        fs::create_dir_all(&safe_base).unwrap();
+        fs::write(safe_base.join("marker.txt"), "keep-me").unwrap();
+
+        let mut options = test_options();
+        let output = PathBuf::from(".ows-dev").join("chain-plugin-kit");
+        options.output = Some(output.as_path());
+        options.force = true;
+        let error = build_plan(repo.path(), &options).unwrap_err();
+
+        match error {
+            CliError::InvalidArgs(message) => {
+                assert!(
+                    message.contains(".ows-dev\\chain-plugin-kit")
+                        || message.contains(".ows-dev/chain-plugin-kit")
+                );
+            }
+            other => panic!("expected InvalidArgs, got {other}"),
+        }
+
+        assert_eq!(
+            fs::read_to_string(safe_base.join("marker.txt")).unwrap(),
+            "keep-me"
+        );
+    }
+
+    #[test]
     fn golden_path_aptos_scaffold_writes_expected_tree_and_contents() {
         let repo = make_repo_root();
         let options = ScaffoldChainOptions {
@@ -1010,5 +1247,82 @@ mod tests {
         .unwrap();
         assert!(vectors.contains("\"chain_id\": \"aptos:mainnet\""));
         assert!(vectors.contains("\"domain_separation\": \"TODO\""));
+    }
+
+    #[test]
+    fn toml_templates_escape_quotes_and_backslashes() {
+        let repo = make_repo_root();
+        let options = ScaffoldChainOptions {
+            slug: "example-chain",
+            family: ChainType::Evm,
+            display_name: Some("Foo \"Bar\" \\\\ Name"),
+            curve: None,
+            address_format: Some("Backslash \\\\ Format"),
+            coin_type: None,
+            derivation_path: Some("m/44'/60'/0'/0/0"),
+            caip_namespace: Some("example"),
+            caip_reference: Some("alpha\"beta"),
+            output: None,
+            write: false,
+            force: false,
+        };
+        let plan = build_plan(repo.path(), &options).unwrap();
+
+        let profile = plan
+            .files
+            .iter()
+            .find(|file| file.relative_path == PathBuf::from("chain-profile.toml"))
+            .unwrap();
+        assert!(profile
+            .contents
+            .contains("display_name = \"Foo \\\"Bar\\\" \\\\\\\\ Name\""));
+        assert!(profile
+            .contents
+            .contains("address_format = \"Backslash \\\\\\\\ Format\""));
+
+        let caip = plan
+            .files
+            .iter()
+            .find(|file| file.relative_path == PathBuf::from("caip-mapping.toml"))
+            .unwrap();
+        assert!(caip.contents.contains("reference = \"alpha\\\"beta\""));
+    }
+
+    #[test]
+    fn rust_string_literals_escape_quotes_and_backslashes() {
+        let repo = make_repo_root();
+        let options = ScaffoldChainOptions {
+            slug: "example-chain",
+            family: ChainType::Evm,
+            display_name: Some("Foo \"Bar\" \\\\ Name"),
+            curve: None,
+            address_format: None,
+            coin_type: None,
+            derivation_path: None,
+            caip_namespace: None,
+            caip_reference: None,
+            output: None,
+            write: false,
+            force: false,
+        };
+        let plan = build_plan(repo.path(), &options).unwrap();
+
+        let sign_stub = plan
+            .files
+            .iter()
+            .find(|file| file.relative_path == PathBuf::from("sign.stub.rs"))
+            .unwrap();
+        assert!(sign_stub.contents.contains(
+            "\"TODO(hash): define raw signing behavior for Foo \\\"Bar\\\" \\\\\\\\ Name\""
+        ));
+
+        let serialize_stub = plan
+            .files
+            .iter()
+            .find(|file| file.relative_path == PathBuf::from("serialize.stub.rs"))
+            .unwrap();
+        assert!(serialize_stub.contents.contains(
+            "\"TODO(canonical-encoding): decide how Foo \\\"Bar\\\" \\\\\\\\ Name derives signable bytes\""
+        ));
     }
 }

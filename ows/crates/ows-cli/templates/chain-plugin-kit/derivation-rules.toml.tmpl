@@ -1,12 +1,12 @@
 # Capture the derivation contract that contributors will implement later.
 
-slug = "{{slug}}"
-display_name = "{{display_name}}"
-family = "{{family}}"
-curve = "{{curve}}"
+slug = "{{slug_string}}"
+display_name = "{{display_name_string}}"
+family = "{{family_string}}"
+curve = "{{curve_string}}"
 bip_purpose = "TODO"
 coin_type = {{coin_type}}
-default_path = "{{default_derivation_path}}"
+default_path = "{{default_derivation_path_string}}"
 
 [path_structure]
 # Example: purpose'/coin_type'/account'/change/index
@@ -16,11 +16,11 @@ hardened_note = "TODO: state which segments must be hardened."
 non_hardened_note = "TODO: state which segments stay unhardened."
 
 [address]
-format = "{{address_format}}"
-indexing_notes = "TODO: confirm account/change/index structure for {{display_name}}"
+format = "{{address_format_string}}"
+indexing_notes = "TODO: confirm account/change/index structure for {{display_name_string}}"
 
 [examples]
-account_0_change_0_index_0 = "{{default_derivation_path}}"
+account_0_change_0_index_0 = "{{default_derivation_path_string}}"
 account_1_change_0_index_0 = "TODO_SECOND_ACCOUNT_PATH"
 account_0_change_1_index_0 = "TODO_CHANGE_PATH_OR_NA"
 account_0_change_0_index_1 = "TODO_INDEX_1_PATH"

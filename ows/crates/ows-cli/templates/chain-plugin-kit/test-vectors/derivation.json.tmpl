@@ -1,16 +1,16 @@
 {
-  "chain_id": "{{namespace}}:{{reference_hint}}",
-  "family": "{{family}}",
+  "chain_id": "{{namespace_string}}:{{reference_hint_string}}",
+  "family": "{{family_string}}",
   "kind": "derivation",
   "notes": "Replace placeholders with a real mnemonic, path, and expected address.",
   "cases": [
     {
       "name": "account-0",
       "mnemonic": "TODO_TEST_MNEMONIC",
-      "path": "{{default_derivation_path}}",
+      "path": "{{default_derivation_path_string}}",
       "expected": {
         "address": "TODO_ADDRESS",
-        "caip10_account_id": "{{namespace}}:{{reference_hint}}:TODO_ADDRESS"
+        "caip10_account_id": "{{namespace_string}}:{{reference_hint_string}}:TODO_ADDRESS"
       }
     }
   ]

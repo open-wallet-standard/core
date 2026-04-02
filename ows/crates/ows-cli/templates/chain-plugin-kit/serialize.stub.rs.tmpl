@@ -10,7 +10,8 @@ use ows_signer::traits::{SignOutput, SignerError};
 pub fn extract_signable_bytes_{{slug_ident}}(tx_bytes: &[u8]) -> Result<&[u8], SignerError> {
     let _ = tx_bytes;
     Err(SignerError::InvalidTransaction(
-        "TODO(canonical-encoding): decide how {{display_name}} derives signable bytes".into(),
+        "TODO(canonical-encoding): decide how {{display_name_string}} derives signable bytes"
+            .into(),
     ))
 }
 
@@ -20,7 +21,7 @@ pub fn encode_signed_transaction_{{slug_ident}}(
 ) -> Result<Vec<u8>, SignerError> {
     let _ = (tx_bytes, signature);
     Err(SignerError::InvalidTransaction(
-        "TODO(canonical-encoding): implement signed transaction serialization for {{display_name}}"
+        "TODO(canonical-encoding): implement signed transaction serialization for {{display_name_string}}"
             .into(),
     ))
 }

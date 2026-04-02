@@ -378,7 +378,7 @@ enum DevCommands {
         /// Optional CAIP reference placeholder override
         #[arg(long)]
         caip_reference: Option<String>,
-        /// Optional output directory inside the repository
+        /// Optional output directory under .ows-dev/chain-plugin-kit
         #[arg(long)]
         output: Option<PathBuf>,
         /// Create files on disk instead of printing a dry run
@@ -706,6 +706,7 @@ mod tests {
         assert!(help.contains("--coin-type <COIN_TYPE>"));
         assert!(help.contains("--caip-namespace <CAIP_NAMESPACE>"));
         assert!(help.contains("--caip-reference <CAIP_REFERENCE>"));
+        assert!(help.contains(".ows-dev/chain-plugin-kit"));
         assert!(help.contains("--write"));
         assert!(help.contains("--force"));
     }

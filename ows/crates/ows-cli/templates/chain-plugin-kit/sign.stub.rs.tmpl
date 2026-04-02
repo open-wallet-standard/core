@@ -13,7 +13,7 @@ pub fn sign_raw_{{slug_ident}}(
 ) -> Result<SignOutput, SignerError> {
     let _ = (private_key, payload);
     Err(SignerError::SigningFailed(
-        "TODO(hash): define raw signing behavior for {{display_name}}".into(),
+        "TODO(hash): define raw signing behavior for {{display_name_string}}".into(),
     ))
 }
 
@@ -23,7 +23,7 @@ pub fn sign_message_{{slug_ident}}(
 ) -> Result<SignOutput, SignerError> {
     let _ = (private_key, message);
     Err(SignerError::SigningFailed(
-        "TODO(domain-separation): define message signing for {{display_name}}".into(),
+        "TODO(domain-separation): define message signing for {{display_name_string}}".into(),
     ))
 }
 
@@ -33,6 +33,6 @@ pub fn sign_transaction_{{slug_ident}}(
 ) -> Result<SignOutput, SignerError> {
     let _ = (private_key, tx_bytes);
     Err(SignerError::SigningFailed(
-        "TODO(hash): define transaction signing rules for {{display_name}}".into(),
+        "TODO(hash): define transaction signing rules for {{display_name_string}}".into(),
     ))
 }

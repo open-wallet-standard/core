@@ -68,8 +68,9 @@ Behavior:
 - `--family` must be an existing `ows_core::ChainType` and acts as the closest
   existing OWS family baseline for defaults
 - optional placeholder flags override the generated defaults
-- `--output` is optional and must stay inside the repository
+- `--output` is optional and must stay under `.ows-dev/chain-plugin-kit/`
 - the command fails if the target exists unless `--force` is passed
+- `--force` only operates on validated paths inside the dedicated scaffold area
 
 Recommended default output:
 

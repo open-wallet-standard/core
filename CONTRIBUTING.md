@@ -71,6 +71,9 @@ To create the scaffold on disk, re-run with `--write`.
 Choose `--family` as the closest existing OWS family baseline for derivation
 and signing defaults.
 
+If you use `--output`, it must stay under `.ows-dev/chain-plugin-kit/`. This
+keeps `--force` restricted to a dedicated safe scaffold area.
+
 The first scaffold PR is intentionally conservative: it produces a self-contained
 contributor kit and checklist without modifying runtime chain integration files
 for you.
