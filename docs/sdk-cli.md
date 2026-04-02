@@ -451,13 +451,13 @@ ows doctor
 ```
 Errors:
   ----------------------------------------
-    ✗ Wallet file is not valid JSON: wallet-1.json: JSON parse error. This file is corrupted: ...
+    ✗ Wallet file is not valid JSON: bad.json: JSON parse error. This file is corrupted: key must be a string at line 1 column 3.
          → Export the mnemonic (if possible) and recreate the wallet with `ows wallet create`.
 
 Warnings:
   ----------------------------------------
-    ⚠ No wallet files found: The wallets directory exists but contains no wallet files.
-         → Run `ows wallet create` to create your first wallet.
+    ⚠ Some wallet files are corrupted: 1 of 2 wallet file(s) are corrupted.
+         → Export the mnemonic from any valid wallets and recreate the corrupted ones.
 ```
 
 **Platform caveats:** Permission checks (`vault.permissions`) only run on Unix/Linux systems. On Windows and macOS the check is reported as skipped with the note "Permission checks are Unix-only."

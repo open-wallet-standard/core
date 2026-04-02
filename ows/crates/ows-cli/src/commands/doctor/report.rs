@@ -221,10 +221,6 @@ impl DoctorSummary {
     pub fn total(&self) -> usize {
         self.ok + self.warnings + self.errors + self.skipped
     }
-
-    pub fn has_failures(&self) -> bool {
-        self.errors > 0
-    }
 }
 
 /// Aggregated diagnostic report from all checks.
