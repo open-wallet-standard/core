@@ -310,6 +310,7 @@ pub fn run_all_checks() -> DoctorReport {
 mod tests {
     use super::*;
     use crate::commands::doctor::vault_inspector;
+    use crate::commands::doctor::DoctorStatus;
 
     #[test]
     fn test_run_all_checks_returns_valid_report() {
@@ -388,7 +389,9 @@ mod tests {
         std::fs::write(wallets_dir.join("bad.json"), "{ invalid }").ok();
 
         let findings = vault_inspector::check_wallet_files(&vault);
-        assert!(findings.iter().any(|f| f.code == Some("ERR_FILE_MALFORMED")));
+        assert!(findings
+            .iter()
+            .any(|f| f.code == Some("ERR_FILE_MALFORMED")));
     }
 
     #[test]

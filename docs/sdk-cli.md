@@ -380,6 +380,49 @@ ows uninstall          # keep wallet data
 ows uninstall --purge  # also remove ~/.ows (all wallet data)
 ```
 
+### `ows doctor`
+
+Run diagnostic checks on the OWS installation. `ows doctor` is a read-only command that checks:
+- Vault path resolution and HOME environment variable
+- Vault and subdirectory existence
+- Config file validity (if present)
+- Wallet, key, and policy file integrity
+- File permissions (Unix only; skipped on Windows)
+
+Exit code is 0 when all checks pass or only warnings are found, and non-zero when errors are detected.
+
+```bash
+ows doctor
+```
+
+Sample output:
+```
+============================================================
+  OWS Doctor
+============================================================
+
+  Vault path: ~/.ows
+
+  Errors:
+  ----------------------------------------
+    ✗ Wallet file malformed: wallet-1.json: invalid JSON: ...
+         → Export the mnemonic (if possible) and recreate the wallet.
+
+  Warnings:
+  ----------------------------------------
+    ⚠ No wallets present: No wallet files found in the wallets directory.
+         → Run `ows wallet create` to create your first wallet.
+
+  Passed:
+  ----------------------------------------
+    ✓ Vault path resolved
+    ✓ Config valid
+
+  2 passed   1 warnings   1 errors   0 skipped
+
+  Result: FAILED — errors found
+```
+
 ## File Layout
 
 ```

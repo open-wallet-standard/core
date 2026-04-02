@@ -103,14 +103,16 @@ pub fn check_wallet_files(vault_path: &Path) -> Vec<DoctorFinding> {
             Ok(c) => c,
             Err(e) => {
                 corrupted_count += 1;
-                findings.push(DoctorFinding::error(
-                    CHECK_WALLET_FILES,
-                    "Wallet file unreadable",
-                    &format!("{}: cannot read file: {}", file_name, e),
-                    "Check file permissions.",
-                )
-                .with_path(path)
-                .with_code("ERR_FILE_UNREADABLE"));
+                findings.push(
+                    DoctorFinding::error(
+                        CHECK_WALLET_FILES,
+                        "Wallet file unreadable",
+                        &format!("{}: cannot read file: {}", file_name, e),
+                        "Check file permissions.",
+                    )
+                    .with_path(path)
+                    .with_code("ERR_FILE_UNREADABLE"),
+                );
                 continue;
             }
         };
@@ -134,41 +136,50 @@ pub fn check_wallet_files(vault_path: &Path) -> Vec<DoctorFinding> {
 
         // Additional metadata validation
         if wallet.id.is_empty() {
-            findings.push(DoctorFinding::error(
-                CHECK_WALLET_FILES,
-                "Wallet has empty ID",
-                &format!("{}: wallet ID field is empty", file_name),
-                "Recreate the wallet from the mnemonic.",
-            )
-            .with_path(path)
-            .with_code("ERR_METADATA_INVALID"));
+            findings.push(
+                DoctorFinding::error(
+                    CHECK_WALLET_FILES,
+                    "Wallet has empty ID",
+                    &format!("{}: wallet ID field is empty", file_name),
+                    "Recreate the wallet from the mnemonic.",
+                )
+                .with_path(path)
+                .with_code("ERR_METADATA_INVALID"),
+            );
             corrupted_count += 1;
             continue;
         }
 
         if wallet.created_at.is_empty() {
-            findings.push(DoctorFinding::error(
-                CHECK_WALLET_FILES,
-                "Wallet has empty created_at",
-                &format!("{}: created_at field is empty", file_name),
-                "Recreate the wallet from the mnemonic.",
-            )
-            .with_path(path)
-            .with_code("ERR_METADATA_INVALID"));
+            findings.push(
+                DoctorFinding::error(
+                    CHECK_WALLET_FILES,
+                    "Wallet has empty created_at",
+                    &format!("{}: created_at field is empty", file_name),
+                    "Recreate the wallet from the mnemonic.",
+                )
+                .with_path(path)
+                .with_code("ERR_METADATA_INVALID"),
+            );
             corrupted_count += 1;
             continue;
         }
 
         // Validate created_at is valid RFC3339
         if chrono::DateTime::parse_from_rfc3339(&wallet.created_at).is_err() {
-            findings.push(DoctorFinding::error(
-                CHECK_WALLET_FILES,
-                "Wallet has invalid created_at",
-                &format!("{}: created_at is not valid RFC3339: `{}`", file_name, wallet.created_at),
-                "Recreate the wallet from the mnemonic.",
-            )
-            .with_path(path)
-            .with_code("ERR_METADATA_INVALID"));
+            findings.push(
+                DoctorFinding::error(
+                    CHECK_WALLET_FILES,
+                    "Wallet has invalid created_at",
+                    &format!(
+                        "{}: created_at is not valid RFC3339: `{}`",
+                        file_name, wallet.created_at
+                    ),
+                    "Recreate the wallet from the mnemonic.",
+                )
+                .with_path(path)
+                .with_code("ERR_METADATA_INVALID"),
+            );
             corrupted_count += 1;
             continue;
         }
@@ -184,17 +195,19 @@ pub fn check_wallet_files(vault_path: &Path) -> Vec<DoctorFinding> {
             &format!("All {} wallet file(s) are valid.", valid_count),
         ));
     } else {
-        findings.push(DoctorFinding::warning(
-            CHECK_WALLET_FILES,
-            "Some wallet files corrupted",
-            &format!(
-                "{} of {} wallet file(s) are corrupted.",
-                corrupted_count,
-                valid_count + corrupted_count
-            ),
-            "Export valid wallets and recreate the corrupted ones.",
-        )
-        .with_code("WARN_ARTIFACTS_CORRUPTED"));
+        findings.push(
+            DoctorFinding::warning(
+                CHECK_WALLET_FILES,
+                "Some wallet files corrupted",
+                &format!(
+                    "{} of {} wallet file(s) are corrupted.",
+                    corrupted_count,
+                    valid_count + corrupted_count
+                ),
+                "Export valid wallets and recreate the corrupted ones.",
+            )
+            .with_code("WARN_ARTIFACTS_CORRUPTED"),
+        );
     }
 
     findings
@@ -258,14 +271,16 @@ pub fn check_key_files(vault_path: &Path) -> Vec<DoctorFinding> {
             Ok(c) => c,
             Err(e) => {
                 corrupted_count += 1;
-                findings.push(DoctorFinding::error(
-                    CHECK_KEY_FILES,
-                    "Key file unreadable",
-                    &format!("{}: cannot read file: {}", file_name, e),
-                    "Check file permissions.",
-                )
-                .with_path(path)
-                .with_code("ERR_FILE_UNREADABLE"));
+                findings.push(
+                    DoctorFinding::error(
+                        CHECK_KEY_FILES,
+                        "Key file unreadable",
+                        &format!("{}: cannot read file: {}", file_name, e),
+                        "Check file permissions.",
+                    )
+                    .with_path(path)
+                    .with_code("ERR_FILE_UNREADABLE"),
+                );
                 continue;
             }
         };
@@ -274,14 +289,16 @@ pub fn check_key_files(vault_path: &Path) -> Vec<DoctorFinding> {
             Ok(k) => k,
             Err(e) => {
                 corrupted_count += 1;
-                findings.push(DoctorFinding::error(
-                    CHECK_KEY_FILES,
-                    "Key file malformed",
-                    &format!("{}: invalid JSON: {}", file_name, e),
-                    "Delete and recreate the API key.",
-                )
-                .with_path(path)
-                .with_code("ERR_FILE_MALFORMED"));
+                findings.push(
+                    DoctorFinding::error(
+                        CHECK_KEY_FILES,
+                        "Key file malformed",
+                        &format!("{}: invalid JSON: {}", file_name, e),
+                        "Delete and recreate the API key.",
+                    )
+                    .with_path(path)
+                    .with_code("ERR_FILE_MALFORMED"),
+                );
                 continue;
             }
         };
@@ -296,17 +313,19 @@ pub fn check_key_files(vault_path: &Path) -> Vec<DoctorFinding> {
             &format!("All {} key file(s) are valid.", valid_count),
         ));
     } else {
-        findings.push(DoctorFinding::warning(
-            CHECK_KEY_FILES,
-            "Some key files corrupted",
-            &format!(
-                "{} of {} key file(s) are corrupted.",
-                corrupted_count,
-                valid_count + corrupted_count
-            ),
-            "Delete and recreate the corrupted API keys.",
-        )
-        .with_code("WARN_ARTIFACTS_CORRUPTED"));
+        findings.push(
+            DoctorFinding::warning(
+                CHECK_KEY_FILES,
+                "Some key files corrupted",
+                &format!(
+                    "{} of {} key file(s) are corrupted.",
+                    corrupted_count,
+                    valid_count + corrupted_count
+                ),
+                "Delete and recreate the corrupted API keys.",
+            )
+            .with_code("WARN_ARTIFACTS_CORRUPTED"),
+        );
     }
 
     findings
@@ -370,14 +389,16 @@ pub fn check_policy_files(vault_path: &Path) -> Vec<DoctorFinding> {
             Ok(c) => c,
             Err(e) => {
                 corrupted_count += 1;
-                findings.push(DoctorFinding::error(
-                    CHECK_POLICY_FILES,
-                    "Policy file unreadable",
-                    &format!("{}: cannot read file: {}", file_name, e),
-                    "Check file permissions.",
-                )
-                .with_path(path)
-                .with_code("ERR_FILE_UNREADABLE"));
+                findings.push(
+                    DoctorFinding::error(
+                        CHECK_POLICY_FILES,
+                        "Policy file unreadable",
+                        &format!("{}: cannot read file: {}", file_name, e),
+                        "Check file permissions.",
+                    )
+                    .with_path(path)
+                    .with_code("ERR_FILE_UNREADABLE"),
+                );
                 continue;
             }
         };
@@ -386,14 +407,16 @@ pub fn check_policy_files(vault_path: &Path) -> Vec<DoctorFinding> {
             Ok(p) => p,
             Err(e) => {
                 corrupted_count += 1;
-                findings.push(DoctorFinding::error(
-                    CHECK_POLICY_FILES,
-                    "Policy file malformed",
-                    &format!("{}: invalid JSON: {}", file_name, e),
-                    "Delete and recreate the policy.",
-                )
-                .with_path(path)
-                .with_code("ERR_FILE_MALFORMED"));
+                findings.push(
+                    DoctorFinding::error(
+                        CHECK_POLICY_FILES,
+                        "Policy file malformed",
+                        &format!("{}: invalid JSON: {}", file_name, e),
+                        "Delete and recreate the policy.",
+                    )
+                    .with_path(path)
+                    .with_code("ERR_FILE_MALFORMED"),
+                );
                 continue;
             }
         };
@@ -408,17 +431,19 @@ pub fn check_policy_files(vault_path: &Path) -> Vec<DoctorFinding> {
             &format!("All {} policy file(s) are valid.", valid_count),
         ));
     } else {
-        findings.push(DoctorFinding::warning(
-            CHECK_POLICY_FILES,
-            "Some policy files corrupted",
-            &format!(
-                "{} of {} policy file(s) are corrupted.",
-                corrupted_count,
-                valid_count + corrupted_count
-            ),
-            "Delete and recreate the corrupted policies.",
-        )
-        .with_code("WARN_ARTIFACTS_CORRUPTED"));
+        findings.push(
+            DoctorFinding::warning(
+                CHECK_POLICY_FILES,
+                "Some policy files corrupted",
+                &format!(
+                    "{} of {} policy file(s) are corrupted.",
+                    corrupted_count,
+                    valid_count + corrupted_count
+                ),
+                "Delete and recreate the corrupted policies.",
+            )
+            .with_code("WARN_ARTIFACTS_CORRUPTED"),
+        );
     }
 
     findings
@@ -480,7 +505,7 @@ mod tests {
     fn test_wallet_files_empty_dir_is_warning() {
         let temp = TempDir::new().unwrap();
         let vault = temp.path().join(".ows");
-        std::fs::create_dir(vault.join("wallets")).ok();
+        std::fs::create_dir_all(vault.join("wallets")).ok();
         let findings = check_wallet_files(&vault);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].status, DoctorStatus::Warning);
@@ -499,8 +524,12 @@ mod tests {
 
         let findings = check_wallet_files(&vault);
         // Should have 2 findings: one for the wallet, one summary
-        assert!(findings.iter().any(|f| f.status == DoctorStatus::Ok && f.detail.contains("1 wallet")));
-        assert!(findings.iter().any(|f| f.id == CHECK_WALLET_FILES && f.status == DoctorStatus::Ok));
+        assert!(findings
+            .iter()
+            .any(|f| f.status == DoctorStatus::Ok && f.detail.contains("1 wallet")));
+        assert!(findings
+            .iter()
+            .any(|f| f.id == CHECK_WALLET_FILES && f.status == DoctorStatus::Ok));
     }
 
     #[test]
@@ -512,7 +541,9 @@ mod tests {
         std::fs::write(wallets_dir.join("bad.json"), "{ invalid json }").ok();
 
         let findings = check_wallet_files(&vault);
-        assert!(findings.iter().any(|f| f.status == DoctorStatus::Error && f.code == Some("ERR_FILE_MALFORMED")));
+        assert!(findings
+            .iter()
+            .any(|f| f.status == DoctorStatus::Error && f.code == Some("ERR_FILE_MALFORMED")));
     }
 
     #[test]
@@ -526,29 +557,39 @@ mod tests {
         std::fs::write(wallets_dir.join("empty-id.json"), json).ok();
 
         let findings = check_wallet_files(&vault);
-        assert!(findings.iter().any(|f| f.code == Some("ERR_METADATA_INVALID")));
+        assert!(findings
+            .iter()
+            .any(|f| f.code == Some("ERR_METADATA_INVALID")));
     }
 
     #[test]
     fn test_wallet_files_invalid_created_at() {
+        // Create a wallet JSON with an invalid created_at RFC3339 string
         let temp = TempDir::new().unwrap();
         let vault = temp.path().join(".ows");
         let wallets_dir = vault.join("wallets");
         std::fs::create_dir_all(&wallets_dir).ok();
-        let wallet = EncryptedWallet::new(
-            "test-id".to_string(),
-            "Test".to_string(),
-            vec![],
-            serde_json::json!({}),
-            ows_core::KeyType::Mnemonic,
-        );
-        // Override created_at to be invalid
-        let mut json = serde_json::to_string_pretty(&wallet).unwrap();
-        json = json.replace("2026-01-01T00:00:00Z", "not-a-date");
-        std::fs::write(wallets_dir.join("bad-date.json"), json).ok();
+
+        let bad_wallet_json = serde_json::json!({
+            "ows_version": 2,
+            "id": "test-id",
+            "name": "Test",
+            "created_at": "not-a-date",
+            "accounts": [],
+            "crypto": {},
+            "key_type": "mnemonic"
+        });
+        std::fs::write(
+            wallets_dir.join("bad-date.json"),
+            serde_json::to_string_pretty(&bad_wallet_json).unwrap(),
+        )
+        .ok();
 
         let findings = check_wallet_files(&vault);
-        assert!(findings.iter().any(|f| f.code == Some("ERR_METADATA_INVALID")));
+        // Should detect invalid created_at
+        assert!(findings
+            .iter()
+            .any(|f| f.code == Some("ERR_METADATA_INVALID")));
     }
 
     #[test]
@@ -563,13 +604,15 @@ mod tests {
         let json = serde_json::to_string_pretty(&wallet).unwrap();
         std::fs::write(wallets_dir.join("good.json"), json).ok();
 
-        // Corrupted wallet
+        // Corrupted wallet (malformed JSON)
         std::fs::write(wallets_dir.join("bad.json"), "{ bad }").ok();
 
         let findings = check_wallet_files(&vault);
-        assert!(findings.iter().any(|f| f.status == DoctorStatus::Ok));
+        // With mixed valid and corrupted: one Error (malformed), one Warning (summary)
         assert!(findings.iter().any(|f| f.status == DoctorStatus::Error));
-        assert!(findings.iter().any(|f| f.code == Some("WARN_ARTIFACTS_CORRUPTED")));
+        assert!(findings
+            .iter()
+            .any(|f| f.code == Some("WARN_ARTIFACTS_CORRUPTED")));
     }
 
     // ---- Key file tests ----
@@ -615,7 +658,9 @@ mod tests {
         std::fs::write(keys_dir.join("bad.json"), "{ invalid }").ok();
 
         let findings = check_key_files(&vault);
-        assert!(findings.iter().any(|f| f.status == DoctorStatus::Error && f.code == Some("ERR_FILE_MALFORMED")));
+        assert!(findings
+            .iter()
+            .any(|f| f.status == DoctorStatus::Error && f.code == Some("ERR_FILE_MALFORMED")));
     }
 
     // ---- Policy file tests ----
@@ -661,6 +706,8 @@ mod tests {
         std::fs::write(policies_dir.join("bad.json"), "{ invalid }").ok();
 
         let findings = check_policy_files(&vault);
-        assert!(findings.iter().any(|f| f.status == DoctorStatus::Error && f.code == Some("ERR_FILE_MALFORMED")));
+        assert!(findings
+            .iter()
+            .any(|f| f.status == DoctorStatus::Error && f.code == Some("ERR_FILE_MALFORMED")));
     }
 }

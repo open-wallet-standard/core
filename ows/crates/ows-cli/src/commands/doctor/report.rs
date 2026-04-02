@@ -168,10 +168,22 @@ impl DoctorReport {
     /// - `Skipped` if only skipped findings
     pub fn new(findings: Vec<DoctorFinding>) -> Self {
         let summary = DoctorSummary {
-            ok: findings.iter().filter(|f| f.status == DoctorStatus::Ok).count(),
-            warnings: findings.iter().filter(|f| f.status == DoctorStatus::Warning).count(),
-            errors: findings.iter().filter(|f| f.status == DoctorStatus::Error).count(),
-            skipped: findings.iter().filter(|f| f.status == DoctorStatus::Skipped).count(),
+            ok: findings
+                .iter()
+                .filter(|f| f.status == DoctorStatus::Ok)
+                .count(),
+            warnings: findings
+                .iter()
+                .filter(|f| f.status == DoctorStatus::Warning)
+                .count(),
+            errors: findings
+                .iter()
+                .filter(|f| f.status == DoctorStatus::Error)
+                .count(),
+            skipped: findings
+                .iter()
+                .filter(|f| f.status == DoctorStatus::Skipped)
+                .count(),
         };
 
         let overall_status = if summary.errors > 0 {
@@ -212,7 +224,10 @@ impl DoctorReport {
 
     /// Return findings filtered by a given status.
     pub fn findings_with_status(&self, status: DoctorStatus) -> Vec<&DoctorFinding> {
-        self.findings.iter().filter(|f| f.status == status).collect()
+        self.findings
+            .iter()
+            .filter(|f| f.status == status)
+            .collect()
     }
 }
 
@@ -310,13 +325,16 @@ mod tests {
         let finding = DoctorFinding::ok(ID, "Title", "Detail")
             .with_path(std::path::PathBuf::from("/test/path"));
         assert!(finding.path.is_some());
-        assert_eq!(finding.path.unwrap(), std::path::PathBuf::from("/test/path"));
+        assert_eq!(
+            finding.path.unwrap(),
+            std::path::PathBuf::from("/test/path")
+        );
     }
 
     #[test]
     fn test_finding_builder_with_code() {
-        let finding = DoctorFinding::error(ID, "Title", "Detail", "Fix it")
-            .with_code("ERR_VAULT_MISSING");
+        let finding =
+            DoctorFinding::error(ID, "Title", "Detail", "Fix it").with_code("ERR_VAULT_MISSING");
         assert_eq!(finding.code, Some("ERR_VAULT_MISSING"));
     }
 
