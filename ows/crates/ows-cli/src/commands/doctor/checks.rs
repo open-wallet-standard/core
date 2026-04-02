@@ -1,6 +1,10 @@
 //! Individual diagnostic checks for `ows doctor`.
 
-use crate::commands::doctor::report::{DoctorCheckId, DoctorFinding, DoctorReport};
+use crate::commands::doctor::report::{
+    DoctorCheckId, DoctorFinding, DoctorReport, OWS_DOCTOR_CONFIG_INVALID,
+    OWS_DOCTOR_CONFIG_MISSING, OWS_DOCTOR_DIR_UNREADABLE, OWS_DOCTOR_ENV_HOME_NOT_SET,
+    OWS_DOCTOR_LOGS_DIR_MISSING, OWS_DOCTOR_VAULT_MISSING,
+};
 use crate::commands::doctor::vault_inspector;
 
 use ows_core::Config;
@@ -45,9 +49,10 @@ pub fn check_vault_path() -> Vec<DoctorFinding> {
     if home.is_none() {
         findings.push(DoctorFinding::error(
             CHECK_HOME_ENV,
-            "HOME not set",
-            "The HOME environment variable is not set. Vault path resolution may be incorrect.",
-            "Set HOME to your user directory path.",
+            OWS_DOCTOR_ENV_HOME_NOT_SET,
+            "HOME environment variable is not set",
+            "Vault path resolution may be unreliable without HOME. Set HOME to your user directory.",
+            "Set the HOME environment variable (e.g. HOME=~/.ows in your shell profile).",
         ));
     }
 
@@ -56,7 +61,7 @@ pub fn check_vault_path() -> Vec<DoctorFinding> {
     findings.push(DoctorFinding::ok(
         CHECK_VAULT_PATH,
         "Vault path resolved",
-        &format!("Vault path resolved to `{}`", vault_path.display()),
+        &format!("Vault path resolved to `{}`.", vault_path.display()),
     ));
 
     findings
@@ -70,14 +75,15 @@ pub fn check_vault_exists() -> Vec<DoctorFinding> {
         vec![DoctorFinding::ok(
             CHECK_VAULT_EXISTS,
             "Vault exists",
-            &format!("`{}` exists", vault_path.display()),
+            &format!("Vault directory is present at `{}`.", vault_path.display()),
         )]
     } else {
         vec![DoctorFinding::error(
             CHECK_VAULT_EXISTS,
-            "Vault not found",
+            OWS_DOCTOR_VAULT_MISSING,
+            "Vault directory not found",
             &format!(
-                "Vault directory not found at `{}`. No wallets have been created yet.",
+                "No vault found at `{}`. No wallets have been created yet.",
                 vault_path.display()
             ),
             "Run `ows wallet create` to create your first wallet.",
@@ -93,7 +99,8 @@ pub fn check_logs_dir() -> Vec<DoctorFinding> {
     if !vault_path.exists() {
         return vec![DoctorFinding::skipped(
             CHECK_LOGS_DIR,
-            "Logs directory skipped",
+            OWS_DOCTOR_LOGS_DIR_MISSING,
+            "Logs directory check skipped",
             "Vault does not exist; skipping logs directory check.",
         )];
     }
@@ -104,12 +111,13 @@ pub fn check_logs_dir() -> Vec<DoctorFinding> {
         vec![DoctorFinding::ok(
             CHECK_LOGS_DIR,
             "Logs directory present",
-            &format!("logs/ exists at `{}`", logs_dir.display()),
+            &format!("Audit log directory exists at `{}`.", logs_dir.display()),
         )
         .with_path(logs_dir)]
     } else {
         vec![DoctorFinding::skipped(
             CHECK_LOGS_DIR,
+            OWS_DOCTOR_LOGS_DIR_MISSING,
             "Logs directory not present",
             "logs/ does not exist. Audit logging may not be active.",
         )]
@@ -123,8 +131,9 @@ pub fn check_config() -> Vec<DoctorFinding> {
     if !config_path.exists() {
         return vec![DoctorFinding::skipped(
             CHECK_CONFIG,
+            OWS_DOCTOR_CONFIG_MISSING,
             "Config file not present",
-            "No user config file at `~/.ows/config.json`. Using built-in defaults.",
+            "No user config at `~/.ows/config.json`. Built-in defaults are in use.",
         )];
     }
 
@@ -134,9 +143,9 @@ pub fn check_config() -> Vec<DoctorFinding> {
             let rpc_count = config.rpc.len();
             vec![DoctorFinding::ok(
                 CHECK_CONFIG,
-                "Config valid",
+                "Config file valid",
                 &format!(
-                    "config.json is valid with {} RPC endpoint(s) configured",
+                    "config.json is valid with {} RPC endpoint(s) configured.",
                     rpc_count
                 ),
             )
@@ -145,12 +154,12 @@ pub fn check_config() -> Vec<DoctorFinding> {
         Err(e) => {
             vec![DoctorFinding::error(
                 CHECK_CONFIG,
-                "Config parse error",
-                &format!("config.json exists but failed to parse: {}", e),
+                OWS_DOCTOR_CONFIG_INVALID,
+                "Config file is invalid",
+                &format!("config.json is present but could not be parsed: {}.", e),
                 "Backup and recreate `~/.ows/config.json`.",
             )
-            .with_path(config_path)
-            .with_code("ERR_CONFIG_PARSE")]
+            .with_path(config_path)]
         }
     }
 }
@@ -158,6 +167,10 @@ pub fn check_config() -> Vec<DoctorFinding> {
 /// Check vault directory permissions (Unix only).
 #[cfg(unix)]
 pub fn check_vault_permissions() -> Vec<DoctorFinding> {
+    use crate::commands::doctor::report::{
+        OWS_DOCTOR_PERM_VAULT_INSECURE, OWS_DOCTOR_PERM_WALLET_FILE_INSECURE,
+        OWS_DOCTOR_PERM_WALLETS_INSECURE,
+    };
     use std::os::unix::fs::PermissionsExt;
 
     let vault_path = resolve_vault_path();
@@ -165,6 +178,7 @@ pub fn check_vault_permissions() -> Vec<DoctorFinding> {
     if !vault_path.exists() {
         return vec![DoctorFinding::skipped(
             CHECK_VAULT_PERMS,
+            OWS_DOCTOR_DIR_UNREADABLE,
             "Permissions check skipped",
             "Vault does not exist; skipping permissions check.",
         )];
@@ -179,22 +193,22 @@ pub fn check_vault_permissions() -> Vec<DoctorFinding> {
             findings.push(
                 DoctorFinding::warning(
                     CHECK_VAULT_PERMS,
-                    "Vault permissions too open",
+                    OWS_DOCTOR_PERM_VAULT_INSECURE,
+                    "Vault directory permissions are insecure",
                     &format!(
-                        "Vault directory has permissions {:03o}, expected 0700 (owner-only)",
+                        "Vault has mode {:03o}; owner-only (0700) is required.",
                         mode
                     ),
                     "Run: chmod 700 ~/.ows",
                 )
-                .with_path(vault_path.clone())
-                .with_code("WARN_VAULT_PERMS"),
+                .with_path(vault_path.clone()),
             );
         } else {
             findings.push(
                 DoctorFinding::ok(
                     CHECK_VAULT_PERMS,
-                    "Vault permissions correct",
-                    "Vault directory has correct permissions (0700).",
+                    "Vault directory permissions are correct",
+                    "Vault directory has secure permissions (0700).",
                 )
                 .with_path(vault_path.clone()),
             );
@@ -209,15 +223,15 @@ pub fn check_vault_permissions() -> Vec<DoctorFinding> {
             findings.push(
                 DoctorFinding::warning(
                     CHECK_VAULT_PERMS,
-                    "Wallets directory permissions too open",
+                    OWS_DOCTOR_PERM_WALLETS_INSECURE,
+                    "Wallets directory permissions are insecure",
                     &format!(
-                        "Wallets directory has permissions {:03o}, expected 0700",
+                        "wallets/ has mode {:03o}; owner-only (0700) is required.",
                         mode
                     ),
                     "Run: chmod 700 ~/.ows/wallets",
                 )
-                .with_path(wallets_dir.clone())
-                .with_code("WARN_WALLETS_PERMS"),
+                .with_path(wallets_dir.clone()),
             );
         }
     }
@@ -233,15 +247,15 @@ pub fn check_vault_permissions() -> Vec<DoctorFinding> {
                         findings.push(
                             DoctorFinding::warning(
                                 CHECK_VAULT_PERMS,
-                                "Wallet file permissions too open",
+                                OWS_DOCTOR_PERM_WALLET_FILE_INSECURE,
+                                "Wallet file permissions are insecure",
                                 &format!(
-                                    "{} has permissions {:03o}, expected 0600",
+                                    "{} has mode {:03o}; owner-read-only (0600) is required.",
                                     file_name, mode
                                 ),
                                 &format!("Run: chmod 600 ~/.ows/wallets/{}", file_name),
                             )
-                            .with_path(entry.path())
-                            .with_code("WARN_WALLET_FILE_PERMS"),
+                            .with_path(entry.path()),
                         );
                     }
                 }
@@ -265,6 +279,7 @@ pub fn check_vault_permissions() -> Vec<DoctorFinding> {
 pub fn check_vault_permissions() -> Vec<DoctorFinding> {
     vec![DoctorFinding::skipped(
         CHECK_VAULT_PERMS,
+        OWS_DOCTOR_DIR_UNREADABLE,
         "Permissions check skipped",
         "Permission checks are Unix-only.",
     )]
@@ -382,6 +397,7 @@ mod tests {
 
     #[test]
     fn test_wallet_inspection_malformed_json() {
+        use crate::commands::doctor::report::OWS_DOCTOR_WALLET_FILE_INVALID;
         let temp = tempfile::TempDir::new().unwrap();
         let vault = temp.path().to_path_buf();
         let wallets_dir = vault.join("wallets");
@@ -391,7 +407,7 @@ mod tests {
         let findings = vault_inspector::check_wallet_files(&vault);
         assert!(findings
             .iter()
-            .any(|f| f.code == Some("ERR_FILE_MALFORMED")));
+            .any(|f| f.code == Some(OWS_DOCTOR_WALLET_FILE_INVALID)));
     }
 
     #[test]
