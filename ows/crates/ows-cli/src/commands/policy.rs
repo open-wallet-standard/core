@@ -65,6 +65,12 @@ pub fn show(id: &str) -> Result<(), CliError> {
                 ows_core::PolicyRule::ExpiresAt { timestamp } => {
                     format!("  expires_at: {timestamp}")
                 }
+                ows_core::PolicyRule::AllowedRecipients { addresses } => {
+                    format!("  allowed_recipients: {}", addresses.join(", "))
+                }
+                ows_core::PolicyRule::MaxTransactionValue { max_wei } => {
+                    format!("  max_transaction_value: {max_wei} wei")
+                }
             };
             println!("{desc}");
         }

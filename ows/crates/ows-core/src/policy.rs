@@ -16,6 +16,13 @@ pub enum PolicyRule {
 
     /// Deny if current time is past the timestamp.
     ExpiresAt { timestamp: String },
+    /// Deny if `to` address is not in the allowlist (EVM sign_transaction only).
+    /// Contract creation (to = None) is always denied when this rule is present.
+    AllowedRecipients { addresses: Vec<String> },
+
+    /// Deny if transaction value (in wei) exceeds the cap (EVM sign_transaction only).
+    /// Non-EVM chains and message signing pass through.
+    MaxTransactionValue { max_wei: String },
 }
 
 /// A stored policy definition.
