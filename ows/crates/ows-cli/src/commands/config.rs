@@ -21,8 +21,25 @@ pub fn show() -> Result<(), CliError> {
         );
     }
 
+    // Show active profile
     println!();
-    println!("RPC endpoints:");
+    println!(
+        "Active profile: {}",
+        config.active_profile().unwrap_or("(none)")
+    );
+
+    // Show active profile endpoints if one is set
+    if let Some(profile_name) = config.active_profile() {
+        if let Some(profile) = config.profile(profile_name) {
+            println!("Profile endpoints ({}):", profile_name);
+            for (chain, url) in profile.endpoints() {
+                println!("  {:<40} {}", chain, url);
+            }
+        }
+    }
+
+    println!();
+    println!("Global RPC endpoints (fallback / when no profile is active):");
 
     let mut keys: Vec<&String> = config.rpc.keys().collect();
     keys.sort();
@@ -35,6 +52,23 @@ pub fn show() -> Result<(), CliError> {
             None => "(custom)",
         };
         println!("  {:<40} {} {}", key, url, annotation);
+    }
+
+    // Show available profiles
+    let profile_count = config.profile_names().count();
+    if profile_count > 0 {
+        println!();
+        println!("Available profiles ({}):", profile_count);
+        for name in config.profile_names() {
+            let marker = if config.active_profile() == Some(name) {
+                " (active)"
+            } else {
+                ""
+            };
+            if let Some(profile) = config.profile(name) {
+                println!("  {}{} ({} chains)", name, marker, profile.chains.len());
+            }
+        }
     }
 
     Ok(())

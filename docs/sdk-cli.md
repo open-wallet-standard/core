@@ -361,6 +361,82 @@ ows fund balance --wallet "my-wallet" --chain base
 | `--wallet <NAME>` | Wallet name (required) |
 | `--chain <CHAIN>` | Chain to query (required) |
 
+## RPC Profile Commands
+
+### `ows rpc add`
+
+Add or update RPC endpoint(s) in a named profile. Profiles allow you to manage chain-specific endpoint sets (e.g., dev/staging/prod environments or chain-specific endpoint collections).
+
+```bash
+# Add EVM mainnet endpoint to a profile
+ows rpc add --name mainnet-evm --chain eip155:1 --url https://eth.example.com
+
+# Add multiple chains to the same profile (repeat --chain and --url pairs)
+ows rpc add --name team-dev \
+  --chain eip155:1 --url https://dev-eth.example.com \
+  --chain solana --url https://dev-solana.example.com
+```
+
+| Flag | Description |
+|------|-------------|
+| `--name <NAME>` | Profile name (required) |
+| `--chain <CHAIN>` | Chain identifier (repeat for multiple pairs) |
+| `--url <URL>` | RPC endpoint URL (must match --chain order) |
+
+### `ows rpc list`
+
+List all configured RPC profiles and their endpoints.
+
+```bash
+ows rpc list
+```
+
+### `ows rpc show`
+
+Show the active profile and its endpoints, or a specific named profile.
+
+```bash
+ows rpc show                    # show active profile
+ows rpc show --name team-dev   # show specific profile
+```
+
+| Flag | Description |
+|------|-------------|
+| `--name <NAME>` | Profile name (optional, defaults to active) |
+
+### `ows rpc use`
+
+Set the active RPC profile. When a profile is active, its endpoints take precedence over global RPC settings when resolving endpoints for signing operations.
+
+```bash
+ows rpc use --name team-dev
+```
+
+### `ows rpc remove`
+
+Remove (delete) an entire RPC profile. If the removed profile was active, the active profile is cleared.
+
+```bash
+ows rpc remove --name team-dev
+```
+
+### `ows rpc clear`
+
+Clear the active profile (use global/default endpoints only).
+
+```bash
+ows rpc clear
+```
+
+### RPC Resolution Precedence
+
+When resolving RPC endpoints for signing and broadcasting transactions, the following precedence applies:
+
+1. **Explicit `--rpc-url` argument** (highest priority, if supported by the command)
+2. **Active profile endpoint** (if a profile is active and contains the chain)
+3. **Global RPC config** (`~/.ows/config.json` `rpc` field)
+4. **Built-in defaults** (lowest priority)
+
 ## System Commands
 
 ### `ows update`

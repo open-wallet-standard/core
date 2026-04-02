@@ -58,6 +58,11 @@ enum Commands {
         #[command(subcommand)]
         subcommand: ConfigCommands,
     },
+    /// Manage named RPC endpoint profiles (dev/staging/prod or chain-specific sets)
+    Rpc {
+        #[command(subcommand)]
+        subcommand: RpcCommands,
+    },
     /// Update ows to the latest release
     Update {
         /// Re-download even if already on the latest version
@@ -341,6 +346,44 @@ enum ConfigCommands {
     Show,
 }
 
+#[derive(Subcommand)]
+enum RpcCommands {
+    /// Show the active RPC profile and its endpoints
+    Show {
+        /// Profile name to show (default: active profile)
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List all configured RPC profiles
+    List,
+    /// Add or update RPC endpoint(s) in a profile
+    Add {
+        /// Profile name (e.g. mainnet-evm, team-dev, staging)
+        #[arg(long)]
+        name: String,
+        /// Chain identifier (repeat for multiple: --chain eip155:1 --url https://... --chain solana --url https://...)
+        #[arg(long)]
+        chain: Vec<String>,
+        /// RPC endpoint URL (must be repeated in same order as --chain)
+        #[arg(long)]
+        url: Vec<String>,
+    },
+    /// Remove (delete) an RPC profile
+    Remove {
+        /// Profile name to remove
+        #[arg(long)]
+        name: String,
+    },
+    /// Set the active RPC profile
+    Use {
+        /// Profile name to activate
+        #[arg(long)]
+        name: String,
+    },
+    /// Clear the active profile (use global/default endpoints only)
+    Clear,
+}
+
 #[derive(Debug, thiserror::Error)]
 enum CliError {
     #[error("{0}")]
@@ -509,6 +552,14 @@ fn run(cli: Cli) -> Result<(), CliError> {
         },
         Commands::Config { subcommand } => match subcommand {
             ConfigCommands::Show => commands::config::show(),
+        },
+        Commands::Rpc { subcommand } => match subcommand {
+            RpcCommands::Show { name } => commands::rpc::show(name.as_deref()),
+            RpcCommands::List => commands::rpc::list(),
+            RpcCommands::Add { name, chain, url } => commands::rpc::add(&name, &chain, &url),
+            RpcCommands::Remove { name } => commands::rpc::remove(&name),
+            RpcCommands::Use { name } => commands::rpc::use_profile(&name),
+            RpcCommands::Clear => commands::rpc::clear_active(),
         },
         Commands::Update { force } => commands::update::run(force),
         Commands::Uninstall { purge } => commands::uninstall::run(purge),
