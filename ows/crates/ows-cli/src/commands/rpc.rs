@@ -15,22 +15,27 @@ fn nearest_profile<'a>(input: &str, profiles: &'a [&str]) -> Option<&'a str> {
 /// Compute Levenshtein distance between two strings (no external deps).
 #[allow(clippy::needless_range_loop)]
 fn edit_distance(a: &str, b: &str) -> usize {
-    let mut matrix: Vec<Vec<usize>> = vec![vec![0; b.len() + 1]; a.len() + 1];
-    for i in 0..=a.len() {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let a_len = a_chars.len();
+    let b_len = b_chars.len();
+
+    let mut matrix: Vec<Vec<usize>> = vec![vec![0; b_len + 1]; a_len + 1];
+    for i in 0..=a_len {
         matrix[i][0] = i;
     }
-    for j in 0..=b.len() {
+    for j in 0..=b_len {
         matrix[0][j] = j;
     }
-    for (i, ca) in a.char_indices() {
-        for (j, cb) in b.char_indices() {
+    for (i, ca) in a_chars.iter().enumerate() {
+        for (j, cb) in b_chars.iter().enumerate() {
             let cost = if ca == cb { 0 } else { 1 };
             matrix[i + 1][j + 1] = (matrix[i][j + 1] + 1)
                 .min(matrix[i + 1][j] + 1)
                 .min(matrix[i][j] + cost);
         }
     }
-    matrix[a.len()][b.len()]
+    matrix[a_len][b_len]
 }
 
 /// Show the active RPC profile and its endpoints, or a specific profile.
@@ -136,17 +141,21 @@ pub fn add(name: &str, chains: &[String], urls: &[String]) -> Result<(), CliErro
         ));
     }
 
-    // Validate all chains first before making any changes
-    for chain in chains {
-        let _ = ows_core::parse_chain(chain)
-            .map_err(|e| CliError::InvalidArgs(format!("invalid chain '{}': {}", chain, e)))?;
-    }
+    // Validate and normalize all chains first before making any changes
+    let normalized_chains: Vec<String> = chains
+        .iter()
+        .map(|chain| {
+            ows_core::parse_chain(chain)
+                .map(|c| c.chain_id.to_string())
+                .map_err(|e| CliError::InvalidArgs(format!("invalid chain '{}': {}", chain, e)))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let mut config = Config::load_or_default();
 
     let is_new = config.profile(name).is_none();
 
-    for (chain, url) in chains.iter().zip(urls.iter()) {
+    for (chain, url) in normalized_chains.iter().zip(urls.iter()) {
         config.upsert_profile_endpoint(name, chain, url.clone());
     }
 
@@ -155,7 +164,7 @@ pub fn add(name: &str, chains: &[String], urls: &[String]) -> Result<(), CliErro
     if is_new {
         println!("Created new profile: {}", name);
     }
-    for (chain, url) in chains.iter().zip(urls.iter()) {
+    for (chain, url) in normalized_chains.iter().zip(urls.iter()) {
         println!("Added {} -> {} in profile '{}'", chain, url, name);
     }
 
@@ -272,6 +281,20 @@ mod tests {
         assert_eq!(edit_distance("kitten", "sitting"), 3);
         assert_eq!(edit_distance("team-dev", "team-dev"), 0);
         assert_eq!(edit_distance("team-dev", "team-prod"), 4);
+    }
+
+    #[test]
+    fn test_edit_distance_multibyte_utf8() {
+        // Regression: edit_distance must count characters, not bytes.
+        // 'é' is 2 bytes in UTF-8; a byte-oriented implementation would produce
+        // wrong matrix dimensions and incorrect indices for multi-byte chars.
+        assert_eq!(edit_distance("café", "cafe"), 1); // 'é'(2 bytes) vs 'e'(1 byte): cost 1
+        assert_eq!(edit_distance("cafe", "café"), 1);
+        assert_eq!(edit_distance("résumé", "resume"), 2); // 'é','é'(2 bytes each) -> 'e','e': cost 2
+        assert_eq!(edit_distance("日本", "日本"), 0); // identical 6-byte strings
+        assert_eq!(edit_distance("日本", "日韩"), 1); // different 3-byte chars: substitution cost 1
+        assert_eq!(edit_distance("hello世界", "hello世界"), 0); // identical mixed ASCII/multibyte
+        assert_eq!(edit_distance("hello世界", "hello世界!"), 1); // insertion at end
     }
 
     #[test]

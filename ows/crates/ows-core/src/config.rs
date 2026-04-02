@@ -65,7 +65,9 @@ pub struct Config {
     #[serde(default = "default_vault_path")]
     pub vault_path: PathBuf,
     /// Legacy flat RPC endpoints (chain_id -> url). Used for backward compatibility.
-    #[serde(default)]
+    /// Empty by default when loading from disk — built-in defaults come from
+    /// `Config::default_rpc()` at runtime and are not persisted.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub rpc: HashMap<String, String>,
     /// New structured RPC config with profile support.
     /// When present, takes precedence over legacy `rpc` field for profile lookups.
@@ -144,9 +146,13 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Look up an RPC URL by chain identifier from legacy flat rpc map.
-    pub fn rpc_url(&self, chain: &str) -> Option<&str> {
-        self.rpc.get(chain).map(|s| s.as_str())
+    /// Look up an RPC URL by chain identifier.
+    /// Checks: user-defined global rpc > built-in defaults.
+    pub fn rpc_url(&self, chain: &str) -> Option<String> {
+        self.rpc
+            .get(chain)
+            .cloned()
+            .or_else(|| Config::default_rpc().get(chain).cloned())
     }
 
     /// Returns the name of the active profile, if any.
@@ -209,6 +215,7 @@ impl Config {
     }
 
     /// Remove a chain endpoint from a profile. Deletes profile if empty.
+    /// Clears active_profile if the deleted profile was the active one.
     pub fn remove_profile_endpoint(&mut self, profile_name: &str, chain: &str) -> bool {
         let config = match self.rpc_config.as_mut() {
             Some(c) => c,
@@ -221,6 +228,9 @@ impl Config {
         let removed = profile.chains.remove(chain).is_some();
         if removed && profile.chains.is_empty() {
             config.profiles.remove(profile_name);
+            if config.active_profile.as_deref() == Some(profile_name) {
+                config.active_profile = None;
+            }
         }
         removed
     }
@@ -265,7 +275,12 @@ impl Config {
 
     /// Load config from a specific path, merging user overrides on top of defaults.
     pub fn load_or_default_from(path: &std::path::Path) -> Self {
-        let mut config = Config::default();
+        let mut config = Config {
+            // Start with empty rpc — built-in defaults come from `default_rpc()` at
+            // runtime; this avoids baking them into the saved config file.
+            rpc: HashMap::new(),
+            ..Config::default()
+        };
         if path.exists() {
             if let Ok(contents) = std::fs::read_to_string(path) {
                 if let Ok(user_config) = serde_json::from_str::<Config>(&contents) {
@@ -326,20 +341,26 @@ mod tests {
     #[test]
     fn test_rpc_lookup_hit() {
         let config = Config::default();
-        assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
+        assert_eq!(
+            config.rpc_url("eip155:1"),
+            Some("https://eth.llamarpc.com".to_string())
+        );
     }
 
     #[test]
     fn test_default_rpc_endpoints() {
         let config = Config::default();
-        assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
+        assert_eq!(
+            config.rpc_url("eip155:1"),
+            Some("https://eth.llamarpc.com".to_string())
+        );
         assert_eq!(
             config.rpc_url("eip155:137"),
-            Some("https://polygon-rpc.com")
+            Some("https://polygon-rpc.com".to_string())
         );
         assert_eq!(
             config.rpc_url("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"),
-            Some("https://api.mainnet-beta.solana.com")
+            Some("https://api.mainnet-beta.solana.com".to_string())
         );
     }
 
@@ -383,9 +404,13 @@ mod tests {
     #[test]
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
-        // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 18);
-        assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
+        // rpc is empty (built-in defaults come from default_rpc() at runtime)
+        assert!(config.rpc.is_empty());
+        // rpc_url still resolves defaults via fallback
+        assert_eq!(
+            config.rpc_url("eip155:1"),
+            Some("https://eth.llamarpc.com".to_string())
+        );
     }
 
     #[test]
@@ -401,10 +426,13 @@ mod tests {
         std::fs::write(&config_path, serde_json::to_string(&user_config).unwrap()).unwrap();
 
         let config = Config::load_or_default_from(&config_path);
-        assert_eq!(config.rpc_url("eip155:1"), Some("https://custom-eth.rpc"));
+        assert_eq!(
+            config.rpc_url("eip155:1"),
+            Some("https://custom-eth.rpc".to_string())
+        );
         assert_eq!(
             config.rpc_url("eip155:137"),
-            Some("https://polygon-rpc.com")
+            Some("https://polygon-rpc.com".to_string())
         );
         assert_eq!(config.vault_path, PathBuf::from("/tmp/custom-vault"));
     }
@@ -536,7 +564,7 @@ mod tests {
         // Defaults still present via legacy rpc
         assert_eq!(
             config.rpc_url("eip155:137"),
-            Some("https://polygon-rpc.com")
+            Some("https://polygon-rpc.com".to_string())
         );
     }
 
@@ -555,7 +583,10 @@ mod tests {
 
         let config = Config::load_or_default_from(&config_path);
         // Old flat rpc is preserved
-        assert_eq!(config.rpc_url("eip155:1"), Some("https://old-custom.eth"));
+        assert_eq!(
+            config.rpc_url("eip155:1"),
+            Some("https://old-custom.eth".to_string())
+        );
         // rpc_config is None since old format doesn't have it
         assert!(config.rpc_config.is_none());
     }
@@ -589,7 +620,10 @@ mod tests {
             Some("https://new-profile.eth".to_string())
         );
         // But legacy rpc is still accessible directly
-        assert_eq!(config.rpc_url("eip155:1"), Some("https://legacy.eth"));
+        assert_eq!(
+            config.rpc_url("eip155:1"),
+            Some("https://legacy.eth".to_string())
+        );
     }
 
     #[test]
@@ -628,6 +662,20 @@ mod tests {
         config.set_active_profile(Some("dev".into()));
 
         assert!(config.delete_profile("dev"));
+        assert!(config.profile("dev").is_none());
+        assert_eq!(config.active_profile(), None);
+    }
+
+    #[test]
+    fn test_remove_last_chain_clears_active() {
+        // Regression: removing the last chain from the active profile via
+        // remove_profile_endpoint should clear active_profile.
+        let mut config = Config::default();
+        config.upsert_profile_endpoint("dev", "eip155:1", "https://dev-eth.example.com".into());
+        config.set_active_profile(Some("dev".into()));
+
+        assert_eq!(config.active_profile(), Some("dev"));
+        assert!(config.remove_profile_endpoint("dev", "eip155:1"));
         assert!(config.profile("dev").is_none());
         assert_eq!(config.active_profile(), None);
     }
@@ -699,5 +747,49 @@ mod tests {
     fn test_profile_names_empty_when_no_profiles() {
         let config = Config::default();
         assert!(config.profile_names().collect::<Vec<_>>().is_empty());
+    }
+
+    #[test]
+    fn test_save_config_does_not_bake_in_defaults() {
+        // Regression: saving a config with only profile-based RPC should NOT
+        // write the built-in defaults into the rpc field.
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+
+        // Build a config that only has a profile (no global rpc overrides)
+        let mut config = Config::load_or_default_from(&config_path);
+        config.upsert_profile_endpoint("dev", "eip155:1", "https://dev-eth.example.com".into());
+        config.set_active_profile(Some("dev".into()));
+
+        // Serialize and write to disk (as CLI save does)
+        let json = serde_json::to_string(&config).unwrap();
+        std::fs::write(&config_path, &json).unwrap();
+
+        // Read back as Value and verify rpc field is absent/empty
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        // rpc field must be absent or empty — no baked-in defaults
+        let rpc = parsed.get("rpc");
+        assert!(
+            rpc.is_none() || rpc == Some(&serde_json::Value::Object(Default::default())),
+            "rpc field should be absent or empty, got: {:?}",
+            rpc
+        );
+
+        // profiles should be present
+        assert!(
+            parsed
+                .get("rpc_config")
+                .and_then(|c| c.get("profiles"))
+                .is_some(),
+            "profiles should be saved"
+        );
+
+        // Reload from disk and verify profile still works
+        let reloaded = Config::load_or_default_from(&config_path);
+        assert_eq!(
+            reloaded.profile_rpc_url("eip155:1"),
+            Some("https://dev-eth.example.com")
+        );
     }
 }
