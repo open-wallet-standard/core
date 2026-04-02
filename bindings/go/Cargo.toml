@@ -1,0 +1,19 @@
+[package]
+name = "ows-go"
+version = "1.2.0"
+edition = "2021"
+description = "Go native bindings for the Open Wallet Standard via C FFI"
+license = "MIT"
+repository = "https://github.com/open-wallet-standard/core"
+readme = "README.md"
+
+[lib]
+name = "ows_go"
+crate-type = ["cdylib"]
+
+[features]
+default = []
+fast-kdf = ["ows-lib/fast-kdf"]
+
+[dependencies]
+ows-lib = { path = "../../ows/crates/ows-lib" }

@@ -1,0 +1,153 @@
+name: Go
+
+on:
+  push:
+    branches: [main, feat/**]
+    paths:
+      - 'bindings/go/**'
+      - 'ows/crates/ows-lib/**'
+      - 'ows/crates/ows-core/**'
+      - 'ows/crates/ows-signer/**'
+  pull_request:
+    paths:
+      - 'bindings/go/**'
+      - 'ows/crates/ows-lib/**'
+      - 'ows/crates/ows-core/**'
+      - 'ows/crates/ows-signer/**'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  go-bindings:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rustup@latest
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/go
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('bindings/go/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Build Rust FFI library
+        working-directory: bindings/go
+        run: cargo build --release -p ows-go
+
+      - name: Clippy
+        working-directory: bindings/go
+        run: cargo clippy -p ows-go -- -D warnings
+
+      - name: Run Go tests
+        working-directory: bindings/go
+        run: |
+          export CGO_ENABLED=1
+          export CGO_LDFLAGS="-L$(pwd)/target/release -lows_go"
+          export LD_LIBRARY_PATH="$(pwd)/target/release${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          go test -v ./ows/...
+
+      - name: Format Go code
+        working-directory: bindings/go
+        run: |
+          go fmt ./ows/... ./examples/...
+          git diff --exit-code
+
+      - name: Vet Go code
+        working-directory: bindings/go
+        run: go vet ./ows/...
+
+  go-bindings-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rustup@latest
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/go
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build Rust FFI library
+        working-directory: bindings/go
+        run: cargo build --release -p ows-go
+
+      - name: Clippy
+        working-directory: bindings/go
+        run: cargo clippy -p ows-go -- -D warnings
+
+      - name: Run Go tests
+        working-directory: bindings/go
+        shell: pwsh
+        run: |
+          $release = (Resolve-Path .\target\release).Path
+          $env:CGO_ENABLED = "1"
+          $env:CGO_LDFLAGS = "-L$($release -replace '\\','/') -lows_go"
+          $env:PATH = "$release;$env:PATH"
+          go test -v ./ows/...
+
+  go-bindings-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rustup@latest
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/go
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Build Rust FFI library
+        working-directory: bindings/go
+        run: cargo build --release -p ows-go
+
+      - name: Clippy
+        working-directory: bindings/go
+        run: cargo clippy -p ows-go -- -D warnings
+
+      - name: Run Go tests
+        working-directory: bindings/go
+        run: |
+          export CGO_ENABLED=1
+          export CGO_LDFLAGS="-L$(pwd)/target/release -lows_go"
+          export DYLD_LIBRARY_PATH="$(pwd)/target/release${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+          go test -v ./ows/...
