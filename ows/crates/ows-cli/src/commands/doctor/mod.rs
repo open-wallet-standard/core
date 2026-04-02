@@ -5,6 +5,7 @@
 //! - Vault and subdirectory existence
 //! - Config file validity
 //! - File permissions (Unix)
+//! - Wallet, key, and policy file integrity
 //! - Environment configuration
 //!
 //! All checks are read-only and do not modify any files.
@@ -13,7 +14,7 @@
 //!
 //! - [`report`] — Domain types: `DoctorStatus`, `DoctorFinding`, `DoctorReport`
 //! - [`checks`] — Individual check implementations
-//! - [`run_all_checks()`] — Aggregates all findings into a report
+//! - [`vault_inspector`] — Read-only vault artifact inspection (wallets/keys/policies)
 //!
 //! # Stability
 //!
@@ -23,11 +24,8 @@
 
 pub mod checks;
 pub mod report;
+pub mod vault_inspector;
 
-// Re-exported for use by the CLI command (Phase 3) and integration tests.
+// Re-exports for the CLI command (Phase 3).
 #[allow(unused)]
 pub use report::{DoctorCheckId, DoctorFinding, DoctorReport, DoctorStatus, DoctorSummary};
-pub use checks::run_all_checks;
-
-/// Aggregated diagnostic report — the output of [`run_all_checks()`].
-pub type DoctorResult = DoctorReport;

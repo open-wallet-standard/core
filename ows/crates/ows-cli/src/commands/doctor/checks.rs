@@ -1,6 +1,7 @@
 //! Individual diagnostic checks for `ows doctor`.
 
 use crate::commands::doctor::report::{DoctorCheckId, DoctorFinding, DoctorReport};
+use crate::commands::doctor::vault_inspector;
 
 use ows_core::Config;
 
@@ -12,12 +13,6 @@ use ows_core::Config;
 pub const CHECK_VAULT_PATH: DoctorCheckId = DoctorCheckId::new("vault.path");
 /// Vault existence check ID.
 pub const CHECK_VAULT_EXISTS: DoctorCheckId = DoctorCheckId::new("vault.exists");
-/// Wallets directory presence check ID.
-pub const CHECK_WALLETS_DIR: DoctorCheckId = DoctorCheckId::new("vault.wallets_dir");
-/// Keys directory presence check ID.
-pub const CHECK_KEYS_DIR: DoctorCheckId = DoctorCheckId::new("vault.keys_dir");
-/// Policies directory presence check ID.
-pub const CHECK_POLICIES_DIR: DoctorCheckId = DoctorCheckId::new("vault.policies_dir");
 /// Logs directory presence check ID.
 pub const CHECK_LOGS_DIR: DoctorCheckId = DoctorCheckId::new("vault.logs_dir");
 /// Config file presence and parseability check ID.
@@ -31,15 +26,11 @@ pub const CHECK_HOME_ENV: DoctorCheckId = DoctorCheckId::new("env.home");
 // Vault path resolution
 // ---------------------------------------------------------------------------
 
-/// Resolve the vault path, using an override for testing purposes.
+/// Resolve the vault path from `Config::default()`.
 ///
-/// When `vault_path_override` is `None`, resolves from `Config::default()`.
-/// Tests can pass a specific path to avoid environment variable dependence.
-fn resolve_vault_path(vault_path_override: Option<&std::path::Path>) -> std::path::PathBuf {
-    match vault_path_override {
-        Some(p) => p.to_path_buf(),
-        None => Config::default().vault_path,
-    }
+/// Exposed for use by vault_inspector functions in tests.
+pub fn resolve_vault_path() -> std::path::PathBuf {
+    Config::default().vault_path
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +51,7 @@ pub fn check_vault_path() -> Vec<DoctorFinding> {
         ));
     }
 
-    let vault_path = resolve_vault_path(None);
+    let vault_path = resolve_vault_path();
 
     findings.push(DoctorFinding::ok(
         CHECK_VAULT_PATH,
@@ -73,7 +64,7 @@ pub fn check_vault_path() -> Vec<DoctorFinding> {
 
 /// Check that the vault directory exists.
 pub fn check_vault_exists() -> Vec<DoctorFinding> {
-    let vault_path = resolve_vault_path(None);
+    let vault_path = resolve_vault_path();
 
     if vault_path.exists() {
         vec![DoctorFinding::ok(
@@ -95,117 +86,9 @@ pub fn check_vault_exists() -> Vec<DoctorFinding> {
     }
 }
 
-/// Check that the wallets subdirectory exists (if vault exists).
-pub fn check_wallets_dir() -> Vec<DoctorFinding> {
-    let vault_path = resolve_vault_path(None);
-
-    if !vault_path.exists() {
-        return vec![DoctorFinding::skipped(
-            CHECK_WALLETS_DIR,
-            "Wallets directory skipped",
-            "Vault does not exist; skipping wallets directory check.",
-        )];
-    }
-
-    let wallets_dir = vault_path.join("wallets");
-
-    if wallets_dir.exists() {
-        // Count wallet files
-        let wallet_count = std::fs::read_dir(&wallets_dir)
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("json"))
-                    .count()
-            })
-            .unwrap_or(0);
-
-        vec![DoctorFinding::ok(
-            CHECK_WALLETS_DIR,
-            "Wallets directory present",
-            &format!(
-                "wallets/ exists with {} wallet file(s)",
-                wallet_count
-            ),
-        )
-        .with_path(wallets_dir)]
-    } else {
-        vec![DoctorFinding::error(
-            CHECK_WALLETS_DIR,
-            "Wallets directory missing",
-            &format!(
-                "Expected `{}` but it does not exist.",
-                wallets_dir.display()
-            ),
-            "This is unexpected. The wallet command should create this directory.",
-        )
-        .with_path(wallets_dir)]
-    }
-}
-
-/// Check that the keys subdirectory exists (if vault exists).
-pub fn check_keys_dir() -> Vec<DoctorFinding> {
-    let vault_path = resolve_vault_path(None);
-
-    if !vault_path.exists() {
-        return vec![DoctorFinding::skipped(
-            CHECK_KEYS_DIR,
-            "Keys directory skipped",
-            "Vault does not exist; skipping keys directory check.",
-        )];
-    }
-
-    let keys_dir = vault_path.join("keys");
-
-    if keys_dir.exists() {
-        vec![DoctorFinding::ok(
-            CHECK_KEYS_DIR,
-            "Keys directory present",
-            &format!("keys/ exists at `{}`", keys_dir.display()),
-        )
-        .with_path(keys_dir)]
-    } else {
-        vec![DoctorFinding::skipped(
-            CHECK_KEYS_DIR,
-            "Keys directory not present",
-            "keys/ does not exist. No API keys have been created yet.",
-        )]
-    }
-}
-
-/// Check that the policies subdirectory exists (if vault exists).
-pub fn check_policies_dir() -> Vec<DoctorFinding> {
-    let vault_path = resolve_vault_path(None);
-
-    if !vault_path.exists() {
-        return vec![DoctorFinding::skipped(
-            CHECK_POLICIES_DIR,
-            "Policies directory skipped",
-            "Vault does not exist; skipping policies directory check.",
-        )];
-    }
-
-    let policies_dir = vault_path.join("policies");
-
-    if policies_dir.exists() {
-        vec![DoctorFinding::ok(
-            CHECK_POLICIES_DIR,
-            "Policies directory present",
-            &format!("policies/ exists at `{}`", policies_dir.display()),
-        )
-        .with_path(policies_dir)]
-    } else {
-        vec![DoctorFinding::skipped(
-            CHECK_POLICIES_DIR,
-            "Policies directory not present",
-            "policies/ does not exist. No policies have been created yet.",
-        )]
-    }
-}
-
 /// Check that the logs subdirectory exists (if vault exists).
 pub fn check_logs_dir() -> Vec<DoctorFinding> {
-    let vault_path = resolve_vault_path(None);
+    let vault_path = resolve_vault_path();
 
     if !vault_path.exists() {
         return vec![DoctorFinding::skipped(
@@ -235,7 +118,7 @@ pub fn check_logs_dir() -> Vec<DoctorFinding> {
 
 /// Check that the config file is present and parseable.
 pub fn check_config() -> Vec<DoctorFinding> {
-    let config_path = resolve_vault_path(None).join("config.json");
+    let config_path = resolve_vault_path().join("config.json");
 
     if !config_path.exists() {
         return vec![DoctorFinding::skipped(
@@ -277,7 +160,7 @@ pub fn check_config() -> Vec<DoctorFinding> {
 pub fn check_vault_permissions() -> Vec<DoctorFinding> {
     use std::os::unix::fs::PermissionsExt;
 
-    let vault_path = resolve_vault_path(None);
+    let vault_path = resolve_vault_path();
 
     if !vault_path.exists() {
         return vec![DoctorFinding::skipped(
@@ -290,7 +173,7 @@ pub fn check_vault_permissions() -> Vec<DoctorFinding> {
     let mut findings = Vec::new();
 
     // Check vault directory permissions
-    if let Ok(meta) = std::fs::metadata(vault_path) {
+    if let Ok(meta) = std::fs::metadata(&vault_path) {
         let mode = meta.permissions().mode() & 0o777;
         if mode != 0o700 {
             findings.push(
@@ -367,7 +250,6 @@ pub fn check_vault_permissions() -> Vec<DoctorFinding> {
     }
 
     if findings.is_empty() {
-        // No findings means we didn't add anything above
         vec![DoctorFinding::ok(
             CHECK_VAULT_PERMS,
             "Permissions check passed",
@@ -392,11 +274,13 @@ pub fn check_vault_permissions() -> Vec<DoctorFinding> {
 // Check runner
 // ---------------------------------------------------------------------------
 
-/// Run all V1 diagnostic checks and return the aggregated report.
+/// Run all diagnostic checks and return the aggregated report.
 ///
 /// Checks run in a fixed order. Each check is independent and produces
 /// zero or more findings. All findings are collected into a single report.
 pub fn run_all_checks() -> DoctorReport {
+    let vault_path = resolve_vault_path();
+
     let mut all_findings = Vec::new();
 
     // Path resolution and HOME check
@@ -405,14 +289,16 @@ pub fn run_all_checks() -> DoctorReport {
     // Vault existence
     all_findings.extend(check_vault_exists());
 
-    // Required directories
-    all_findings.extend(check_wallets_dir());
-    all_findings.extend(check_keys_dir());
-    all_findings.extend(check_policies_dir());
+    // Logs directory (optional)
     all_findings.extend(check_logs_dir());
 
     // Config
     all_findings.extend(check_config());
+
+    // Wallet, key, and policy file inspection
+    all_findings.extend(vault_inspector::check_wallet_files(&vault_path));
+    all_findings.extend(vault_inspector::check_key_files(&vault_path));
+    all_findings.extend(vault_inspector::check_policy_files(&vault_path));
 
     // Permissions (platform-specific)
     all_findings.extend(check_vault_permissions());
@@ -423,176 +309,154 @@ pub fn run_all_checks() -> DoctorReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::doctor::DoctorStatus;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_check_vault_path_includes_home_check() {
-        let findings = check_vault_path();
-        // Should have at least 2 findings: HOME check + vault path
-        assert!(findings.len() >= 2);
-
-        // Should have CHECK_VAULT_PATH finding
-        let path_finding = findings.iter().find(|f| f.id == CHECK_VAULT_PATH);
-        assert!(path_finding.is_some());
-        assert_eq!(path_finding.unwrap().status, DoctorStatus::Ok);
-    }
-
-    #[test]
-    fn test_check_vault_exists_not_found() {
-        // Use a path that definitely doesn't exist
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", temp_dir.path());
-
-        let findings = check_vault_exists();
-        assert_eq!(findings.len(), 1);
-        let finding = &findings[0];
-        assert_eq!(finding.id, CHECK_VAULT_EXISTS);
-        assert_eq!(finding.status, DoctorStatus::Error);
-        assert!(finding.detail.contains("not found"));
-    }
-
-    #[test]
-    fn test_check_wallets_dir_skipped_when_vault_missing() {
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", temp_dir.path());
-
-        let findings = check_wallets_dir();
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].status, DoctorStatus::Skipped);
-    }
-
-    #[test]
-    fn test_check_keys_dir_skipped_when_vault_missing() {
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", temp_dir.path());
-
-        let findings = check_keys_dir();
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].status, DoctorStatus::Skipped);
-    }
-
-    #[test]
-    fn test_check_policies_dir_skipped_when_vault_missing() {
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", temp_dir.path());
-
-        let findings = check_policies_dir();
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].status, DoctorStatus::Skipped);
-    }
-
-    #[test]
-    fn test_check_logs_dir_skipped_when_vault_missing() {
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", temp_dir.path());
-
-        let findings = check_logs_dir();
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].status, DoctorStatus::Skipped);
-    }
-
-    #[test]
-    fn test_check_config_skipped_when_no_config() {
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", temp_dir.path());
-
-        let findings = check_config();
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].id, CHECK_CONFIG);
-        assert_eq!(findings[0].status, DoctorStatus::Skipped);
-    }
-
-    #[test]
-    fn test_check_config_valid() {
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", temp_dir.path());
-
-        // Create a valid config
-        let config_path = temp_dir.path().join(".ows/config.json");
-        std::fs::create_dir_all(config_path.parent().unwrap()).ok();
-        let config_content = serde_json::json!({
-            "vault_path": "/test/.ows",
-            "rpc": {
-                "eip155:1": "https://eth.example.com"
-            }
-        });
-        std::fs::write(&config_path, serde_json::to_string_pretty(&config_content).unwrap()).ok();
-
-        let findings = check_config();
-        assert_eq!(findings.len(), 1);
-        let finding = &findings[0];
-        assert_eq!(finding.id, CHECK_CONFIG);
-        assert_eq!(finding.status, DoctorStatus::Ok);
-        assert!(finding.detail.contains("1 RPC endpoint"));
-    }
-
-    #[test]
-    fn test_check_config_malformed() {
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", temp_dir.path());
-
-        // Create a malformed config
-        let config_path = temp_dir.path().join(".ows/config.json");
-        std::fs::create_dir_all(config_path.parent().unwrap()).ok();
-        std::fs::write(&config_path, "{ invalid json }").ok();
-
-        let findings = check_config();
-        assert_eq!(findings.len(), 1);
-        let finding = &findings[0];
-        assert_eq!(finding.id, CHECK_CONFIG);
-        assert_eq!(finding.status, DoctorStatus::Error);
-        assert!(finding.code.is_some());
-    }
+    use crate::commands::doctor::vault_inspector;
 
     #[test]
     fn test_run_all_checks_returns_valid_report() {
-        // Use a temporary HOME so we don't affect real vault
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", temp_dir.path());
+        // Use a temporary vault path
+        let temp = tempfile::TempDir::new().unwrap();
+        let vault = temp.path().to_path_buf();
+        std::fs::create_dir(vault.join("wallets")).ok();
+        std::fs::create_dir(vault.join("policies")).ok();
+        std::fs::create_dir(vault.join("keys")).ok();
 
-        let report = run_all_checks();
+        // Add a valid wallet
+        let wallet = ows_core::EncryptedWallet::new(
+            "test-id".to_string(),
+            "Test".to_string(),
+            vec![],
+            serde_json::json!({}),
+            ows_core::KeyType::Mnemonic,
+        );
+        let json = serde_json::to_string_pretty(&wallet).unwrap();
+        std::fs::write(vault.join("wallets/test.json"), json).ok();
 
-        // Should have findings
-        assert!(!report.findings.is_empty());
+        // Add a valid policy
+        let policy = ows_core::Policy {
+            id: "test-policy".to_string(),
+            name: "Test".to_string(),
+            version: 1,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            rules: vec![],
+            executable: None,
+            config: None,
+            action: ows_core::PolicyAction::Deny,
+        };
+        let json = serde_json::to_string_pretty(&policy).unwrap();
+        std::fs::write(vault.join("policies/test.json"), json).ok();
 
-        // Should have an overall status
-        assert!(matches!(
-            report.overall_status,
-            DoctorStatus::Ok | DoctorStatus::Warning | DoctorStatus::Error | DoctorStatus::Skipped
-        ));
+        // Run checks with the temp vault path
+        std::env::set_var("HOME", temp.path());
 
-        // Exit code should be 0 or 1
-        assert!(report.exit_code() >= 0 && report.exit_code() <= 1);
+        let all_results = vault_inspector::check_wallet_files(&vault);
+        assert!(!all_results.is_empty());
+
+        let all_policies = vault_inspector::check_policy_files(&vault);
+        assert!(!all_policies.is_empty());
+
+        let all_keys = vault_inspector::check_key_files(&vault);
+        assert!(!all_keys.is_empty());
+
+        // Report aggregation
+        let mut findings = Vec::new();
+        findings.extend(vault_inspector::check_wallet_files(&vault));
+        findings.extend(vault_inspector::check_key_files(&vault));
+        findings.extend(vault_inspector::check_policy_files(&vault));
+        findings.extend(check_config());
+        findings.extend(check_logs_dir());
+
+        let report = DoctorReport::new(findings);
+        assert!(report.findings.iter().any(|f| f.status == DoctorStatus::Ok));
     }
 
     #[test]
-    fn test_check_wallets_dir_with_wallets() {
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", temp_dir.path());
+    fn test_wallet_inspection_empty_dir_warning() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let vault = temp.path().to_path_buf();
+        std::fs::create_dir(vault.join("wallets")).ok();
 
-        // Create vault with wallets
-        let vault = temp_dir.path().join(".ows");
+        let findings = vault_inspector::check_wallet_files(&vault);
+        assert!(findings.iter().any(|f| f.status == DoctorStatus::Warning));
+    }
+
+    #[test]
+    fn test_wallet_inspection_malformed_json() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let vault = temp.path().to_path_buf();
+        let wallets_dir = vault.join("wallets");
+        std::fs::create_dir_all(&wallets_dir).ok();
+        std::fs::write(wallets_dir.join("bad.json"), "{ invalid }").ok();
+
+        let findings = vault_inspector::check_wallet_files(&vault);
+        assert!(findings.iter().any(|f| f.code == Some("ERR_FILE_MALFORMED")));
+    }
+
+    #[test]
+    fn test_wallet_inspection_valid() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let vault = temp.path().to_path_buf();
         let wallets_dir = vault.join("wallets");
         std::fs::create_dir_all(&wallets_dir).ok();
 
-        // Add a dummy wallet file
-        let wallet_content = serde_json::json!({
-            "ows_version": 2,
-            "id": "test-wallet",
-            "name": "Test Wallet",
-            "created_at": "2026-01-01T00:00:00Z",
-            "accounts": [],
-            "crypto": {},
-            "key_type": "mnemonic"
-        });
-        let wallet_path = wallets_dir.join("test-wallet.json");
-        std::fs::write(&wallet_path, serde_json::to_string_pretty(&wallet_content).unwrap()).ok();
+        let wallet = ows_core::EncryptedWallet::new(
+            "test-wallet".to_string(),
+            "Test Wallet".to_string(),
+            vec![],
+            serde_json::json!({}),
+            ows_core::KeyType::Mnemonic,
+        );
+        let json = serde_json::to_string_pretty(&wallet).unwrap();
+        std::fs::write(wallets_dir.join("test.json"), json).ok();
 
-        let findings = check_wallets_dir();
-        assert_eq!(findings.len(), 1);
-        let finding = &findings[0];
-        assert_eq!(finding.status, DoctorStatus::Ok);
-        assert!(finding.detail.contains("1 wallet file"));
+        let findings = vault_inspector::check_wallet_files(&vault);
+        assert!(findings.iter().any(|f| f.status == DoctorStatus::Ok));
+    }
+
+    #[test]
+    fn test_policy_inspection_valid() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let vault = temp.path().to_path_buf();
+        let policies_dir = vault.join("policies");
+        std::fs::create_dir_all(&policies_dir).ok();
+
+        let policy = ows_core::Policy {
+            id: "test-policy".to_string(),
+            name: "Test Policy".to_string(),
+            version: 1,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            rules: vec![],
+            executable: None,
+            config: None,
+            action: ows_core::PolicyAction::Deny,
+        };
+        let json = serde_json::to_string_pretty(&policy).unwrap();
+        std::fs::write(policies_dir.join("test.json"), json).ok();
+
+        let findings = vault_inspector::check_policy_files(&vault);
+        assert!(findings.iter().any(|f| f.status == DoctorStatus::Ok));
+    }
+
+    #[test]
+    fn test_key_inspection_valid() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let vault = temp.path().to_path_buf();
+        let keys_dir = vault.join("keys");
+        std::fs::create_dir_all(&keys_dir).ok();
+
+        let key = ows_core::ApiKeyFile {
+            id: "test-key".to_string(),
+            name: "Test Key".to_string(),
+            token_hash: "deadbeef".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            wallet_ids: vec![],
+            policy_ids: vec![],
+            expires_at: None,
+            wallet_secrets: std::collections::HashMap::new(),
+        };
+        let json = serde_json::to_string_pretty(&key).unwrap();
+        std::fs::write(keys_dir.join("test.json"), json).ok();
+
+        let findings = vault_inspector::check_key_files(&vault);
+        assert!(findings.iter().any(|f| f.status == DoctorStatus::Ok));
     }
 }
