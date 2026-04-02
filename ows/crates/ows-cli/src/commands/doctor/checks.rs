@@ -52,7 +52,7 @@ pub fn check_vault_path() -> Vec<DoctorFinding> {
             OWS_DOCTOR_ENV_HOME_NOT_SET,
             "HOME environment variable is not set",
             "Vault path resolution may be unreliable without HOME. Set HOME to your user directory.",
-            "Set the HOME environment variable (e.g. HOME=~/.ows in your shell profile).",
+            "Set HOME to your user home directory (e.g. HOME=/home/alice). OWS derives the vault path as $HOME/.ows.",
         ));
     }
 
@@ -477,5 +477,30 @@ mod tests {
 
         let findings = vault_inspector::check_key_files(&vault);
         assert!(findings.iter().any(|f| f.status == DoctorStatus::Ok));
+    }
+
+    #[test]
+    fn test_home_not_set_remediation_text() {
+        // Regression: HOME not-set remediation must not suggest HOME=~/.ows
+        // (that would nest the vault path as $HOME/.ows/.ows)
+        std::env::remove_var("HOME");
+        let findings = check_vault_path();
+        let home_error = findings
+            .iter()
+            .find(|f| f.code == Some(OWS_DOCTOR_ENV_HOME_NOT_SET))
+            .expect("HOME not-set must produce a finding");
+
+        assert!(
+            !home_error.suggestion.as_ref().unwrap().contains("~/.ows"),
+            "HOME remediation must not suggest HOME=~/.ows"
+        );
+        assert!(
+            home_error
+                .suggestion
+                .as_ref()
+                .unwrap()
+                .contains("$HOME/.ows"),
+            "HOME remediation must explain vault is derived as $HOME/.ows"
+        );
     }
 }
