@@ -70,6 +70,11 @@ enum Commands {
         #[arg(long)]
         purge: bool,
     },
+    /// Social recovery and dead man's switch for wallets
+    Guardian {
+        #[command(subcommand)]
+        subcommand: GuardianCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -341,6 +346,109 @@ enum ConfigCommands {
     Show,
 }
 
+#[derive(Subcommand)]
+enum GuardianCommands {
+    /// Set up guardian recovery for a wallet
+    Setup {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+        /// Minimum shards needed to recover (e.g. 2 for 2-of-3)
+        #[arg(long)]
+        threshold: u8,
+        /// JSON file with guardian definitions
+        #[arg(long)]
+        guardians_file: String,
+        /// Hours before recovery can complete (default 24)
+        #[arg(long, default_value = "24")]
+        time_lock_hours: u64,
+    },
+    /// Show guardian setup status for a wallet
+    Status {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+    },
+    /// Recovery operations
+    Recover {
+        #[command(subcommand)]
+        subcommand: RecoverCommands,
+    },
+    /// Record a heartbeat (proves owner is alive)
+    Heartbeat {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+    },
+    /// Configure dead man's switch
+    DeadSwitch {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+        /// Days of inactivity before switch triggers
+        #[arg(long)]
+        inactivity_days: u64,
+        /// JSON file with beneficiary definitions
+        #[arg(long)]
+        beneficiaries_file: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum RecoverCommands {
+    /// Initiate wallet recovery
+    Init {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+        /// Your guardian ID
+        #[arg(long)]
+        guardian_id: String,
+        /// Time lock hours (default 24)
+        #[arg(long, default_value = "24")]
+        time_lock_hours: u64,
+    },
+    /// Submit a recovery shard
+    Submit {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+        /// Your guardian ID
+        #[arg(long)]
+        guardian_id: String,
+    },
+    /// Complete recovery (after time lock + threshold met)
+    Complete {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+        /// Name for the recovered wallet
+        #[arg(long)]
+        new_name: String,
+    },
+    /// Cancel an active recovery
+    Cancel {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+    },
+    /// Emergency freeze (guardian with freeze permission)
+    Freeze {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+        /// Your guardian ID
+        #[arg(long)]
+        guardian_id: String,
+    },
+    /// Check recovery status
+    Status {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+    },
+}
+
 #[derive(Debug, thiserror::Error)]
 enum CliError {
     #[error("{0}")]
@@ -512,5 +620,40 @@ fn run(cli: Cli) -> Result<(), CliError> {
         },
         Commands::Update { force } => commands::update::run(force),
         Commands::Uninstall { purge } => commands::uninstall::run(purge),
+        Commands::Guardian { subcommand } => match subcommand {
+            GuardianCommands::Setup {
+                wallet,
+                threshold,
+                guardians_file,
+                time_lock_hours,
+            } => commands::guardian::setup(&wallet, threshold, &guardians_file, time_lock_hours),
+            GuardianCommands::Status { wallet } => commands::guardian::status(&wallet),
+            GuardianCommands::Recover { subcommand } => match subcommand {
+                RecoverCommands::Init {
+                    wallet,
+                    guardian_id,
+                    time_lock_hours,
+                } => commands::guardian::recover_init(&wallet, &guardian_id, time_lock_hours),
+                RecoverCommands::Submit {
+                    wallet,
+                    guardian_id,
+                } => commands::guardian::recover_submit(&wallet, &guardian_id),
+                RecoverCommands::Complete { wallet, new_name } => {
+                    commands::guardian::recover_complete(&wallet, &new_name)
+                }
+                RecoverCommands::Cancel { wallet } => commands::guardian::recover_cancel(&wallet),
+                RecoverCommands::Freeze {
+                    wallet,
+                    guardian_id,
+                } => commands::guardian::recover_freeze(&wallet, &guardian_id),
+                RecoverCommands::Status { wallet } => commands::guardian::recover_status(&wallet),
+            },
+            GuardianCommands::Heartbeat { wallet } => commands::guardian::heartbeat(&wallet),
+            GuardianCommands::DeadSwitch {
+                wallet,
+                inactivity_days,
+                beneficiaries_file,
+            } => commands::guardian::dead_switch(&wallet, inactivity_days, &beneficiaries_file),
+        },
     }
 }

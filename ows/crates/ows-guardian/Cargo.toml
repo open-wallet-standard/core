@@ -1,0 +1,29 @@
+[package]
+name = "ows-guardian"
+version = "1.1.2"
+edition = "2021"
+license = "MIT"
+description = "Social recovery and dead man's switch for OWS wallets"
+repository = "https://github.com/open-wallet-standard/core"
+
+[features]
+default = []
+fast-kdf = ["ows-signer/fast-kdf"]
+
+[dependencies]
+ows-core = { path = "../ows-core", version = "=1.1.2" }
+ows-signer = { path = "../ows-signer", version = "=1.1.2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+hex = "0.4"
+zeroize = "1"
+sha2 = "0.10"
+rand = "0.8"
+sharks = "0.5"
+
+[dev-dependencies]
+tempfile = "3"
+ows-signer = { path = "../ows-signer", version = "=1.1.2", features = ["fast-kdf"] }
