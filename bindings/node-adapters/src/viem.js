@@ -22,7 +22,13 @@ function owsToViemAccount(walletNameOrId, options = {}) {
       return result.signature.startsWith("0x") ? result.signature : `0x${result.signature}`;
     },
     async signTransaction(transaction) {
-      const txHex = typeof transaction === "string" ? transaction : JSON.stringify(transaction);
+      let txHex;
+      if (typeof transaction === "string") {
+        txHex = transaction.startsWith("0x") ? transaction.slice(2) : transaction;
+      } else {
+        const { serializeTransaction } = require("viem");
+        txHex = serializeTransaction(transaction).slice(2);
+      }
       const result = signTransaction(walletNameOrId, chain, txHex, options.passphrase, options.index, options.vaultPath);
       return result.signature.startsWith("0x") ? result.signature : `0x${result.signature}`;
     },

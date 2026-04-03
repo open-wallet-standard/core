@@ -5,9 +5,9 @@
   "main": "src/index.js",
   "types": "src/index.d.ts",
   "exports": {
-    ".": { "require": "./src/index.js", "types": "./src/index.d.ts" },
-    "./viem": { "require": "./src/viem.js", "types": "./src/viem.d.ts" },
-    "./solana": { "require": "./src/solana.js", "types": "./src/solana.d.ts" }
+    ".": { "types": "./src/index.d.ts", "default": "./src/index.js" },
+    "./viem": { "types": "./src/viem.d.ts", "default": "./src/viem.js" },
+    "./solana": { "types": "./src/solana.d.ts", "default": "./src/solana.js" }
   },
   "scripts": {
     "test": "node --test __test__/viem.spec.mjs __test__/solana.spec.mjs",
