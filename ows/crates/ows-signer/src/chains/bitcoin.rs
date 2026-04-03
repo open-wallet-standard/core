@@ -1,13 +1,9 @@
 use crate::curve::Curve;
 use crate::traits::{ChainSigner, SignOutput, SignerError};
-use bitcoin::psbt::Psbt;
-use bitcoin::sighash::{EcdsaSighashType, SighashCache};
-use bitcoin::{Network, PrivateKey, PublicKey, ScriptBuf};
 use k256::ecdsa::SigningKey;
 use ows_core::ChainType;
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
-use std::str::FromStr;
 
 /// Bitcoin chain signer (BIP-84 native segwit / bech32).
 pub struct BitcoinSigner {
@@ -40,71 +36,6 @@ impl BitcoinSigner {
         let sha256 = Sha256::digest(data);
         let ripemd = Ripemd160::digest(sha256);
         ripemd.to_vec()
-    }
-
-    fn bitcoin_private_key(private_key: &[u8]) -> Result<PrivateKey, SignerError> {
-        let signing_key = Self::signing_key(private_key)?;
-        let secret_key = bitcoin::secp256k1::SecretKey::from_slice(&signing_key.to_bytes())
-            .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))?;
-        Ok(PrivateKey::new(secret_key, Network::Bitcoin))
-    }
-
-    fn public_keys(private_key: &[u8]) -> Result<(PrivateKey, PublicKey), SignerError> {
-        let private_key = Self::bitcoin_private_key(private_key)?;
-        let secp = bitcoin::secp256k1::Secp256k1::new();
-        let public_key = private_key.public_key(&secp);
-        Ok((private_key, public_key))
-    }
-
-    fn p2wpkh_script_pubkey(public_key: &PublicKey) -> Result<ScriptBuf, SignerError> {
-        let wpkh = public_key.wpubkey_hash().map_err(|_| {
-            SignerError::AddressDerivationFailed("bitcoin public key must be compressed".into())
-        })?;
-        Ok(ScriptBuf::new_p2wpkh(&wpkh))
-    }
-
-    fn previous_output(psbt: &Psbt, index: usize) -> Result<bitcoin::TxOut, SignerError> {
-        let input = psbt.inputs.get(index).ok_or_else(|| {
-            SignerError::InvalidTransaction(format!("missing PSBT input {index}"))
-        })?;
-
-        if let Some(witness_utxo) = &input.witness_utxo {
-            return Ok(witness_utxo.clone());
-        }
-
-        if let Some(non_witness_utxo) = &input.non_witness_utxo {
-            let prevout = psbt
-                .unsigned_tx
-                .input
-                .get(index)
-                .ok_or_else(|| {
-                    SignerError::InvalidTransaction(format!(
-                        "missing unsigned transaction input {index}"
-                    ))
-                })?
-                .previous_output;
-
-            if non_witness_utxo.compute_txid() != prevout.txid {
-                return Err(SignerError::InvalidTransaction(format!(
-                    "non_witness_utxo txid mismatch for input {index}"
-                )));
-            }
-
-            return non_witness_utxo
-                .output
-                .get(prevout.vout as usize)
-                .cloned()
-                .ok_or_else(|| {
-                    SignerError::InvalidTransaction(format!(
-                        "missing prevout {} for input {index}",
-                        prevout.vout
-                    ))
-                });
-        }
-
-        Err(SignerError::InvalidTransaction(format!(
-            "PSBT input {index} is missing witness_utxo/non_witness_utxo"
-        )))
     }
 }
 
@@ -205,64 +136,6 @@ impl ChainSigner for BitcoinSigner {
 
     fn default_derivation_path(&self, index: u32) -> String {
         format!("m/84'/0'/0'/0/{}", index)
-    }
-
-    fn sign_psbt(&self, private_key: &[u8], psbt_bytes: &[u8]) -> Result<Vec<u8>, SignerError> {
-        use bitcoin::base64::Engine;
-
-        let psbt_base64 = bitcoin::base64::engine::general_purpose::STANDARD.encode(psbt_bytes);
-        let mut psbt = Psbt::from_str(&psbt_base64)
-            .map_err(|e| SignerError::InvalidTransaction(format!("invalid PSBT: {e}")))?;
-
-        let (private_key, public_key) = Self::public_keys(private_key)?;
-        let expected_script = Self::p2wpkh_script_pubkey(&public_key)?;
-        let secp = bitcoin::secp256k1::Secp256k1::new();
-
-        for index in 0..psbt.inputs.len() {
-            let prevout = Self::previous_output(&psbt, index)?;
-            if prevout.script_pubkey != expected_script {
-                continue;
-            }
-
-            let sighash_type = psbt.inputs[index]
-                .sighash_type
-                .map(|ty: bitcoin::psbt::PsbtSighashType| {
-                    ty.ecdsa_hash_ty().map_err(|e| {
-                        SignerError::InvalidTransaction(format!(
-                            "unsupported Bitcoin sighash type for input {index}: {e}"
-                        ))
-                    })
-                })
-                .transpose()?
-                .unwrap_or(EcdsaSighashType::All);
-
-            let sighash = SighashCache::new(&psbt.unsigned_tx)
-                .p2wpkh_signature_hash(index, &prevout.script_pubkey, prevout.value, sighash_type)
-                .map_err(|e| {
-                    SignerError::SigningFailed(format!(
-                        "failed to compute Bitcoin sighash for input {index}: {e}"
-                    ))
-                })?;
-
-            let msg =
-                bitcoin::secp256k1::Message::from_digest_slice(sighash.as_ref()).map_err(|e| {
-                    SignerError::SigningFailed(format!(
-                        "invalid Bitcoin sighash digest for input {index}: {e}"
-                    ))
-                })?;
-
-            let signature = secp.sign_ecdsa(&msg, &private_key.inner);
-
-            psbt.inputs[index].partial_sigs.insert(
-                public_key,
-                bitcoin::ecdsa::Signature {
-                    signature,
-                    sighash_type,
-                },
-            );
-        }
-
-        Ok(psbt.serialize())
     }
 }
 
@@ -410,21 +283,5 @@ mod tests {
         verifying_key
             .verify_prehash(&expected_hash, &sig)
             .expect("signature should verify for short messages");
-    }
-
-    #[test]
-    fn test_sign_psbt_rejects_non_bitcoin_chain() {
-        use crate::signer_for_chain;
-
-        let evm_signer = signer_for_chain(ows_core::ChainType::Evm);
-        let privkey =
-            hex::decode("4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318")
-                .unwrap();
-        let psbt_bytes = b"cHNidP8BAJoCAAAAAljaZU4I";
-
-        let result = evm_signer.sign_psbt(&privkey, psbt_bytes);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("not supported"));
     }
 }
