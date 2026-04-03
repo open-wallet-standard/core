@@ -73,6 +73,15 @@ impl Config {
             "xrpl:devnet".into(),
             "https://s.devnet.rippletest.net:51234".into(),
         );
+        // Stellar: prefer Soroban RPC for new projects; Horizon as legacy fallback
+        rpc.insert(
+            "stellar:pubnet".into(),
+            "https://horizon.stellar.org".into(),
+        );
+        rpc.insert(
+            "stellar:testnet".into(),
+            "https://horizon-testnet.stellar.org".into(),
+        );
         rpc
     }
 }
@@ -252,8 +261,8 @@ mod tests {
     #[test]
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
-        // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 18);
+        // Should have all default RPCs (20 after Stellar addition)
+        assert_eq!(config.rpc.len(), 20);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
     }
 

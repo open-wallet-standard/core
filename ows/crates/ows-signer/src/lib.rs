@@ -129,6 +129,23 @@ mod integration_tests {
     }
 
     #[test]
+    fn test_full_pipeline_stellar() {
+        let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
+        let address = derive_address_for_chain(&mnemonic, ChainType::Stellar);
+        assert!(
+            address.starts_with('G'),
+            "Stellar address must start with 'G', got: {}",
+            address
+        );
+        assert_eq!(
+            address.len(),
+            56,
+            "Stellar StrKey address must be 56 chars, got: {}",
+            address.len()
+        );
+    }
+
+    #[test]
     fn test_full_pipeline_filecoin() {
         let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
         let address = derive_address_for_chain(&mnemonic, ChainType::Filecoin);
@@ -182,6 +199,7 @@ mod integration_tests {
         let spark_addr = derive_address_for_chain(&mnemonic, ChainType::Spark);
         let fil_addr = derive_address_for_chain(&mnemonic, ChainType::Filecoin);
         let xrpl_addr = derive_address_for_chain(&mnemonic, ChainType::Xrpl);
+        let stellar_addr = derive_address_for_chain(&mnemonic, ChainType::Stellar);
 
         // All addresses should be different
         let addrs = [
@@ -194,6 +212,7 @@ mod integration_tests {
             &spark_addr,
             &fil_addr,
             &xrpl_addr,
+            &stellar_addr,
         ];
         for i in 0..addrs.len() {
             for j in (i + 1)..addrs.len() {
@@ -239,7 +258,7 @@ mod integration_tests {
     fn test_sign_roundtrip_ed25519_chains() {
         let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
 
-        for chain in [ChainType::Solana, ChainType::Ton] {
+        for chain in [ChainType::Solana, ChainType::Ton, ChainType::Stellar] {
             let signer = signer_for_chain(chain);
             let path = signer.default_derivation_path(0);
             let key =
@@ -264,6 +283,7 @@ mod integration_tests {
             ChainType::Spark,
             ChainType::Filecoin,
             ChainType::Xrpl,
+            ChainType::Stellar,
         ] {
             let signer = signer_for_chain(chain);
             assert_eq!(signer.chain_type(), chain);

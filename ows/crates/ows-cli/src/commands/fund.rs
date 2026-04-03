@@ -8,6 +8,7 @@ fn find_account_for_chain<'a>(
 ) -> Result<&'a AccountInfo, CliError> {
     let chain_prefix = match chain {
         "solana" => "solana:",
+        "stellar" | "stellar-testnet" => "stellar:",
         _ => "eip155:",
     };
 
@@ -33,6 +34,26 @@ pub fn run(wallet_name: &str, chain: Option<&str>, token: Option<&str>) -> Resul
 
     eprintln!("Creating deposit for wallet \"{wallet_name}\" ({address})");
     eprintln!("Target: {token_name} on {chain_name}");
+
+    if chain_name == "stellar-testnet" {
+        eprintln!("\nfunding via Friendbot is available immediately:");
+        println!("https://friendbot.stellar.org/?addr={address}");
+        
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open")
+                .arg(&format!("https://friendbot.stellar.org/?addr={address}"))
+                .spawn();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("xdg-open")
+                .arg(&format!("https://friendbot.stellar.org/?addr={address}"))
+                .spawn();
+        }
+        
+        return Ok(());
+    }
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|e| CliError::InvalidArgs(format!("tokio: {e}")))?;
@@ -109,4 +130,47 @@ pub fn balance(wallet_name: &str, chain: Option<&str>) -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ows_lib::types::AccountInfo;
+
+    fn mock_account(chain_id: &str) -> AccountInfo {
+        AccountInfo {
+            chain_id: chain_id.to_string(),
+            address: format!("addr_for_{chain_id}"),
+            derivation_path: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_find_account_for_chain() {
+        let accounts = vec![
+            mock_account("eip155:1"),
+            mock_account("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"),
+            mock_account("stellar:pubnet"),
+        ];
+
+        // Should find Solana
+        let acct = find_account_for_chain(&accounts, "solana").unwrap();
+        assert_eq!(acct.chain_id, "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp");
+
+        // Should find Stellar with 'stellar'
+        let acct = find_account_for_chain(&accounts, "stellar").unwrap();
+        assert_eq!(acct.chain_id, "stellar:pubnet");
+
+        // Should find Stellar with 'stellar-testnet'
+        let acct = find_account_for_chain(&accounts, "stellar-testnet").unwrap();
+        assert_eq!(acct.chain_id, "stellar:pubnet");
+
+        // Should fallback to EVM for unknown / base
+        let acct = find_account_for_chain(&accounts, "base").unwrap();
+        assert_eq!(acct.chain_id, "eip155:1");
+
+        // Should error if chain prefix missing
+        let accounts_no_stellar = vec![mock_account("eip155:1")];
+        assert!(find_account_for_chain(&accounts_no_stellar, "stellar").is_err());
+    }
 }
