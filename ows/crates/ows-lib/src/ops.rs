@@ -698,6 +698,7 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         )),
         ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
         ChainType::Xrpl => broadcast_xrpl(rpc_url, signed_bytes),
+        ChainType::Stellar => broadcast_stellar(rpc_url, signed_bytes),
     }
 }
 
@@ -727,6 +728,35 @@ fn broadcast_xrpl(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibEr
         .ok_or_else(|| {
             OwsLibError::BroadcastFailed(format!("no hash in XRPL response: {resp_str}"))
         })
+}
+
+fn broadcast_stellar(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
+    use base64::Engine;
+    let b64_tx = base64::engine::general_purpose::STANDARD.encode(signed_bytes);
+    let url = format!("{}/transactions", rpc_url.trim_end_matches('/'));
+
+    let output = std::process::Command::new("curl")
+        .args([
+            "-fsSL",
+            "-X",
+            "POST",
+            "--data-urlencode",
+            &format!("tx={}", b64_tx),
+            &url,
+        ])
+        .output()
+        .map_err(|e| OwsLibError::BroadcastFailed(format!("failed to run curl: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(OwsLibError::BroadcastFailed(format!(
+            "broadcast failed: {stderr} - {stdout}"
+        )));
+    }
+
+    let resp_str = String::from_utf8_lossy(&output.stdout).to_string();
+    extract_json_field(&resp_str, "hash")
 }
 
 fn broadcast_evm(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
@@ -1045,7 +1075,7 @@ mod tests {
         create_wallet("multi-sign", None, None, Some(vault)).unwrap();
 
         let chains = [
-            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui",
+            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "stellar",
         ];
         for chain in &chains {
             let result = sign_message(
@@ -1086,6 +1116,7 @@ mod tests {
 
         let chains = [
             "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "xrpl",
+            "stellar",
         ];
         for chain in &chains {
             let tx = if *chain == "solana" {

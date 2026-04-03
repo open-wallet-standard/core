@@ -79,6 +79,13 @@ const MOONPAY_CHAINS: &[(&str, MoonPayChain)] = &[
             moonpay_name: "solana",
         },
     ),
+    (
+        "stellar",
+        MoonPayChain {
+            display_name: "Stellar",
+            moonpay_name: "stellar",
+        },
+    ),
 ];
 
 const DEFAULT_MOONPAY_CHAIN: &MoonPayChain = &MoonPayChain {

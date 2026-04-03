@@ -74,6 +74,7 @@ print(sig["signature"])
 | XRPL | secp256k1 | Base58Check (`r...`) | `m/44'/144'/0'/0/0` |
 | Spark (Bitcoin L2) | secp256k1 | spark: prefixed | `m/84'/0'/0'/0/0` |
 | Filecoin | secp256k1 | f1 base32 | `m/44'/461'/0'/0/0` |
+| Stellar | Ed25519 | StrKey Base32 (`G...`) | `m/44'/148'/{index}'` |
 
 ## Architecture
 
