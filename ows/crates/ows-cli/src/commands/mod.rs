@@ -2,6 +2,7 @@ pub mod config;
 pub mod derive;
 pub mod fund;
 pub mod generate;
+pub mod guardian;
 pub mod info;
 pub mod key;
 pub mod pay;

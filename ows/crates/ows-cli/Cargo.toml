@@ -26,6 +26,7 @@ rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 zeroize = "1"
 ows-pay = { path = "../ows-pay", version = "=1.1.2" }
+ows-guardian = { path = "../ows-guardian", version = "=1.1.2" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [dev-dependencies]
