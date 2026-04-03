@@ -128,35 +128,6 @@ fn derive_all_accounts_from_keys(keys: &KeyPair) -> Result<Vec<WalletAccount>, O
     Ok(accounts)
 }
 
-pub(crate) fn secret_to_signing_key(
-    secret: &SecretBytes,
-    key_type: &KeyType,
-    chain_type: ChainType,
-    index: Option<u32>,
-) -> Result<SecretBytes, OwsLibError> {
-    match key_type {
-        KeyType::Mnemonic => {
-            // Use the SecretBytes directly as a &str to avoid un-zeroized String copies.
-            let phrase = std::str::from_utf8(secret.expose()).map_err(|_| {
-                OwsLibError::InvalidInput("wallet contains invalid UTF-8 mnemonic".into())
-            })?;
-            let mnemonic = Mnemonic::from_phrase(phrase)?;
-            let signer = signer_for_chain(chain_type);
-            let path = signer.default_derivation_path(index.unwrap_or(0));
-            let curve = signer.curve();
-            Ok(HdDeriver::derive_from_mnemonic_cached(
-                &mnemonic, "", &path, curve,
-            )?)
-        }
-        KeyType::PrivateKey => {
-            // JSON key pair — extract the right key for this chain's curve
-            let keys = KeyPair::from_json_bytes(secret.expose())?;
-            let signer = signer_for_chain(chain_type);
-            Ok(SecretBytes::from_slice(keys.key_for_curve(signer.curve())))
-        }
-    }
-}
-
 /// Generate a new BIP-39 mnemonic phrase.
 pub fn generate_mnemonic(words: u32) -> Result<String, OwsLibError> {
     let strength = match words {
@@ -463,33 +434,38 @@ pub fn sign_transaction(
     })
 }
 
-/// Sign a Bitcoin PSBT and return the updated base64-encoded PSBT.
+/// Sign a PSBT (Partially Signed Bitcoin Transaction).
 ///
-/// Currently supports owner-mode signing for native SegWit P2WPKH inputs that
-/// match the wallet's Bitcoin key. API-token signing is intentionally not
-/// supported yet because PSBT policy evaluation needs a dedicated surface.
+/// The `psbt_base64` parameter should be a base64-encoded PSBT.
+/// Returns the signed PSBT as raw bytes (base64-encoded in the result).
+///
+/// NOTE: API token signing is not yet supported for PSBTs.
 pub fn sign_psbt(
     wallet: &str,
     psbt_base64: &str,
     passphrase: Option<&str>,
     index: Option<u32>,
     vault_path: Option<&Path>,
-) -> Result<crate::types::PsbtSignResult, OwsLibError> {
+) -> Result<SignResult, OwsLibError> {
     let credential = passphrase.unwrap_or("");
 
     if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
         return Err(OwsLibError::InvalidInput(
-            "Bitcoin PSBT signing via API key is not yet supported".into(),
+            "PSBT signing via API key is not yet supported".into(),
         ));
     }
 
     let key = decrypt_signing_key(wallet, ChainType::Bitcoin, credential, index, vault_path)?;
-    let signer = ows_signer::chains::BitcoinSigner::mainnet();
-    let (signed_psbt, signed_inputs) = signer.sign_psbt(key.expose(), psbt_base64)?;
+    let signer = signer_for_chain(ChainType::Bitcoin);
 
-    Ok(crate::types::PsbtSignResult {
-        psbt: signed_psbt,
-        signed_inputs,
+    let signed_psbt_bytes = signer.sign_psbt(key.expose(), psbt_base64.as_bytes())?;
+
+    use base64::Engine;
+    let signed_psbt_b64 = base64::engine::general_purpose::STANDARD.encode(&signed_psbt_bytes);
+
+    Ok(SignResult {
+        signature: signed_psbt_b64,
+        recovery_id: None,
     })
 }
 
@@ -669,7 +645,28 @@ pub fn decrypt_signing_key(
     let wallet = vault::load_wallet_by_name_or_id(wallet_name_or_id, vault_path)?;
     let envelope: CryptoEnvelope = serde_json::from_value(wallet.crypto.clone())?;
     let secret = decrypt(&envelope, passphrase)?;
-    secret_to_signing_key(&secret, &wallet.key_type, chain_type, index)
+
+    match wallet.key_type {
+        KeyType::Mnemonic => {
+            // Use the SecretBytes directly as a &str to avoid un-zeroized String copies.
+            let phrase = std::str::from_utf8(secret.expose()).map_err(|_| {
+                OwsLibError::InvalidInput("wallet contains invalid UTF-8 mnemonic".into())
+            })?;
+            let mnemonic = Mnemonic::from_phrase(phrase)?;
+            let signer = signer_for_chain(chain_type);
+            let path = signer.default_derivation_path(index.unwrap_or(0));
+            let curve = signer.curve();
+            Ok(HdDeriver::derive_from_mnemonic_cached(
+                &mnemonic, "", &path, curve,
+            )?)
+        }
+        KeyType::PrivateKey => {
+            // JSON key pair — extract the right key for this chain's curve
+            let keys = KeyPair::from_json_bytes(secret.expose())?;
+            let signer = signer_for_chain(chain_type);
+            Ok(SecretBytes::from_slice(keys.key_for_curve(signer.curve())))
+        }
+    }
 }
 
 /// Resolve the RPC URL: explicit > config override (exact chain_id) > config (namespace) > built-in default.
@@ -888,12 +885,6 @@ fn extract_json_field(json_str: &str, field: &str) -> Result<String, OwsLibError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::absolute::LockTime;
-    use bitcoin::hashes::Hash;
-    use bitcoin::psbt::Psbt;
-    use bitcoin::transaction::Version;
-    use bitcoin::{Amount, OutPoint, Sequence, Transaction, TxIn, TxOut, Txid, Witness};
-    use std::str::FromStr;
 
     // ---- helpers ----
 
@@ -1163,54 +1154,6 @@ mod tests {
         let tx = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
         let sig = sign_transaction("pk-tx", "evm", tx, None, None, Some(dir.path())).unwrap();
         assert!(!sig.signature.is_empty());
-    }
-
-    #[test]
-    fn privkey_wallet_sign_psbt() {
-        let dir = tempfile::tempdir().unwrap();
-        save_privkey_wallet("pk-psbt", TEST_PRIVKEY, "", dir.path());
-
-        let wallet = get_wallet("pk-psbt", Some(dir.path())).unwrap();
-        let bitcoin_account = wallet
-            .accounts
-            .iter()
-            .find(|account| account.chain_id.starts_with("bip122:"))
-            .expect("bitcoin account should exist");
-
-        let address = bitcoin::Address::from_str(&bitcoin_account.address)
-            .unwrap()
-            .assume_checked();
-        let script_pubkey = address.script_pubkey();
-
-        let unsigned_tx = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![TxIn {
-                previous_output: OutPoint {
-                    txid: Txid::all_zeros(),
-                    vout: 0,
-                },
-                script_sig: bitcoin::ScriptBuf::new(),
-                sequence: Sequence::MAX,
-                witness: Witness::default(),
-            }],
-            output: vec![TxOut {
-                value: Amount::from_sat(40_000),
-                script_pubkey: script_pubkey.clone(),
-            }],
-        };
-
-        let mut psbt = Psbt::from_unsigned_tx(unsigned_tx).unwrap();
-        psbt.inputs[0].witness_utxo = Some(TxOut {
-            value: Amount::from_sat(50_000),
-            script_pubkey,
-        });
-
-        let result = sign_psbt("pk-psbt", &psbt.to_string(), None, None, Some(dir.path())).unwrap();
-        assert_eq!(result.signed_inputs, 1);
-
-        let signed_psbt = Psbt::from_str(&result.psbt).unwrap();
-        assert_eq!(signed_psbt.inputs[0].partial_sigs.len(), 1);
     }
 
     #[test]

@@ -79,6 +79,19 @@ pub trait ChainSigner: Send + Sync {
 
     /// Returns the default BIP-44 derivation path template for this chain.
     fn default_derivation_path(&self, index: u32) -> String;
+
+    /// Sign a PSBT (Partially Signed Bitcoin Transaction).
+    ///
+    /// Only supported for Bitcoin (returns an error for other chains).
+    /// The PSBT bytes should be raw binary, not base64-encoded.
+    ///
+    /// Returns the signed PSBT as raw bytes.
+    fn sign_psbt(&self, _private_key: &[u8], _psbt_bytes: &[u8]) -> Result<Vec<u8>, SignerError> {
+        Err(SignerError::InvalidTransaction(format!(
+            "PSBT signing is not supported for {}",
+            self.chain_type()
+        )))
+    }
 }
 
 /// Errors that can occur during signing operations.

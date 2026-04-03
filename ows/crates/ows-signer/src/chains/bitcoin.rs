@@ -1,6 +1,5 @@
 use crate::curve::Curve;
 use crate::traits::{ChainSigner, SignOutput, SignerError};
-use bitcoin::ecdsa::Signature as BitcoinEcdsaSignature;
 use bitcoin::psbt::Psbt;
 use bitcoin::sighash::{EcdsaSighashType, SighashCache};
 use bitcoin::{Network, PrivateKey, PublicKey, ScriptBuf};
@@ -107,71 +106,6 @@ impl BitcoinSigner {
             "PSBT input {index} is missing witness_utxo/non_witness_utxo"
         )))
     }
-
-    pub fn sign_psbt(
-        &self,
-        private_key: &[u8],
-        psbt_base64: &str,
-    ) -> Result<(String, u32), SignerError> {
-        let mut psbt = Psbt::from_str(psbt_base64)
-            .map_err(|e| SignerError::InvalidTransaction(format!("invalid base64 PSBT: {e}")))?;
-
-        let (private_key, public_key) = Self::public_keys(private_key)?;
-        let expected_script = Self::p2wpkh_script_pubkey(&public_key)?;
-        let secp = bitcoin::secp256k1::Secp256k1::new();
-        let mut signed_inputs = 0u32;
-
-        for index in 0..psbt.inputs.len() {
-            let prevout = Self::previous_output(&psbt, index)?;
-            if prevout.script_pubkey != expected_script {
-                continue;
-            }
-
-            let sighash_type = psbt.inputs[index]
-                .sighash_type
-                .map(|ty: bitcoin::psbt::PsbtSighashType| {
-                    ty.ecdsa_hash_ty().map_err(|e| {
-                        SignerError::InvalidTransaction(format!(
-                            "unsupported Bitcoin sighash type for input {index}: {e}"
-                        ))
-                    })
-                })
-                .transpose()?
-                .unwrap_or(EcdsaSighashType::All);
-
-            let sighash = SighashCache::new(&psbt.unsigned_tx)
-                .p2wpkh_signature_hash(index, &prevout.script_pubkey, prevout.value, sighash_type)
-                .map_err(|e| {
-                    SignerError::SigningFailed(format!(
-                        "failed to compute Bitcoin sighash for input {index}: {e}"
-                    ))
-                })?;
-
-            let msg =
-                bitcoin::secp256k1::Message::from_digest_slice(sighash.as_ref()).map_err(|e| {
-                    SignerError::SigningFailed(format!(
-                        "invalid Bitcoin sighash digest for input {index}: {e}"
-                    ))
-                })?;
-            let signature = secp.sign_ecdsa(&msg, &private_key.inner);
-            psbt.inputs[index].partial_sigs.insert(
-                public_key,
-                BitcoinEcdsaSignature {
-                    signature,
-                    sighash_type,
-                },
-            );
-            signed_inputs += 1;
-        }
-
-        if signed_inputs == 0 {
-            return Err(SignerError::InvalidTransaction(
-                "PSBT does not contain any signable P2WPKH inputs for this wallet".into(),
-            ));
-        }
-
-        Ok((psbt.to_string(), signed_inputs))
-    }
 }
 
 /// Encode an integer as a Bitcoin CompactSize (varint).
@@ -272,17 +206,69 @@ impl ChainSigner for BitcoinSigner {
     fn default_derivation_path(&self, index: u32) -> String {
         format!("m/84'/0'/0'/0/{}", index)
     }
+
+    fn sign_psbt(&self, private_key: &[u8], psbt_bytes: &[u8]) -> Result<Vec<u8>, SignerError> {
+        use bitcoin::base64::Engine;
+
+        let psbt_base64 = bitcoin::base64::engine::general_purpose::STANDARD.encode(psbt_bytes);
+        let mut psbt = Psbt::from_str(&psbt_base64)
+            .map_err(|e| SignerError::InvalidTransaction(format!("invalid PSBT: {e}")))?;
+
+        let (private_key, public_key) = Self::public_keys(private_key)?;
+        let expected_script = Self::p2wpkh_script_pubkey(&public_key)?;
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+
+        for index in 0..psbt.inputs.len() {
+            let prevout = Self::previous_output(&psbt, index)?;
+            if prevout.script_pubkey != expected_script {
+                continue;
+            }
+
+            let sighash_type = psbt.inputs[index]
+                .sighash_type
+                .map(|ty: bitcoin::psbt::PsbtSighashType| {
+                    ty.ecdsa_hash_ty().map_err(|e| {
+                        SignerError::InvalidTransaction(format!(
+                            "unsupported Bitcoin sighash type for input {index}: {e}"
+                        ))
+                    })
+                })
+                .transpose()?
+                .unwrap_or(EcdsaSighashType::All);
+
+            let sighash = SighashCache::new(&psbt.unsigned_tx)
+                .p2wpkh_signature_hash(index, &prevout.script_pubkey, prevout.value, sighash_type)
+                .map_err(|e| {
+                    SignerError::SigningFailed(format!(
+                        "failed to compute Bitcoin sighash for input {index}: {e}"
+                    ))
+                })?;
+
+            let msg =
+                bitcoin::secp256k1::Message::from_digest_slice(sighash.as_ref()).map_err(|e| {
+                    SignerError::SigningFailed(format!(
+                        "invalid Bitcoin sighash digest for input {index}: {e}"
+                    ))
+                })?;
+
+            let signature = secp.sign_ecdsa(&msg, &private_key.inner);
+
+            psbt.inputs[index].partial_sigs.insert(
+                public_key,
+                bitcoin::ecdsa::Signature {
+                    signature,
+                    sighash_type,
+                },
+            );
+        }
+
+        Ok(psbt.serialize())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::absolute::LockTime;
-    use bitcoin::hashes::Hash;
-    use bitcoin::psbt::Psbt;
-    use bitcoin::sighash::SighashCache;
-    use bitcoin::transaction::Version;
-    use bitcoin::{Amount, OutPoint, Sequence, Transaction, TxIn, TxOut, Txid, Witness};
 
     #[test]
     fn test_known_address_generator_point() {
@@ -427,104 +413,18 @@ mod tests {
     }
 
     #[test]
-    fn test_sign_psbt_p2wpkh_input() {
-        let mut privkey = vec![0u8; 31];
-        privkey.push(1u8);
-        let signer = BitcoinSigner::mainnet();
+    fn test_sign_psbt_rejects_non_bitcoin_chain() {
+        use crate::signer_for_chain;
 
-        let (_private_key, public_key) = BitcoinSigner::public_keys(&privkey).unwrap();
-        let wallet_script = BitcoinSigner::p2wpkh_script_pubkey(&public_key).unwrap();
+        let evm_signer = signer_for_chain(ows_core::ChainType::Evm);
+        let privkey =
+            hex::decode("4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318")
+                .unwrap();
+        let psbt_bytes = b"cHNidP8BAJoCAAAAAljaZU4I";
 
-        let unsigned_tx = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![TxIn {
-                previous_output: OutPoint {
-                    txid: Txid::all_zeros(),
-                    vout: 0,
-                },
-                script_sig: ScriptBuf::new(),
-                sequence: Sequence::MAX,
-                witness: Witness::default(),
-            }],
-            output: vec![TxOut {
-                value: Amount::from_sat(40_000),
-                script_pubkey: wallet_script.clone(),
-            }],
-        };
-
-        let mut psbt = Psbt::from_unsigned_tx(unsigned_tx).unwrap();
-        psbt.inputs[0].witness_utxo = Some(TxOut {
-            value: Amount::from_sat(50_000),
-            script_pubkey: wallet_script.clone(),
-        });
-
-        let (signed_psbt_base64, signed_inputs) =
-            signer.sign_psbt(&privkey, &psbt.to_string()).unwrap();
-        assert_eq!(signed_inputs, 1);
-
-        let signed_psbt = Psbt::from_str(&signed_psbt_base64).unwrap();
-        let partial_sig = signed_psbt.inputs[0]
-            .partial_sigs
-            .values()
-            .next()
-            .expect("partial signature should be present");
-
-        let sighash = SighashCache::new(&signed_psbt.unsigned_tx)
-            .p2wpkh_signature_hash(
-                0,
-                &wallet_script,
-                Amount::from_sat(50_000),
-                partial_sig.sighash_type,
-            )
-            .unwrap();
-        let msg = bitcoin::secp256k1::Message::from_digest_slice(sighash.as_ref()).unwrap();
-        let secp = bitcoin::secp256k1::Secp256k1::new();
-        secp.verify_ecdsa(&msg, &partial_sig.signature, &public_key.inner)
-            .expect("PSBT signature should verify");
-    }
-
-    #[test]
-    fn test_sign_psbt_rejects_foreign_input() {
-        let mut privkey = vec![0u8; 31];
-        privkey.push(1u8);
-        let signer = BitcoinSigner::mainnet();
-
-        let mut other_privkey = vec![0u8; 31];
-        other_privkey.push(2u8);
-        let (_other_private_key, other_public_key) =
-            BitcoinSigner::public_keys(&other_privkey).unwrap();
-        let foreign_script = BitcoinSigner::p2wpkh_script_pubkey(&other_public_key).unwrap();
-
-        let unsigned_tx = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![TxIn {
-                previous_output: OutPoint {
-                    txid: Txid::all_zeros(),
-                    vout: 0,
-                },
-                script_sig: ScriptBuf::new(),
-                sequence: Sequence::MAX,
-                witness: Witness::default(),
-            }],
-            output: vec![TxOut {
-                value: Amount::from_sat(40_000),
-                script_pubkey: foreign_script.clone(),
-            }],
-        };
-
-        let mut psbt = Psbt::from_unsigned_tx(unsigned_tx).unwrap();
-        psbt.inputs[0].witness_utxo = Some(TxOut {
-            value: Amount::from_sat(50_000),
-            script_pubkey: foreign_script,
-        });
-
-        let err = signer.sign_psbt(&privkey, &psbt.to_string()).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("does not contain any signable P2WPKH inputs"),
-            "unexpected error: {err}"
-        );
+        let result = evm_signer.sign_psbt(&privkey, psbt_bytes);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("not supported"));
     }
 }

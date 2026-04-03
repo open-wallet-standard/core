@@ -1448,7 +1448,7 @@ dependencies = [
 
 [[package]]
 name = "ows-guardian"
-version = "1.1.2"
+version = "1.1.0"
 dependencies = [
  "chrono",
  "hex",
