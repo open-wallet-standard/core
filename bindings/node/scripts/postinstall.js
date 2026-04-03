@@ -37,15 +37,21 @@ const writeln = (msg = "") => process.stderr.write(msg + "\n");
 
 function prompt(question) {
   return new Promise((resolve) => {
+    let resolved = false;
+    const done = (value) => {
+      if (resolved) return;
+      resolved = true;
+      resolve(value);
+    };
     const rl = createInterface({
       input: process.stdin,
       output: process.stderr,
     });
     rl.question(question, (answer) => {
       rl.close();
-      resolve(answer.trim());
+      done(answer.trim());
     });
-    rl.on("close", () => resolve(""));
+    rl.on("close", () => done(""));
   });
 }
 
@@ -127,6 +133,7 @@ function hasNpx() {
 function skillInstalled() {
   const home = process.env.HOME || process.env.USERPROFILE || "";
   const dirs = [
+    join(home, ".claude", "skills", "ows"),
     join(home, ".claude", "skills", "core"),
     join(home, ".claude", "skills", "open-wallet-standard--core"),
   ];
