@@ -15,10 +15,11 @@ pub enum ChainType {
     Filecoin,
     Sui,
     Stacks,
+    Xrpl,
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 9] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 10] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
@@ -28,6 +29,7 @@ pub const ALL_CHAIN_TYPES: [ChainType; 9] = [
     ChainType::Filecoin,
     ChainType::Sui,
     ChainType::Stacks,
+    ChainType::Xrpl,
 ];
 
 /// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
@@ -130,6 +132,21 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_type: ChainType::Stacks,
         chain_id: "stacks:1",
     },
+    Chain {
+        name: "xrpl",
+        chain_type: ChainType::Xrpl,
+        chain_id: "xrpl:mainnet",
+    },
+    Chain {
+        name: "xrpl-testnet",
+        chain_type: ChainType::Xrpl,
+        chain_id: "xrpl:testnet",
+    },
+    Chain {
+        name: "xrpl-devnet",
+        chain_type: ChainType::Xrpl,
+        chain_id: "xrpl:devnet",
+    },
 ];
 
 /// Parse a chain string into a `Chain`. Accepts:
@@ -195,6 +212,7 @@ impl ChainType {
             ChainType::Filecoin => "fil",
             ChainType::Sui => "sui",
             ChainType::Stacks => "stacks",
+            ChainType::Xrpl => "xrpl",
         }
     }
 
@@ -211,6 +229,7 @@ impl ChainType {
             ChainType::Filecoin => 461,
             ChainType::Sui => 784,
             ChainType::Stacks => 5757,
+            ChainType::Xrpl => 144,
         }
     }
 
@@ -227,6 +246,7 @@ impl ChainType {
             "fil" => Some(ChainType::Filecoin),
             "sui" => Some(ChainType::Sui),
             "stacks" => Some(ChainType::Stacks),
+            "xrpl" => Some(ChainType::Xrpl),
             _ => None,
         }
     }
@@ -245,6 +265,7 @@ impl fmt::Display for ChainType {
             ChainType::Filecoin => "filecoin",
             ChainType::Sui => "sui",
             ChainType::Stacks => "stacks",
+            ChainType::Xrpl => "xrpl",
         };
         write!(f, "{}", s)
     }
@@ -265,6 +286,7 @@ impl FromStr for ChainType {
             "filecoin" => Ok(ChainType::Filecoin),
             "sui" => Ok(ChainType::Sui),
             "stacks" => Ok(ChainType::Stacks),
+            "xrpl" => Ok(ChainType::Xrpl),
             _ => Err(format!("unknown chain type: {}", s)),
         }
     }
@@ -296,6 +318,7 @@ mod tests {
             (ChainType::Filecoin, "\"filecoin\""),
             (ChainType::Sui, "\"sui\""),
             (ChainType::Stacks, "\"stacks\""),
+            (ChainType::Xrpl, "\"xrpl\""),
         ] {
             let json = serde_json::to_string(&chain).unwrap();
             assert_eq!(json, expected);
@@ -316,6 +339,7 @@ mod tests {
         assert_eq!(ChainType::Filecoin.namespace(), "fil");
         assert_eq!(ChainType::Sui.namespace(), "sui");
         assert_eq!(ChainType::Stacks.namespace(), "stacks");
+        assert_eq!(ChainType::Xrpl.namespace(), "xrpl");
     }
 
     #[test]
@@ -330,6 +354,7 @@ mod tests {
         assert_eq!(ChainType::Filecoin.default_coin_type(), 461);
         assert_eq!(ChainType::Sui.default_coin_type(), 784);
         assert_eq!(ChainType::Stacks.default_coin_type(), 5757);
+        assert_eq!(ChainType::Xrpl.default_coin_type(), 144);
     }
 
     #[test]
@@ -347,6 +372,7 @@ mod tests {
         assert_eq!(ChainType::from_namespace("fil"), Some(ChainType::Filecoin));
         assert_eq!(ChainType::from_namespace("sui"), Some(ChainType::Sui));
         assert_eq!(ChainType::from_namespace("stacks"), Some(ChainType::Stacks));
+        assert_eq!(ChainType::from_namespace("xrpl"), Some(ChainType::Xrpl));
         assert_eq!(ChainType::from_namespace("unknown"), None);
     }
 
@@ -424,13 +450,33 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_chain_xrpl() {
+        let chain = parse_chain("xrpl").unwrap();
+        assert_eq!(chain.chain_type, ChainType::Xrpl);
+        assert_eq!(chain.chain_id, "xrpl:mainnet");
+
+        let testnet = parse_chain("xrpl-testnet").unwrap();
+        assert_eq!(testnet.chain_type, ChainType::Xrpl);
+        assert_eq!(testnet.chain_id, "xrpl:testnet");
+
+        let devnet = parse_chain("xrpl-devnet").unwrap();
+        assert_eq!(devnet.chain_type, ChainType::Xrpl);
+        assert_eq!(devnet.chain_id, "xrpl:devnet");
+
+        // CAIP-2 IDs also accepted directly
+        let via_caip2 = parse_chain("xrpl:testnet").unwrap();
+        assert_eq!(via_caip2.chain_type, ChainType::Xrpl);
+        assert_eq!(via_caip2.chain_id, "xrpl:testnet");
+    }
+
+    #[test]
     fn test_parse_chain_unknown() {
         assert!(parse_chain("unknown_chain").is_err());
     }
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 9);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 10);
     }
 
     #[test]

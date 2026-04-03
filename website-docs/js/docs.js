@@ -73,7 +73,7 @@ function buildSidebar(currentSlug) {
   // Brand
   html += '<div class="docs-sidebar-brand">';
   html += '<a href="./">OWS</a>';
-  html += '<span class="version">v1.1</span>';
+  html += '<span class="version">v1.2</span>';
   html += '</div>';
 
   // Nav

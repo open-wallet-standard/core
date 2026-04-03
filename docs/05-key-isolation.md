@@ -87,7 +87,7 @@ Agent → sign_transaction(wallet, chain, tx, "ows_key_...")
           │
           └─► ows-lib (same process)
                 ├── token lookup + policy evaluation
-                ├── HKDF decrypt mnemonic (mlock'd, zeroized on drop)
+                ├── HKDF decrypt wallet secret (mlock'd, zeroized on drop)
                 ├── sign
                 └── return signature
 ```
@@ -103,14 +103,14 @@ Agent → sign_transaction(wallet, chain, tx, "ows_key_...")
                 ├── token lookup + policy evaluation
                 └── fork/exec ows-enclave
                       ├── receive (token, wallet_id, tx) over stdin
-                      ├── HKDF decrypt mnemonic
+                      ├── HKDF decrypt wallet secret
                       ├── sign
                       ├── zeroize
                       ├── write signature to stdout
                       └── exit
 ```
 
-The decrypt→sign→wipe path moves to a child process. The parent (agent's process) never has the mnemonic in its address space. The child is stateless — spawned per request, no daemon, no unlock step. If it crashes, the next request spawns a new one.
+The decrypt→sign→wipe path moves to a child process. The parent (agent's process) never has the decrypted secret in its address space. The child is stateless — spawned per request, no daemon, no unlock step. If it crashes, the next request spawns a new one.
 
 ## References
 

@@ -128,6 +128,35 @@ fn derive_all_accounts_from_keys(keys: &KeyPair) -> Result<Vec<WalletAccount>, O
     Ok(accounts)
 }
 
+pub(crate) fn secret_to_signing_key(
+    secret: &SecretBytes,
+    key_type: &KeyType,
+    chain_type: ChainType,
+    index: Option<u32>,
+) -> Result<SecretBytes, OwsLibError> {
+    match key_type {
+        KeyType::Mnemonic => {
+            // Use the SecretBytes directly as a &str to avoid un-zeroized String copies.
+            let phrase = std::str::from_utf8(secret.expose()).map_err(|_| {
+                OwsLibError::InvalidInput("wallet contains invalid UTF-8 mnemonic".into())
+            })?;
+            let mnemonic = Mnemonic::from_phrase(phrase)?;
+            let signer = signer_for_chain(chain_type);
+            let path = signer.default_derivation_path(index.unwrap_or(0));
+            let curve = signer.curve();
+            Ok(HdDeriver::derive_from_mnemonic_cached(
+                &mnemonic, "", &path, curve,
+            )?)
+        }
+        KeyType::PrivateKey => {
+            // JSON key pair — extract the right key for this chain's curve
+            let keys = KeyPair::from_json_bytes(secret.expose())?;
+            let signer = signer_for_chain(chain_type);
+            Ok(SecretBytes::from_slice(keys.key_for_curve(signer.curve())))
+        }
+    }
+}
+
 /// Generate a new BIP-39 mnemonic phrase.
 pub fn generate_mnemonic(words: u32) -> Result<String, OwsLibError> {
     let strength = match words {
@@ -610,28 +639,7 @@ pub fn decrypt_signing_key(
     let wallet = vault::load_wallet_by_name_or_id(wallet_name_or_id, vault_path)?;
     let envelope: CryptoEnvelope = serde_json::from_value(wallet.crypto.clone())?;
     let secret = decrypt(&envelope, passphrase)?;
-
-    match wallet.key_type {
-        KeyType::Mnemonic => {
-            // Use the SecretBytes directly as a &str to avoid un-zeroized String copies.
-            let phrase = std::str::from_utf8(secret.expose()).map_err(|_| {
-                OwsLibError::InvalidInput("wallet contains invalid UTF-8 mnemonic".into())
-            })?;
-            let mnemonic = Mnemonic::from_phrase(phrase)?;
-            let signer = signer_for_chain(chain_type);
-            let path = signer.default_derivation_path(index.unwrap_or(0));
-            let curve = signer.curve();
-            Ok(HdDeriver::derive_from_mnemonic_cached(
-                &mnemonic, "", &path, curve,
-            )?)
-        }
-        KeyType::PrivateKey => {
-            // JSON key pair — extract the right key for this chain's curve
-            let keys = KeyPair::from_json_bytes(secret.expose())?;
-            let signer = signer_for_chain(chain_type);
-            Ok(SecretBytes::from_slice(keys.key_for_curve(signer.curve())))
-        }
-    }
+    secret_to_signing_key(&secret, &wallet.key_type, chain_type, index)
 }
 
 /// Resolve the RPC URL: explicit > config override (exact chain_id) > config (namespace) > built-in default.
@@ -690,7 +698,36 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         )),
         ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
         ChainType::Stacks => broadcast_stacks(rpc_url, signed_bytes),
+        ChainType::Xrpl => broadcast_xrpl(rpc_url, signed_bytes),
     }
+}
+
+fn broadcast_xrpl(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
+    let tx_blob = hex::encode_upper(signed_bytes);
+    let body = serde_json::json!({
+        "method": "submit",
+        "params": [{ "tx_blob": tx_blob }]
+    });
+    let resp_str = curl_post_json(rpc_url, &body.to_string())?;
+    let resp: serde_json::Value = serde_json::from_str(&resp_str)?;
+
+    // Surface engine errors before trying to extract the hash.
+    let engine_result = resp["result"]["engine_result"].as_str().unwrap_or("");
+    if !engine_result.starts_with("tes") {
+        let msg = resp["result"]["engine_result_message"]
+            .as_str()
+            .unwrap_or(engine_result);
+        return Err(OwsLibError::BroadcastFailed(format!(
+            "XRPL submit failed ({engine_result}): {msg}"
+        )));
+    }
+
+    resp["result"]["tx_json"]["hash"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            OwsLibError::BroadcastFailed(format!("no hash in XRPL response: {resp_str}"))
+        })
 }
 
 fn broadcast_evm(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
@@ -982,7 +1019,9 @@ mod tests {
     #[test]
     fn derive_address_all_chains() {
         let phrase = generate_mnemonic(12).unwrap();
-        let chains = ["evm", "solana", "bitcoin", "cosmos", "tron", "ton", "sui"];
+        let chains = [
+            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "sui", "xrpl",
+        ];
         for chain in &chains {
             let addr = derive_address(&phrase, chain, None).unwrap();
             assert!(!addr.is_empty(), "address should be non-empty for {chain}");
@@ -1103,7 +1142,7 @@ mod tests {
         let solana_tx_hex = hex::encode(&solana_tx);
 
         let chains = [
-            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui",
+            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "xrpl",
         ];
         for chain in &chains {
             let tx = if *chain == "solana" {

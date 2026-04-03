@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use ows_core::{ApiKeyFile, OwsError};
-use ows_signer::{
-    decrypt, encrypt_with_hkdf, signer_for_chain, CryptoEnvelope, HdDeriver, Mnemonic, SecretBytes,
-};
+use ows_core::{ApiKeyFile, EncryptedWallet, OwsError};
+use ows_signer::{decrypt, encrypt_with_hkdf, signer_for_chain, CryptoEnvelope, SecretBytes};
 
 use crate::error::OwsLibError;
 use crate::key_store;
@@ -15,9 +13,9 @@ use crate::vault;
 /// Create an API key for agent access to one or more wallets.
 ///
 /// 1. Authenticates with the owner's passphrase
-/// 2. Decrypts the mnemonic for each wallet
+/// 2. Decrypts the wallet secret for each wallet
 /// 3. Generates a random token (`ows_key_...`)
-/// 4. Re-encrypts each mnemonic under HKDF(token)
+/// 4. Re-encrypts each secret under HKDF(token)
 /// 5. Stores the key file with token hash, policy IDs, and encrypted copies
 /// 6. Returns the raw token (shown once to the user)
 pub fn create_api_key(
@@ -77,8 +75,8 @@ pub fn create_api_key(
 /// 1. Look up key file by SHA256(token)
 /// 2. Check expiry and wallet scope
 /// 3. Load and evaluate policies
-/// 4. HKDF(token) → decrypt mnemonic
-/// 5. HD derive → sign
+/// 4. HKDF(token) → decrypt wallet secret
+/// 5. Resolve signing key → sign
 pub fn sign_with_api_key(
     token: &str,
     wallet_name_or_id: &str,
@@ -133,8 +131,8 @@ pub fn sign_with_api_key(
         }));
     }
 
-    // 6. Decrypt mnemonic from key file using HKDF(token)
-    let key = decrypt_key_from_api_key(&key_file, &wallet.id, token, chain.chain_type, index)?;
+    // 6. Decrypt wallet secret from key file using HKDF(token)
+    let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
 
     // 7. Sign (extract signable portion first — e.g. strips Solana sig-slot headers)
     let signer = signer_for_chain(chain.chain_type);
@@ -195,7 +193,7 @@ pub fn sign_message_with_api_key(
         }));
     }
 
-    let key = decrypt_key_from_api_key(&key_file, &wallet.id, token, chain.chain_type, index)?;
+    let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
     let signer = signer_for_chain(chain.chain_type);
     let output = signer.sign_message(key.expose(), msg_bytes)?;
 
@@ -255,7 +253,7 @@ pub fn enforce_policy_and_decrypt_key(
         }));
     }
 
-    let key = decrypt_key_from_api_key(&key_file, &wallet.id, token, chain.chain_type, index)?;
+    let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
 
     Ok((key, key_file))
 }
@@ -296,30 +294,21 @@ fn load_policies_for_key(
 
 fn decrypt_key_from_api_key(
     key_file: &ApiKeyFile,
-    wallet_id: &str,
+    wallet: &EncryptedWallet,
     token: &str,
     chain_type: ows_core::ChainType,
     index: Option<u32>,
 ) -> Result<SecretBytes, OwsLibError> {
-    let envelope_value = key_file.wallet_secrets.get(wallet_id).ok_or_else(|| {
+    let envelope_value = key_file.wallet_secrets.get(&wallet.id).ok_or_else(|| {
         OwsLibError::InvalidInput(format!(
-            "API key has no encrypted secret for wallet {wallet_id}"
+            "API key has no encrypted secret for wallet {}",
+            wallet.id
         ))
     })?;
 
     let envelope: CryptoEnvelope = serde_json::from_value(envelope_value.clone())?;
     let secret = decrypt(&envelope, token)?;
-
-    // The secret is a mnemonic phrase — derive the signing key
-    let phrase = std::str::from_utf8(secret.expose())
-        .map_err(|_| OwsLibError::InvalidInput("wallet contains invalid UTF-8 mnemonic".into()))?;
-    let mnemonic = Mnemonic::from_phrase(phrase)?;
-    let signer = signer_for_chain(chain_type);
-    let path = signer.default_derivation_path(index.unwrap_or(0));
-    let curve = signer.curve();
-    Ok(HdDeriver::derive_from_mnemonic_cached(
-        &mnemonic, "", &path, curve,
-    )?)
+    crate::ops::secret_to_signing_key(&secret, &wallet.key_type, chain_type, index)
 }
 
 #[cfg(test)]
@@ -555,6 +544,67 @@ mod tests {
         );
         let sign_result = result.unwrap();
         assert!(!sign_result.signature.is_empty());
+    }
+
+    #[test]
+    fn imported_private_key_wallet_signs_with_api_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+
+        let wallet = crate::import_wallet_private_key(
+            "imported-wallet",
+            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+            Some("evm"),
+            Some(""),
+            Some(&vault),
+            None,
+            None,
+        )
+        .unwrap();
+        let policy_id = setup_test_policy(&vault);
+
+        let (token, _) = create_api_key(
+            "imported-wallet-agent",
+            std::slice::from_ref(&wallet.id),
+            std::slice::from_ref(&policy_id),
+            "",
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+
+        let chain = ows_core::parse_chain("base").unwrap();
+        let tx_bytes = vec![0u8; 32];
+
+        let tx_result = sign_with_api_key(
+            &token,
+            "imported-wallet",
+            &chain,
+            &tx_bytes,
+            None,
+            Some(&vault),
+        );
+        assert!(
+            tx_result.is_ok(),
+            "sign_with_api_key failed: {:?}",
+            tx_result.err()
+        );
+        assert!(!tx_result.unwrap().signature.is_empty());
+
+        let msg_result = sign_message_with_api_key(
+            &token,
+            "imported-wallet",
+            &chain,
+            b"hello",
+            None,
+            Some(&vault),
+        );
+        assert!(
+            msg_result.is_ok(),
+            "sign_message_with_api_key failed: {:?}",
+            msg_result.err()
+        );
+        assert!(!msg_result.unwrap().signature.is_empty());
     }
 
     #[test]

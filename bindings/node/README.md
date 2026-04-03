@@ -10,7 +10,7 @@ Local, policy-gated signing and wallet management for every chain.
 ## Why OWS
 
 - **Local key custody.** Private keys stay encrypted at rest and are decrypted only inside the OWS signing path after the relevant checks pass. Current implementations harden in-process memory handling and wipe key material after use.
-- **Every chain, one interface.** EVM, Solana, Sui, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin — all first-class. CAIP-2/CAIP-10 addressing abstracts away chain-specific details.
+- **Every chain, one interface.** EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin — all first-class. CAIP-2/CAIP-10 addressing abstracts away chain-specific details.
 - **Policy before signing.** A pre-signing policy engine gates agent (API key) operations before decryption — chain allowlists, expiry, and optional custom executables.
 - **Built for agents.** Native SDK and CLI today. A wallet created by one tool works in every other.
 
@@ -29,7 +29,7 @@ The package is **fully self-contained** — it embeds the Rust core via native F
 import { createWallet, signMessage } from "@open-wallet-standard/core";
 
 const wallet = createWallet("agent-treasury");
-// => accounts for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, and Sui
+// => accounts for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, Sui, and XRPL
 
 const sig = signMessage("agent-treasury", "evm", "hello");
 console.log(sig.signature);
@@ -59,6 +59,7 @@ ows sign tx --wallet agent-treasury --chain evm --tx "deadbeef..."
 | Tron | secp256k1 | base58check | `m/44'/195'/0'/0/0` |
 | TON | Ed25519 | raw/bounceable | `m/44'/607'/0'` |
 | Sui | Ed25519 | 0x + BLAKE2b-256 hex | `m/44'/784'/0'/0'/0'` |
+| XRPL | secp256k1 | Base58Check (`r...`) | `m/44'/144'/0'/0/0` |
 | Spark (Bitcoin L2) | secp256k1 | spark: prefixed | `m/84'/0'/0'/0/0` |
 | Filecoin | secp256k1 | f1 base32 | `m/44'/461'/0'/0/0` |
 

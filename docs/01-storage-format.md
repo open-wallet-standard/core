@@ -129,11 +129,11 @@ Each API key is stored as a JSON file in `~/.ows/keys/`. The key file contains m
 | `wallet_ids` | array | yes | Wallet IDs this key is authorized to access |
 | `policy_ids` | array | yes | Policy IDs evaluated on every request made with this key |
 | `expires_at` | string | no | ISO 8601 expiry timestamp. `null` means no expiry. |
-| `wallet_secrets` | object | yes | Map of wallet ID → CryptoEnvelope. Each entry is the wallet's mnemonic re-encrypted under HKDF(token). |
+| `wallet_secrets` | object | yes | Map of wallet ID → CryptoEnvelope. Each entry is the wallet's decrypted secret re-encrypted under HKDF(token), whether that secret is a mnemonic phrase or private-key JSON. |
 
 The `keys/` directory and its contents use the same strict permissions as `wallets/` (`700` for the directory, `600` for files) because `wallet_secrets` contains encrypted key material and `token_hash` must be protected against local reads.
 
-Revoking an API key means deleting the key file. The encrypted mnemonic copies are destroyed. The original wallet file and other API keys are unaffected.
+Revoking an API key means deleting the key file. The encrypted secret copies are destroyed. The original wallet file and other API keys are unaffected.
 
 ### Crypto Object
 

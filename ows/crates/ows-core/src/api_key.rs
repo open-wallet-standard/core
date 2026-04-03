@@ -16,7 +16,7 @@ pub struct ApiKeyFile {
     /// Optional expiry timestamp.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
-    /// Per-wallet encrypted mnemonic copies, keyed by wallet ID.
+    /// Per-wallet encrypted secret copies, keyed by wallet ID.
     /// Each value is a CryptoEnvelope encrypted with HKDF(token).
     pub wallet_secrets: HashMap<String, serde_json::Value>,
 }

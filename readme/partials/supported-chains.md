@@ -9,5 +9,6 @@
 | Tron | secp256k1 | base58check | `m/44'/195'/0'/0/0` |
 | TON | Ed25519 | raw/bounceable | `m/44'/607'/0'` |
 | Sui | Ed25519 | 0x + BLAKE2b-256 hex | `m/44'/784'/0'/0'/0'` |
+| XRPL | secp256k1 | Base58Check (`r...`) | `m/44'/144'/0'/0/0` |
 | Spark (Bitcoin L2) | secp256k1 | spark: prefixed | `m/84'/0'/0'/0/0` |
 | Filecoin | secp256k1 | f1 base32 | `m/44'/461'/0'/0/0` |

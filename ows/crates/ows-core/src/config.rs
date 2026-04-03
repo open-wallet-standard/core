@@ -68,6 +68,15 @@ impl Config {
             "stacks:1".into(),
             "https://api.hiro.so".into(),
         );
+        rpc.insert("xrpl:mainnet".into(), "https://s1.ripple.com:51234".into());
+        rpc.insert(
+            "xrpl:testnet".into(),
+            "https://s.altnet.rippletest.net:51234".into(),
+        );
+        rpc.insert(
+            "xrpl:devnet".into(),
+            "https://s.devnet.rippletest.net:51234".into(),
+        );
         rpc
     }
 }
@@ -248,7 +257,7 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 16);
+        assert_eq!(config.rpc.len(), 19);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
     }
 

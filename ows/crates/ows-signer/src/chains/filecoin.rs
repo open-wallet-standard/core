@@ -14,7 +14,7 @@ const BASE32_ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 impl FilecoinSigner {
     fn signing_key(private_key: &[u8]) -> Result<SigningKey, SignerError> {
         SigningKey::from_slice(private_key)
-            .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))
+            .map_err(|_| SignerError::InvalidPrivateKey("key parsing failed".into()))
     }
 
     /// Encode bytes using Filecoin's lowercase base32 (no padding).

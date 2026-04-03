@@ -8,6 +8,7 @@ pub mod stacks;
 pub mod sui;
 pub mod ton;
 pub mod tron;
+pub mod xrpl;
 
 pub use self::bitcoin::BitcoinSigner;
 pub use self::cosmos::CosmosSigner;
@@ -19,6 +20,7 @@ pub use self::stacks::StacksSigner;
 pub use self::sui::SuiSigner;
 pub use self::ton::TonSigner;
 pub use self::tron::TronSigner;
+pub use self::xrpl::XrplSigner;
 
 use crate::traits::ChainSigner;
 use ows_core::ChainType;
@@ -36,5 +38,6 @@ pub fn signer_for_chain(chain: ChainType) -> Box<dyn ChainSigner> {
         ChainType::Filecoin => Box::new(FilecoinSigner),
         ChainType::Stacks => Box::new(StacksSigner::mainnet()),
         ChainType::Sui => Box::new(SuiSigner),
+        ChainType::Xrpl => Box::new(XrplSigner),
     }
 }

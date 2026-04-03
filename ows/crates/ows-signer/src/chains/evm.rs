@@ -35,7 +35,7 @@ impl EvmSigner {
 
     fn signing_key(private_key: &[u8]) -> Result<SigningKey, SignerError> {
         SigningKey::from_slice(private_key)
-            .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))
+            .map_err(|_| SignerError::InvalidPrivateKey("key parsing failed".into()))
     }
 
     /// Sign EIP-712 typed structured data.

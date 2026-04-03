@@ -113,6 +113,22 @@ mod integration_tests {
     }
 
     #[test]
+    fn test_full_pipeline_xrpl() {
+        let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
+        let address = derive_address_for_chain(&mnemonic, ChainType::Xrpl);
+        assert!(
+            address.starts_with('r'),
+            "XRPL address must start with 'r', got: {}",
+            address
+        );
+        assert!(
+            address.len() >= 25 && address.len() <= 34,
+            "XRPL address length must be 25-34, got: {}",
+            address.len()
+        );
+    }
+
+    #[test]
     fn test_full_pipeline_filecoin() {
         let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
         let address = derive_address_for_chain(&mnemonic, ChainType::Filecoin);
@@ -177,6 +193,7 @@ mod integration_tests {
         let spark_addr = derive_address_for_chain(&mnemonic, ChainType::Spark);
         let fil_addr = derive_address_for_chain(&mnemonic, ChainType::Filecoin);
         let stx_addr = derive_address_for_chain(&mnemonic, ChainType::Stacks);
+        let xrpl_addr = derive_address_for_chain(&mnemonic, ChainType::Xrpl);
 
         // All addresses should be different
         let addrs = [
@@ -189,6 +206,7 @@ mod integration_tests {
             &spark_addr,
             &fil_addr,
             &stx_addr,
+            &xrpl_addr,
         ];
         for i in 0..addrs.len() {
             for j in (i + 1)..addrs.len() {
@@ -260,6 +278,7 @@ mod integration_tests {
             ChainType::Spark,
             ChainType::Filecoin,
             ChainType::Stacks,
+            ChainType::Xrpl,
         ] {
             let signer = signer_for_chain(chain);
             assert_eq!(signer.chain_type(), chain);

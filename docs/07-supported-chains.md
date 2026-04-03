@@ -21,7 +21,7 @@ type AssetId = `${ChainId}:${string}`;
 // e.g. "eip155:8453:native" (ETH on Base)
 ```
 
-The `native` token refers to the chain's native currency (ETH, SOL, SUI, BTC, ATOM, TRX, TON, STX, etc.).
+The `native` token refers to the chain's native currency (ETH, SOL, SUI, XRP, BTC, ATOM, TRX, TON, STX, etc.).
 
 ## Chain Families
 
@@ -36,6 +36,7 @@ OWS groups chains into families that share a cryptographic curve and address der
 | Tron | secp256k1 | 195 | `m/44'/195'/0'/0/{index}` | Base58Check (`T...`) | `tron` |
 | TON | ed25519 | 607 | `m/44'/607'/{index}'` | Base64url wallet v5r1 (`UQ...`) | `ton` |
 | Sui | ed25519 | 784 | `m/44'/784'/{index}'/0'/0'` | `0x` + BLAKE2b-256 hex (32 bytes) | `sui` |
+| XRPL | secp256k1 | 144 | `m/44'/144'/0'/0/{index}` | Base58Check (`r...`) | `xrpl` |
 | Spark | secp256k1 | 8797555 | `m/84'/0'/0'/0/{index}` | `spark:` + compressed pubkey hex | `spark` |
 | Filecoin | secp256k1 | 461 | `m/44'/461'/0'/0/{index}` | `f1` + base32(blake2b-160) | `fil` |
 | Stacks | secp256k1 | 5757 | `m/44'/5757'/0'/0/{index}` | c32check (`SP...`) | `stacks` |
@@ -68,6 +69,7 @@ Each network has a canonical chain identifier. Endpoint discovery and transport 
 | Tron | `tron:mainnet` |
 | TON | `ton:mainnet` |
 | Sui | `sui:mainnet` |
+| XRPL | `xrpl:mainnet` |
 | Spark | `spark:mainnet` |
 | Filecoin | `fil:mainnet` |
 | Stacks | `stacks:1` |
@@ -94,6 +96,10 @@ cosmos    → cosmos:cosmoshub-4
 tron      → tron:mainnet
 ton       → ton:mainnet
 sui       → sui:mainnet
+xrpl          → xrpl:mainnet
+xrpl-mainnet  → xrpl:mainnet
+xrpl-testnet  → xrpl:testnet
+xrpl-devnet   → xrpl:devnet
 spark     → spark:mainnet
 filecoin  → fil:mainnet
 stacks    → stacks:1
@@ -118,12 +124,13 @@ Master Seed (512 bits via PBKDF2)
     ├── m/44'/195'/0'/0/0   → Tron Account 0
     ├── m/44'/607'/0'       → TON Account 0
     ├── m/44'/784'/0'/0'/0' → Sui Account 0
+    ├── m/44'/144'/0'/0/0   → XRPL Account 0
     ├── m/84'/0'/0'/0/0     → Spark Account 0
     ├── m/44'/461'/0'/0/0   → Filecoin Account 0
     └── m/44'/5757'/0'/0/0  → Stacks Account 0
 ```
 
-A single mnemonic derives accounts across all supported chains. The wallet file stores the encrypted mnemonic; the signer derives the appropriate private key using each chain's coin type and derivation path.
+For mnemonic-based wallets, a single mnemonic derives accounts across all supported chains. Those wallet files store the encrypted mnemonic, and the signer derives the appropriate private key using each chain's coin type and derivation path. Wallets imported from raw private keys instead store encrypted curve-key material directly.
 
 ## Adding a New Chain
 

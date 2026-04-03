@@ -29,7 +29,7 @@ If the owner wants policy-constrained access for themselves, they create an API 
 
 ### Token-as-capability
 
-When the owner creates an API key, OWS decrypts the wallet mnemonic using the owner's passphrase and **re-encrypts it under a key derived from the API token**. The encrypted copy is stored in the API key file. The agent presents the token with each signing request; the token serves as both authentication and decryption capability.
+When the owner creates an API key, OWS decrypts the wallet secret using the owner's passphrase and **re-encrypts it under a key derived from the API token**. The encrypted copy is stored in the API key file. The agent presents the token with each signing request; the token serves as both authentication and decryption capability.
 
 ### Key derivation (HKDF-SHA256)
 
@@ -62,14 +62,14 @@ ows key create --name "claude-agent" --wallet agent-treasury --policy spending-l
 ```
 
 1. Owner enters wallet passphrase
-2. OWS decrypts the wallet mnemonic using scrypt(passphrase)
+2. OWS decrypts the wallet secret using scrypt(passphrase)
 3. Generates random token: `T = "ows_key_" + hex(random 256 bits)`
 4. Generates random salt S
 5. Derives key: `K = HKDF-SHA256(S, T, "ows-api-key-v1", 32)`
-6. Encrypts mnemonic with K via AES-256-GCM
-7. Stores key file with `token_hash: SHA256(T)`, policy IDs, and encrypted mnemonic copy
+6. Encrypts the wallet secret with K via AES-256-GCM
+7. Stores key file with `token_hash: SHA256(T)`, policy IDs, and encrypted secret copy
 8. Displays T once — owner provisions it to the agent
-9. Zeroizes mnemonic from memory
+9. Zeroizes the decrypted secret from memory
 
 ### Agent signing flow
 
@@ -84,16 +84,16 @@ Agent calls: sign_transaction(wallet, chain, tx, "ows_key_a1b2c3...")
 6. Build `PolicyContext` (chain ID, wallet ID, API key ID, transaction context, spending context, timestamp)
 7. Evaluate all policies (AND semantics, short-circuit on first deny)
 8. If denied → return POLICY_DENIED error (key material never touched)
-9. HKDF-SHA256(salt, token) → AES key → decrypt mnemonic from key.wallet_secrets
-10. HD-derive chain-specific key
+9. HKDF-SHA256(salt, token) → AES key → decrypt secret from key.wallet_secrets
+10. Resolve the chain-specific signing key from that secret (HD derivation for mnemonic wallets, direct curve-key selection for private-key wallets)
 11. Sign transaction
-12. Zeroize mnemonic and derived key
+12. Zeroize decrypted secret and derived key
 13. Return signature
 ```
 
 ### Revocation
 
-Delete the API key file. The encrypted mnemonic copy is gone. `SHA256(T)` matches nothing. The token is useless. The original wallet and other API keys are unaffected.
+Delete the API key file. The encrypted secret copy is gone. `SHA256(T)` matches nothing. The token is useless. The original wallet and other API keys are unaffected.
 
 ### Security properties
 

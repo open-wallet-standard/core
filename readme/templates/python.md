@@ -23,7 +23,7 @@ The package is **fully self-contained** — it embeds the Rust core via native F
 from ows import create_wallet, sign_message
 
 wallet = create_wallet("agent-treasury")
-# => accounts for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, and Sui
+# => accounts for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, Sui, and XRPL
 
 sig = sign_message("agent-treasury", "evm", "hello")
 print(sig["signature"])

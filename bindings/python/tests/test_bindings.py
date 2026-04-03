@@ -40,7 +40,7 @@ def test_create_and_list_wallets(vault_dir):
     wallet = ows.create_wallet("test-wallet", vault_path_opt=vault_dir)
     assert wallet["name"] == "test-wallet"
     assert isinstance(wallet["accounts"], list)
-    assert len(wallet["accounts"]) == 8
+    assert len(wallet["accounts"]) == 9
 
     # Verify each chain family is present
     chain_ids = [a["chain_id"] for a in wallet["accounts"]]
@@ -52,6 +52,7 @@ def test_create_and_list_wallets(vault_dir):
     assert any(c.startswith("tron:") for c in chain_ids)
     assert any(c.startswith("ton:") for c in chain_ids)
     assert any(c.startswith("fil:") for c in chain_ids)
+    assert any(c.startswith("xrpl:") for c in chain_ids)
 
     wallets = ows.list_wallets(vault_path_opt=vault_dir)
     assert len(wallets) == 1
@@ -98,7 +99,7 @@ def test_import_wallet_mnemonic(vault_dir):
         "imported", phrase, vault_path_opt=vault_dir
     )
     assert wallet["name"] == "imported"
-    assert len(wallet["accounts"]) == 8
+    assert len(wallet["accounts"]) == 9
 
     # EVM account should match derived address
     evm_account = next(a for a in wallet["accounts"] if a["chain_id"].startswith("eip155:"))

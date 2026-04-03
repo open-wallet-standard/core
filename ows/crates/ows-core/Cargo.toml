@@ -1,6 +1,6 @@
 [package]
 name = "ows-core"
-version = "1.1.2"
+version = "1.2.0"
 edition = "2021"
 license = "MIT"
 description = "Core types and traits for the Open Wallet Standard"

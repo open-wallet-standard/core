@@ -11,7 +11,7 @@ pub struct TronSigner;
 impl TronSigner {
     fn signing_key(private_key: &[u8]) -> Result<SigningKey, SignerError> {
         SigningKey::from_slice(private_key)
-            .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))
+            .map_err(|_| SignerError::InvalidPrivateKey("key parsing failed".into()))
     }
 
     /// Derive the 20-byte address hash (same as EVM: keccak256 of uncompressed pubkey, last 20 bytes).
