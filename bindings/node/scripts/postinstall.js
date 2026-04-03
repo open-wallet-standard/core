@@ -71,9 +71,10 @@ function run(cmd, args) {
 }
 
 /**
- * Resolve the ows binary path — same logic as bin/ows but returns the path
- * instead of execing. Falls back to process.execPath + CLI_ENTRY so it works
- * even before npm finishes symlinking the `ows` bin.
+ * Resolve the ows binary path. Checks in order:
+ *   1. Platform-specific optional dependency (node_modules)
+ *   2. Local npm/ directory (monorepo / dev builds)
+ *   3. $PATH (already-installed global binary)
  */
 function owsBinPath() {
   const PLATFORM_MAP = {
@@ -85,18 +86,28 @@ function owsBinPath() {
 
   const key = `${process.platform}-${process.arch}`;
   const pkg = PLATFORM_MAP[key];
-  if (!pkg) return null;
 
-  // 1. node_modules resolve
+  if (pkg) {
+    // 1. node_modules resolve
+    try {
+      const pkgDir = require.resolve(`${pkg}/package.json`);
+      const p = join(pkgDir, "..", "ows");
+      if (existsSync(p)) return p;
+    } catch {}
+
+    // 2. local npm/ directory (monorepo / dev)
+    const local = join(__dirname, "..", "npm", pkg.split("/").pop(), "ows");
+    if (existsSync(local)) return local;
+  }
+
+  // 3. Fall back to ows on $PATH (global install already linked)
   try {
-    const pkgDir = require.resolve(`${pkg}/package.json`);
-    const p = join(pkgDir, "..", "ows");
-    if (existsSync(p)) return p;
+    execFileSync("ows", ["--version"], {
+      stdio: "ignore",
+      shell: process.platform === "win32",
+    });
+    return "ows";
   } catch {}
-
-  // 2. local npm/ directory (monorepo / dev)
-  const local = join(__dirname, "..", "npm", pkg.split("/").pop(), "ows");
-  if (existsSync(local)) return local;
 
   return null;
 }
