@@ -43,15 +43,7 @@ set_node_version() {
     '.optionalDependencies |= with_entries(.value = $v)' \
     package.json > tmp.json && mv tmp.json package.json
 
-  # Sync optionalDependencies and platform package versions in the lockfile
-  jq --arg v "$VERSION" '
-    .packages[""].optionalDependencies |= with_entries(.value = $v)
-    | .packages |= with_entries(
-        if (.key | test("node_modules/@open-wallet-standard/core-"))
-        then .value.version = $v
-        else . end
-      )
-  ' package-lock.json > tmp.json && mv tmp.json package-lock.json
+  npm install
 
   cargo update --workspace
 }
