@@ -4,9 +4,6 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::Mutex;
 
-/// Maximum number of unknown CAIP-2 chain IDs that can be cached.
-const MAX_DYNAMIC_CHAINS: usize = 64;
-
 static DYNAMIC_CHAINS: Mutex<Option<HashMap<String, &'static str>>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -132,26 +129,19 @@ pub const KNOWN_CHAINS: &[Chain] = &[
     },
 ];
 
-/// Intern a chain ID string, returning a `&'static str`. Bounded to prevent DoS
-/// via unbounded memory allocation from arbitrary chain IDs.
-fn intern_chain_id(s: &str) -> Result<&'static str, String> {
+/// Intern a chain ID string, returning a `&'static str`.
+/// Deduplicates so the same ID is only leaked once.
+fn intern_chain_id(s: &str) -> &'static str {
     let mut guard = DYNAMIC_CHAINS.lock().unwrap_or_else(|e| e.into_inner());
     let cache = guard.get_or_insert_with(HashMap::new);
 
     if let Some(&existing) = cache.get(s) {
-        return Ok(existing);
-    }
-
-    if cache.len() >= MAX_DYNAMIC_CHAINS {
-        return Err(format!(
-            "too many unknown chain IDs (limit: {}). Use a known chain name or CAIP-2 ID.",
-            MAX_DYNAMIC_CHAINS
-        ));
+        return existing;
     }
 
     let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
     cache.insert(s.to_string(), leaked);
-    Ok(leaked)
+    leaked
 }
 
 /// Parse a chain string into a `Chain`. Accepts:
@@ -181,7 +171,7 @@ pub fn parse_chain(s: &str) -> Result<Chain, String> {
     // Uses the same signer as the namespace's default chain.
     if let Some((namespace, _reference)) = s.split_once(':') {
         if let Some(ct) = ChainType::from_namespace(namespace) {
-            let static_str = intern_chain_id(s)?;
+            let static_str = intern_chain_id(s);
             return Ok(Chain {
                 name: static_str,
                 chain_type: ct,
@@ -427,23 +417,6 @@ mod tests {
         let chain2 = parse_chain("eip155:11111").unwrap();
         // Same pointer — interned, not leaked twice
         assert!(std::ptr::eq(chain1.chain_id, chain2.chain_id));
-    }
-
-    #[test]
-    fn test_intern_rejects_after_cap() {
-        // Test the cap logic directly without polluting the shared global cache.
-        let mut cache = std::collections::HashMap::new();
-        for i in 0..super::MAX_DYNAMIC_CHAINS {
-            let id = format!("eip155:{}", 90000 + i);
-            let leaked: &'static str = Box::leak(id.clone().into_boxed_str());
-            cache.insert(id, leaked);
-        }
-        assert_eq!(cache.len(), super::MAX_DYNAMIC_CHAINS);
-
-        // Simulate what intern_chain_id does at the cap
-        let new_id = "eip155:99999999";
-        assert!(!cache.contains_key(new_id));
-        assert!(cache.len() >= super::MAX_DYNAMIC_CHAINS);
     }
 
     #[test]
