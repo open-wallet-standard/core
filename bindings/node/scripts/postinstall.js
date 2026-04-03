@@ -48,8 +48,8 @@ function prompt(question) {
       output: process.stderr,
     });
     rl.question(question, (answer) => {
-      rl.close();
       done(answer.trim());
+      rl.close();
     });
     rl.on("close", () => done(""));
   });
