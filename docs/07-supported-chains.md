@@ -21,7 +21,7 @@ type AssetId = `${ChainId}:${string}`;
 // e.g. "eip155:8453:native" (ETH on Base)
 ```
 
-The `native` token refers to the chain's native currency (ETH, SOL, SUI, XRP, BTC, ATOM, TRX, TON, etc.).
+The `native` token refers to the chain's native currency (ETH, SOL, SUI, XRP, XLM, BTC, ATOM, TRX, TON, etc.).
 
 ## Chain Families
 
@@ -37,6 +37,7 @@ OWS groups chains into families that share a cryptographic curve and address der
 | TON | ed25519 | 607 | `m/44'/607'/{index}'` | Base64url wallet v5r1 (`UQ...`) | `ton` |
 | Sui | ed25519 | 784 | `m/44'/784'/{index}'/0'/0'` | `0x` + BLAKE2b-256 hex (32 bytes) | `sui` |
 | XRPL | secp256k1 | 144 | `m/44'/144'/0'/0/{index}` | Base58Check (`r...`) | `xrpl` |
+| Stellar | ed25519 | 148 | `m/44'/148'/0'` | Base32 Strkey (`G...`, 56 chars) | `stellar` |
 | Spark | secp256k1 | 8797555 | `m/84'/0'/0'/0/{index}` | `spark:` + compressed pubkey hex | `spark` |
 | Filecoin | secp256k1 | 461 | `m/44'/461'/0'/0/{index}` | `f1` + base32(blake2b-160) | `fil` |
 
@@ -71,6 +72,9 @@ Each network has a canonical chain identifier. Endpoint discovery and transport 
 | TON | `ton:mainnet` |
 | Sui | `sui:mainnet` |
 | XRPL | `xrpl:mainnet` |
+| Stellar | `stellar:pubnet` |
+| Stellar Testnet | `stellar:testnet` |
+| Stellar Futurenet | `stellar:futurenet` |
 | Spark | `spark:mainnet` |
 | Filecoin | `fil:mainnet` |
 
@@ -102,6 +106,9 @@ xrpl          → xrpl:mainnet
 xrpl-mainnet  → xrpl:mainnet
 xrpl-testnet  → xrpl:testnet
 xrpl-devnet   → xrpl:devnet
+stellar          → stellar:pubnet
+stellar-testnet  → stellar:testnet
+stellar-futurenet → stellar:futurenet
 spark     → spark:mainnet
 filecoin  → fil:mainnet
 ```
@@ -126,6 +133,7 @@ Master Seed (512 bits via PBKDF2)
     ├── m/44'/607'/0'       → TON Account 0
     ├── m/44'/784'/0'/0'/0' → Sui Account 0
     ├── m/44'/144'/0'/0/0   → XRPL Account 0
+    ├── m/44'/148'/0'       → Stellar Account 0
     ├── m/84'/0'/0'/0/0     → Spark Account 0
     └── m/44'/461'/0'/0/0   → Filecoin Account 0
 ```

@@ -1,6 +1,6 @@
 ---
 name: ows
-description: Secure, local-first multi-chain wallet management — create wallets, derive addresses, sign messages and transactions across EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, and Filecoin via CLI, Node.js, or Python.
+description: Secure, local-first multi-chain wallet management — create wallets, derive addresses, sign messages and transactions across EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Stellar, Spark, and Filecoin via CLI, Node.js, or Python.
 version: 1.2.4
 metadata:
   openclaw:
@@ -33,7 +33,7 @@ Use this skill when the user asks to:
 
 - Create, import, list, delete, or manage crypto wallets
 - Derive blockchain addresses from a mnemonic
-- Sign messages or transactions for EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, or Filecoin
+- Sign messages or transactions for EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Stellar, Spark, or Filecoin
 - Broadcast signed transactions to a chain
 - Generate BIP-39 mnemonic phrases
 - Fund a wallet with USDC (MoonPay) or check token balances
@@ -53,6 +53,7 @@ Use this skill when the user asks to:
 | Tron | `tron` | secp256k1 | base58check |
 | TON | `ton` | Ed25519 | raw/bounceable |
 | Sui | `sui` | Ed25519 | 0x + BLAKE2b-256 hex |
+| Stellar | `stellar` | Ed25519 | Base32 Strkey (`G...`) |
 | Spark (Bitcoin L2) | `spark` | secp256k1 | spark: prefixed |
 | XRPL | `xrpl` | secp256k1 | Base58Check (`r...`) |
 | Filecoin | `filecoin` | secp256k1 | f1 secp256k1 |
@@ -108,6 +109,7 @@ The `--wallet` flag can also be set via `OWS_WALLET` env var. Use `--json` for s
 # Sign a message
 ows sign message --wallet "my-wallet" --chain evm --message "hello world"
 ows sign message --wallet "my-wallet" --chain solana --message "hello" --json
+ows sign message --wallet "my-wallet" --chain stellar --message "hello"
 
 # Sign a message with EIP-712 typed data (EVM only)
 ows sign message --wallet "my-wallet" --chain evm --message "" --typed-data '{"types":...}'

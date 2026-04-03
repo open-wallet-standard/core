@@ -44,6 +44,7 @@ Created wallet 3198bc9c-...
   bip122:000000000019d6689c085ae165831e93   bc1q...    m/84'/0'/0'/0/0
   cosmos:cosmoshub-4                     cosmos1... m/44'/118'/0'/0/0
   tron:mainnet                           TKLm...    m/44'/195'/0'/0/0
+  stellar:pubnet                         GABC...    m/44'/148'/0'
 ```
 
 ### `ows wallet import`
@@ -57,7 +58,7 @@ echo "goose puzzle decorate ..." | ows wallet import --name "imported" --mnemoni
 # Import from private key (reads from OWS_PRIVATE_KEY env or stdin)
 echo "4c0883a691..." | ows wallet import --name "from-evm" --private-key
 
-# Import an Ed25519 key (e.g. from Solana)
+# Import an Ed25519 key (e.g. from Solana or Stellar)
 echo "9d61b19d..." | ows wallet import --name "from-sol" --private-key --chain solana
 
 # Import explicit keys for both curves via environment variables
@@ -76,7 +77,7 @@ OWS_ED25519_KEY="9d61b19d..." \
 | `OWS_SECP256K1_KEY` | Explicit secp256k1 private key via environment variable |
 | `OWS_ED25519_KEY` | Explicit Ed25519 private key via environment variable |
 
-Private key imports generate all 8 chain accounts: the provided key is used for its curve's chains, and a random key is generated for the other curve. Use `OWS_SECP256K1_KEY` and `OWS_ED25519_KEY` together to supply both keys explicitly.
+Private key imports generate all 10 chain accounts: the provided key is used for its curve's chains, and a random key is generated for the other curve. Use `OWS_SECP256K1_KEY` and `OWS_ED25519_KEY` together to supply both keys explicitly.
 
 ### `ows wallet export`
 

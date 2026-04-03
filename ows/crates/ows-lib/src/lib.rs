@@ -6,6 +6,7 @@ pub mod nano_rpc;
 pub mod ops;
 pub mod policy_engine;
 pub mod policy_store;
+pub mod stellar_errors;
 mod sui_grpc;
 pub mod types;
 pub mod vault;

@@ -12,7 +12,7 @@ pub fn run(chain_str: Option<&str>, index: u32) -> Result<(), CliError> {
     if let Some(cs) = chain_str {
         // Derive for a single chain
         let chain = parse_chain(cs)?;
-        let signer = signer_for_chain(chain.chain_type);
+        let signer = signer_for_chain(&chain);
         let path = signer.default_derivation_path(index);
         let curve = signer.curve();
 
@@ -24,7 +24,7 @@ pub fn run(chain_str: Option<&str>, index: u32) -> Result<(), CliError> {
         // Derive for all chains
         for ct in &ALL_CHAIN_TYPES {
             let chain = default_chain_for_type(*ct);
-            let signer = signer_for_chain(*ct);
+            let signer = signer_for_chain(&chain);
             let path = signer.default_derivation_path(index);
             let curve = signer.curve();
 

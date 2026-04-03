@@ -24,6 +24,7 @@ base64 = "0.22"
 getrandom = "0.2"
 zeroize = "1"
 sha2 = "0.10"
+stellar-xdr = { workspace = true }
 rand = "0.8"
 prost = "0.13"
 tonic = { version = "0.12", features = ["transport"] }

@@ -6,14 +6,13 @@ fn find_account_for_chain<'a>(
     accounts: &'a [AccountInfo],
     chain: &str,
 ) -> Result<&'a AccountInfo, CliError> {
-    let chain_prefix = match chain {
-        "solana" => "solana:",
-        _ => "eip155:",
-    };
+    let parsed = ows_core::chain::parse_chain(chain)
+        .map_err(|_| CliError::InvalidArgs(format!("unknown chain: {chain}")))?;
+    let prefix = format!("{}:", parsed.chain_type.namespace());
 
     accounts
         .iter()
-        .find(|a| a.chain_id.starts_with(chain_prefix))
+        .find(|a| a.chain_id.starts_with(&prefix))
         .ok_or_else(|| {
             CliError::InvalidArgs(format!("wallet has no account for chain \"{chain}\""))
         })

@@ -17,10 +17,11 @@ pub enum ChainType {
     Sui,
     Xrpl,
     Nano,
+    Stellar,
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 10] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 12] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
@@ -31,6 +32,7 @@ pub const ALL_CHAIN_TYPES: [ChainType; 10] = [
     ChainType::Sui,
     ChainType::Xrpl,
     ChainType::Nano,
+    ChainType::Stellar,
 ];
 
 /// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
@@ -190,7 +192,27 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_type: ChainType::Evm,
         chain_id: "eip155:999",
     },
+    Chain {
+        name: "stellar",
+        chain_type: ChainType::Stellar,
+        chain_id: "stellar:pubnet",
+    },
+    Chain {
+        name: "stellar-testnet",
+        chain_type: ChainType::Stellar,
+        chain_id: "stellar:testnet",
+    },
+    Chain {
+        name: "stellar-futurenet",
+        chain_type: ChainType::Stellar,
+        chain_id: "stellar:futurenet",
+    },
 ];
+
+/// Stellar network passphrases — used for transaction signing.
+pub const STELLAR_PASSPHRASE_PUBNET: &str = "Public Global Stellar Network ; September 2015";
+pub const STELLAR_PASSPHRASE_TESTNET: &str = "Test SDF Network ; September 2015";
+pub const STELLAR_PASSPHRASE_FUTURENET: &str = "Test SDF Future Network ; October 2022";
 
 /// Parse a chain string into a `Chain`. Accepts:
 /// - Friendly names: "ethereum", "base", "arbitrum", "solana", etc.
@@ -254,7 +276,7 @@ pub fn parse_chain(s: &str) -> Result<Chain, String> {
            EVM:     ethereum, base, arbitrum, optimism, polygon, bsc, avalanche, plasma, etherlink\n  \
            Solana:  solana\n  \
            Bitcoin: bitcoin\n  \
-           Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl, nano\n\n\
+           Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl, nano, stellar\n\n\
          Or use a CAIP-2 ID (eip155:8453) or bare EVM chain ID (8453)"
     ))
 }
@@ -279,6 +301,7 @@ impl ChainType {
             ChainType::Sui => "sui",
             ChainType::Xrpl => "xrpl",
             ChainType::Nano => "nano",
+            ChainType::Stellar => "stellar",
         }
     }
 
@@ -296,6 +319,7 @@ impl ChainType {
             ChainType::Sui => 784,
             ChainType::Xrpl => 144,
             ChainType::Nano => 165,
+            ChainType::Stellar => 148,
         }
     }
 
@@ -313,6 +337,7 @@ impl ChainType {
             "sui" => Some(ChainType::Sui),
             "xrpl" => Some(ChainType::Xrpl),
             "nano" => Some(ChainType::Nano),
+            "stellar" => Some(ChainType::Stellar),
             _ => None,
         }
     }
@@ -332,6 +357,7 @@ impl fmt::Display for ChainType {
             ChainType::Sui => "sui",
             ChainType::Xrpl => "xrpl",
             ChainType::Nano => "nano",
+            ChainType::Stellar => "stellar",
         };
         write!(f, "{}", s)
     }
@@ -353,6 +379,7 @@ impl FromStr for ChainType {
             "sui" => Ok(ChainType::Sui),
             "xrpl" => Ok(ChainType::Xrpl),
             "nano" => Ok(ChainType::Nano),
+            "stellar" => Ok(ChainType::Stellar),
             _ => Err(format!("unknown chain type: {}", s)),
         }
     }
@@ -385,6 +412,7 @@ mod tests {
             (ChainType::Sui, "\"sui\""),
             (ChainType::Xrpl, "\"xrpl\""),
             (ChainType::Nano, "\"nano\""),
+            (ChainType::Stellar, "\"stellar\""),
         ] {
             let json = serde_json::to_string(&chain).unwrap();
             assert_eq!(json, expected);
@@ -406,6 +434,7 @@ mod tests {
         assert_eq!(ChainType::Sui.namespace(), "sui");
         assert_eq!(ChainType::Xrpl.namespace(), "xrpl");
         assert_eq!(ChainType::Nano.namespace(), "nano");
+        assert_eq!(ChainType::Stellar.namespace(), "stellar");
     }
 
     #[test]
@@ -421,6 +450,7 @@ mod tests {
         assert_eq!(ChainType::Sui.default_coin_type(), 784);
         assert_eq!(ChainType::Xrpl.default_coin_type(), 144);
         assert_eq!(ChainType::Nano.default_coin_type(), 165);
+        assert_eq!(ChainType::Stellar.default_coin_type(), 148);
     }
 
     #[test]
@@ -439,6 +469,10 @@ mod tests {
         assert_eq!(ChainType::from_namespace("sui"), Some(ChainType::Sui));
         assert_eq!(ChainType::from_namespace("xrpl"), Some(ChainType::Xrpl));
         assert_eq!(ChainType::from_namespace("nano"), Some(ChainType::Nano));
+        assert_eq!(
+            ChainType::from_namespace("stellar"),
+            Some(ChainType::Stellar)
+        );
         assert_eq!(ChainType::from_namespace("unknown"), None);
     }
 
@@ -581,6 +615,26 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_chain_stellar() {
+        let chain = parse_chain("stellar").unwrap();
+        assert_eq!(chain.chain_type, ChainType::Stellar);
+        assert_eq!(chain.chain_id, "stellar:pubnet");
+
+        let testnet = parse_chain("stellar-testnet").unwrap();
+        assert_eq!(testnet.chain_type, ChainType::Stellar);
+        assert_eq!(testnet.chain_id, "stellar:testnet");
+
+        let futurenet = parse_chain("stellar-futurenet").unwrap();
+        assert_eq!(futurenet.chain_type, ChainType::Stellar);
+        assert_eq!(futurenet.chain_id, "stellar:futurenet");
+
+        // CAIP-2 IDs also accepted directly
+        let via_caip2 = parse_chain("stellar:testnet").unwrap();
+        assert_eq!(via_caip2.chain_type, ChainType::Stellar);
+        assert_eq!(via_caip2.chain_id, "stellar:testnet");
+    }
+
+    #[test]
     fn test_parse_chain_unknown() {
         assert!(parse_chain("unknown_chain").is_err());
     }
@@ -619,7 +673,7 @@ mod tests {
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 10);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 12);
     }
 
     #[test]

@@ -41,7 +41,7 @@ fn derive_all_accounts(mnemonic: &Mnemonic, index: u32) -> Result<Vec<WalletAcco
     let mut accounts = Vec::with_capacity(ALL_CHAIN_TYPES.len());
     for ct in &ALL_CHAIN_TYPES {
         let chain = default_chain_for_type(*ct);
-        let signer = signer_for_chain(*ct);
+        let signer = signer_for_chain(&chain);
         let path = signer.default_derivation_path(index);
         let curve = signer.curve();
         let key = HdDeriver::derive_from_mnemonic(mnemonic, "", &path, curve)?;
@@ -114,10 +114,10 @@ impl KeyPair {
 fn derive_all_accounts_from_keys(keys: &KeyPair) -> Result<Vec<WalletAccount>, OwsLibError> {
     let mut accounts = Vec::with_capacity(ALL_CHAIN_TYPES.len());
     for ct in &ALL_CHAIN_TYPES {
-        let signer = signer_for_chain(*ct);
+        let chain = default_chain_for_type(*ct);
+        let signer = signer_for_chain(&chain);
         let key = keys.key_for_curve(signer.curve());
         let address = signer.derive_address(key)?;
-        let chain = default_chain_for_type(*ct);
         accounts.push(WalletAccount {
             account_id: format!("{}:{}", chain.chain_id, address),
             address,
@@ -141,7 +141,7 @@ pub(crate) fn secret_to_signing_key(
                 OwsLibError::InvalidInput("wallet contains invalid UTF-8 mnemonic".into())
             })?;
             let mnemonic = Mnemonic::from_phrase(phrase)?;
-            let signer = signer_for_chain(chain_type);
+            let signer = signer_for_chain(&default_chain_for_type(chain_type));
             let path = signer.default_derivation_path(index.unwrap_or(0));
             let curve = signer.curve();
             Ok(HdDeriver::derive_from_mnemonic_cached(
@@ -151,7 +151,7 @@ pub(crate) fn secret_to_signing_key(
         KeyType::PrivateKey => {
             // JSON key pair — extract the right key for this chain's curve
             let keys = KeyPair::from_json_bytes(secret.expose())?;
-            let signer = signer_for_chain(chain_type);
+            let signer = signer_for_chain(&default_chain_for_type(chain_type));
             Ok(SecretBytes::from_slice(keys.key_for_curve(signer.curve())))
         }
     }
@@ -179,7 +179,7 @@ pub fn derive_address(
 ) -> Result<String, OwsLibError> {
     let chain = parse_chain(chain)?;
     let mnemonic = Mnemonic::from_phrase(mnemonic_phrase)?;
-    let signer = signer_for_chain(chain.chain_type);
+    let signer = signer_for_chain(&chain);
     let path = signer.default_derivation_path(index.unwrap_or(0));
     let curve = signer.curve();
 
@@ -309,7 +309,7 @@ pub fn import_wallet_private_key(
             let source_curve = match chain {
                 Some(c) => {
                     let parsed = parse_chain(c)?;
-                    signer_for_chain(parsed.chain_type).curve()
+                    signer_for_chain(&parsed).curve()
                 }
                 None => ows_signer::Curve::Secp256k1,
             };
@@ -453,7 +453,7 @@ pub fn sign_transaction(
     // Owner mode: existing passphrase-based signing (unchanged)
     let chain = parse_chain(chain)?;
     let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
-    let signer = signer_for_chain(chain.chain_type);
+    let signer = signer_for_chain(&chain);
     let signable = signer.extract_signable_bytes(&tx_bytes)?;
     let output = signer.sign_transaction(key.expose(), signable)?;
 
@@ -501,7 +501,7 @@ pub fn sign_message(
     // Owner mode
     let chain = parse_chain(chain)?;
     let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
-    let signer = signer_for_chain(chain.chain_type);
+    let signer = signer_for_chain(&chain);
     let output = signer.sign_message(key.expose(), &msg_bytes)?;
 
     Ok(SignResult {
@@ -607,7 +607,7 @@ pub fn sign_encode_and_broadcast(
     rpc_url: Option<&str>,
 ) -> Result<SendResult, OwsLibError> {
     let chain = parse_chain(chain)?;
-    let signer = signer_for_chain(chain.chain_type);
+    let signer = signer_for_chain(&chain);
 
     // 1. Extract signable portion (strips signature-slot headers for Solana; no-op for others)
     let signable = signer.extract_signable_bytes(tx_bytes)?;
@@ -703,6 +703,7 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
         ChainType::Xrpl => broadcast_xrpl(rpc_url, signed_bytes),
         ChainType::Nano => broadcast_nano(rpc_url, signed_bytes),
+        ChainType::Stellar => broadcast_stellar(rpc_url, signed_bytes),
     }
 }
 
@@ -732,6 +733,52 @@ fn broadcast_xrpl(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibEr
         .ok_or_else(|| {
             OwsLibError::BroadcastFailed(format!("no hash in XRPL response: {resp_str}"))
         })
+}
+
+fn build_stellar_rpc_body(signed_bytes: &[u8]) -> serde_json::Value {
+    use base64::Engine;
+    let b64_tx = base64::engine::general_purpose::STANDARD.encode(signed_bytes);
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "sendTransaction",
+        "params": {"transaction": b64_tx}
+    })
+}
+
+fn broadcast_stellar(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
+    let body = build_stellar_rpc_body(signed_bytes);
+    let resp_str = curl_post_json(rpc_url, &body.to_string())?;
+    let resp: serde_json::Value = serde_json::from_str(&resp_str)?;
+
+    let status = resp["result"]["status"].as_str().unwrap_or("");
+    match status {
+        "PENDING" => resp["result"]["hash"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                OwsLibError::BroadcastFailed("no hash in Stellar response".into())
+            }),
+        "DUPLICATE" => Err(OwsLibError::BroadcastFailed(
+            "transaction already submitted".into(),
+        )),
+        "TRY_AGAIN_LATER" => Err(OwsLibError::BroadcastFailed(
+            "Stellar network busy, retry".into(),
+        )),
+        "ERROR" => {
+            let detail = resp["result"]["errorResultXdr"]
+                .as_str()
+                .unwrap_or("unknown");
+            // Try to extract a human-readable tx error code
+            let enriched = crate::stellar_errors::enrich_error_xdr(detail);
+            Err(OwsLibError::BroadcastFailed(format!(
+                "Stellar tx error: {enriched}"
+            )))
+        }
+        _ => Err(OwsLibError::BroadcastFailed(format!(
+            "unexpected Stellar status: {status}"
+        ))),
+    }
 }
 
 fn broadcast_evm(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
@@ -1170,12 +1217,40 @@ mod tests {
         solana_tx.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // message payload
         let solana_tx_hex = hex::encode(&solana_tx);
 
+        // Stellar requires a valid TransactionEnvelope XDR
+        // NOTE: duplicated in crates/ows-signer/src/chains/stellar.rs (build_test_envelope) — keep in sync
+        let stellar_tx_hex = {
+            use stellar_xdr::curr::*;
+            let tx = Transaction {
+                source_account: MuxedAccount::Ed25519(Uint256([0xAA; 32])),
+                fee: 100,
+                seq_num: SequenceNumber(1),
+                cond: Preconditions::None,
+                memo: Memo::None,
+                operations: vec![Operation {
+                    source_account: None,
+                    body: OperationBody::Inflation,
+                }]
+                .try_into()
+                .unwrap(),
+                ext: TransactionExt::V0,
+            };
+            let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+                tx,
+                signatures: vec![].try_into().unwrap(),
+            });
+            hex::encode(envelope.to_xdr(Limits::none()).unwrap())
+        };
+
         let chains = [
             "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "xrpl",
+            "stellar",
         ];
         for chain in &chains {
             let tx = if *chain == "solana" {
                 &solana_tx_hex
+            } else if *chain == "stellar" {
+                &stellar_tx_hex
             } else {
                 generic_tx_hex
             };
@@ -1754,7 +1829,7 @@ mod tests {
 
         // Now encode the full signed transaction (what the library does correctly)
         let key = decrypt_signing_key("send-bug", ChainType::Evm, "", None, Some(vault)).unwrap();
-        let signer = signer_for_chain(ChainType::Evm);
+        let signer = signer_for_chain(&default_chain_for_type(ChainType::Evm));
         let output = signer.sign_transaction(key.expose(), &unsigned_tx).unwrap();
         let full_signed_tx = signer
             .encode_signed_transaction(&unsigned_tx, &output)
@@ -2471,7 +2546,7 @@ mod tests {
         // by manually calling the signer's extract/sign/encode chain:
         let key =
             decrypt_signing_key("char-sol-sig", ChainType::Solana, "", None, Some(vault)).unwrap();
-        let signer = signer_for_chain(ChainType::Solana);
+        let signer = signer_for_chain(&default_chain_for_type(ChainType::Solana));
 
         let signable = signer.extract_signable_bytes(&tx_bytes).unwrap();
         assert_eq!(
@@ -2537,7 +2612,7 @@ mod tests {
         // Path B: the internal pipeline (what sign_and_send uses)
         let key =
             decrypt_signing_key("char-encode", ChainType::Evm, "", None, Some(vault)).unwrap();
-        let signer = signer_for_chain(ChainType::Evm);
+        let signer = signer_for_chain(&default_chain_for_type(ChainType::Evm));
         let output = signer.sign_transaction(key.expose(), &unsigned_tx).unwrap();
         let full_signed_tx = signer
             .encode_signed_transaction(&unsigned_tx, &output)
@@ -2658,7 +2733,7 @@ mod tests {
 
         // Path B: direct signer call (no credential branch)
         let key = decrypt_signing_key("reg-owner", ChainType::Evm, "", None, Some(vault)).unwrap();
-        let signer = signer_for_chain(ChainType::Evm);
+        let signer = signer_for_chain(&default_chain_for_type(ChainType::Evm));
         let tx_bytes = hex::decode(tx_hex).unwrap();
         let direct_output = signer.sign_transaction(key.expose(), &tx_bytes).unwrap();
 
@@ -2728,7 +2803,7 @@ mod tests {
 
         // Direct signer
         let key = decrypt_signing_key("reg-msg", ChainType::Evm, "", None, Some(vault)).unwrap();
-        let signer = signer_for_chain(ChainType::Evm);
+        let signer = signer_for_chain(&default_chain_for_type(ChainType::Evm));
         let direct = signer.sign_message(key.expose(), b"hello").unwrap();
 
         assert_eq!(
@@ -2859,7 +2934,7 @@ mod tests {
         // Path B: manual extract + sign
         let key =
             decrypt_signing_key("sol-match", ChainType::Solana, "", None, Some(vault)).unwrap();
-        let signer = signer_for_chain(ChainType::Solana);
+        let signer = signer_for_chain(&default_chain_for_type(ChainType::Solana));
         let signable = signer.extract_signable_bytes(&full_tx).unwrap();
         let direct = signer.sign_transaction(key.expose(), signable).unwrap();
 
@@ -2995,5 +3070,62 @@ mod tests {
                 // We expect errors like "insufficient funds" or simulation failure
             }
         }
+    }
+
+    // ================================================================
+    // STELLAR BROADCAST ENCODING
+    // ================================================================
+
+    #[test]
+    fn stellar_broadcast_body_jsonrpc_structure() {
+        let body = build_stellar_rpc_body(&[0u8; 10]);
+        assert_eq!(body["jsonrpc"], "2.0");
+        assert_eq!(body["id"], 1);
+        assert_eq!(body["method"], "sendTransaction");
+        assert!(
+            body["params"].is_object(),
+            "Soroban RPC uses named params (object), not positional (array)"
+        );
+        assert!(
+            body["params"]["transaction"].is_string(),
+            "params.transaction should be a string"
+        );
+    }
+
+    #[test]
+    fn stellar_broadcast_body_uses_base64_encoding() {
+        use base64::Engine;
+        let dummy_tx = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03];
+        let body = build_stellar_rpc_body(&dummy_tx);
+
+        let encoded = body["params"]["transaction"].as_str().unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("params.transaction should be valid base64");
+        assert_eq!(
+            decoded, dummy_tx,
+            "base64 should round-trip to original bytes"
+        );
+    }
+
+    #[test]
+    fn stellar_broadcast_body_is_not_hex() {
+        let dummy_tx = vec![0xFF; 50];
+        let body = build_stellar_rpc_body(&dummy_tx);
+
+        let encoded = body["params"]["transaction"].as_str().unwrap();
+        let hex_encoded = hex::encode(&dummy_tx);
+        assert_ne!(encoded, hex_encoded, "broadcast should use base64, not hex");
+    }
+
+    #[test]
+    fn stellar_broadcast_body_uses_named_params_not_array() {
+        let body = build_stellar_rpc_body(&[0u8; 5]);
+        // Soroban RPC uses named params: {"transaction": "..."}, not positional: ["..."]
+        assert!(
+            body["params"].is_object(),
+            "Stellar sendTransaction uses named params, not array"
+        );
+        assert!(body["params"]["transaction"].is_string());
     }
 }

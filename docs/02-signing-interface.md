@@ -79,6 +79,7 @@ Message signing follows chain-specific conventions:
 - **Solana**: Ed25519 signature over the raw message bytes
 - **Sui**: Intent-prefixed (scope=3) BLAKE2b-256 digest, Ed25519 signature
 - **Cosmos**: ADR-036 off-chain signing
+- **Stellar**: SEP-53 message signing
 - **Filecoin**: Blake2b-256 hash then secp256k1 signing
 
 ### `signTypedData(request: SignTypedDataRequest): Promise<SignMessageResult>`

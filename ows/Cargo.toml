@@ -1,3 +1,6 @@
 [workspace]
 resolver = "2"
 members = ["crates/ows-core", "crates/ows-signer", "crates/ows-lib", "crates/ows-pay", "crates/ows-cli"]
+
+[workspace.dependencies]
+stellar-xdr = { version = "26.0.0", features = ["curr"] }

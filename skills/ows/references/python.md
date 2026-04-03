@@ -38,7 +38,7 @@ All functions return Python dicts:
 from open_wallet_standard import generate_mnemonic, derive_address
 
 phrase = generate_mnemonic(12)         # or 24
-addr = derive_address(phrase, "evm")   # any chain: evm, solana, sui, bitcoin, cosmos, tron, ton, spark, filecoin
+addr = derive_address(phrase, "evm")   # any chain: evm, solana, sui, bitcoin, cosmos, tron, ton, stellar, spark, filecoin
 # derive_address(mnemonic, chain, index=None)
 ```
 

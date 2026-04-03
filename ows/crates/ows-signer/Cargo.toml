@@ -38,5 +38,7 @@ blake2 = "0.10"
 digest = "0.10"
 libc = "0.2"
 signal-hook = "0.4"
+stellar-strkey = "0.0.16"
+stellar-xdr = { workspace = true }
 
 [dev-dependencies]

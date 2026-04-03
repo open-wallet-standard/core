@@ -44,7 +44,7 @@ interface ApiKeyResult {
 import { generateMnemonic, deriveAddress } from "@open-wallet-standard/core";
 
 const phrase = generateMnemonic(12);       // or 24
-const addr = deriveAddress(phrase, "evm"); // any chain: evm, solana, sui, bitcoin, cosmos, tron, ton, spark, filecoin
+const addr = deriveAddress(phrase, "evm"); // any chain: evm, solana, sui, bitcoin, cosmos, tron, ton, stellar, spark, filecoin
 ```
 
 ## Wallet Management

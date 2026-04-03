@@ -79,6 +79,14 @@ impl Config {
             "eip155:999".into(),
             "https://rpc.hyperliquid.xyz/evm".into(),
         );
+        rpc.insert(
+            "stellar:testnet".into(),
+            "https://soroban-testnet.stellar.org".into(),
+        );
+        rpc.insert(
+            "stellar:futurenet".into(),
+            "https://rpc-futurenet.stellar.org".into(),
+        );
         rpc
     }
 }
