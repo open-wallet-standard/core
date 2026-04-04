@@ -10,7 +10,7 @@ pub mod rlp;
 pub mod traits;
 pub mod zeroizing;
 
-pub use chains::signer_for_chain;
+pub use chains::{signer_for_chain, signer_for_chain_info};
 pub use crypto::{
     decrypt, encrypt, encrypt_with_hkdf, CipherParams, CryptoEnvelope, CryptoError, HkdfKdfParams,
     KdfParams, KdfParamsVariant,

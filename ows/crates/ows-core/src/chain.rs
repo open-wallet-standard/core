@@ -404,7 +404,10 @@ mod tests {
         assert_eq!(ChainType::from_namespace("fil"), Some(ChainType::Filecoin));
         assert_eq!(ChainType::from_namespace("sui"), Some(ChainType::Sui));
         assert_eq!(ChainType::from_namespace("xrpl"), Some(ChainType::Xrpl));
-        assert_eq!(ChainType::from_namespace("stellar"), Some(ChainType::Stellar));
+        assert_eq!(
+            ChainType::from_namespace("stellar"),
+            Some(ChainType::Stellar)
+        );
         assert_eq!(ChainType::from_namespace("unknown"), None);
     }
 

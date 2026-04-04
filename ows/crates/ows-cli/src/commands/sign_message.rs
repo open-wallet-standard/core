@@ -1,5 +1,5 @@
 use ows_signer::chains::EvmSigner;
-use ows_signer::signer_for_chain;
+use ows_signer::signer_for_chain_info;
 
 use crate::{parse_chain, CliError};
 
@@ -39,7 +39,7 @@ pub fn run(
     let chain = parse_chain(chain_str)?;
     let key = super::resolve_signing_key(wallet_name, chain.chain_type, index)?;
 
-    let signer = signer_for_chain(chain.chain_type);
+    let signer = signer_for_chain_info(&chain);
 
     let output = if let Some(td_json) = typed_data {
         if chain.chain_type != ows_core::ChainType::Evm {

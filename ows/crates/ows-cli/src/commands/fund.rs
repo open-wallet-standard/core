@@ -38,20 +38,20 @@ pub fn run(wallet_name: &str, chain: Option<&str>, token: Option<&str>) -> Resul
     if chain_name == "stellar-testnet" {
         eprintln!("\nfunding via Friendbot is available immediately:");
         println!("https://friendbot.stellar.org/?addr={address}");
-        
+
         #[cfg(target_os = "macos")]
         {
             let _ = std::process::Command::new("open")
-                .arg(&format!("https://friendbot.stellar.org/?addr={address}"))
+                .arg(format!("https://friendbot.stellar.org/?addr={address}"))
                 .spawn();
         }
         #[cfg(target_os = "linux")]
         {
             let _ = std::process::Command::new("xdg-open")
-                .arg(&format!("https://friendbot.stellar.org/?addr={address}"))
+                .arg(format!("https://friendbot.stellar.org/?addr={address}"))
                 .spawn();
         }
-        
+
         return Ok(());
     }
 

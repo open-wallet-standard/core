@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use ows_core::{ApiKeyFile, EncryptedWallet, OwsError};
-use ows_signer::{decrypt, encrypt_with_hkdf, signer_for_chain, CryptoEnvelope, SecretBytes};
+use ows_signer::{decrypt, encrypt_with_hkdf, signer_for_chain_info, CryptoEnvelope, SecretBytes};
 
 use crate::error::OwsLibError;
 use crate::key_store;
@@ -135,7 +135,7 @@ pub fn sign_with_api_key(
     let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
 
     // 7. Sign (extract signable portion first — e.g. strips Solana sig-slot headers)
-    let signer = signer_for_chain(chain.chain_type);
+    let signer = signer_for_chain_info(chain);
     let signable = signer.extract_signable_bytes(tx_bytes)?;
     let output = signer.sign_transaction(key.expose(), signable)?;
 
@@ -194,7 +194,7 @@ pub fn sign_message_with_api_key(
     }
 
     let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
-    let signer = signer_for_chain(chain.chain_type);
+    let signer = signer_for_chain_info(chain);
     let output = signer.sign_message(key.expose(), msg_bytes)?;
 
     Ok(crate::types::SignResult {

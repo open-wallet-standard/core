@@ -3,28 +3,16 @@ use crate::traits::{ChainSigner, SignOutput, SignerError};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use ows_core::ChainType;
 use sha2::{Digest, Sha256};
-
-// ---------------------------------------------------------------------------
-// Network passphrases (SEP-0005 §3)
-// ---------------------------------------------------------------------------
+use stellar_xdr::curr::{
+    BytesM, DecoratedSignature, Limits, MuxedAccount, ReadXdr, Signature, SignatureHint,
+    Transaction as StellarTransaction, TransactionEnvelope, TransactionExt,
+    TransactionSignaturePayload, TransactionSignaturePayloadTaggedTransaction, WriteXdr,
+};
 
 /// Mainnet network passphrase.
 pub const MAINNET_PASSPHRASE: &str = "Public Global Stellar Network ; September 2015";
 /// Testnet network passphrase.
 pub const TESTNET_PASSPHRASE: &str = "Test SDF Network ; September 2015";
-
-// ---------------------------------------------------------------------------
-// XDR constants
-// ---------------------------------------------------------------------------
-
-/// ENVELOPE_TYPE_TX = 2 (4-byte big-endian).
-/// Covers both classic Payment operations and Soroban InvokeHostFunction ops —
-/// they all use the same envelope type, so Soroban support comes for free.
-const ENVELOPE_TYPE_TX: [u8; 4] = [0x00, 0x00, 0x00, 0x02];
-
-// ---------------------------------------------------------------------------
-// StrKey constants (SEP-0005 §2 / stellar-base strkey.js)
-// ---------------------------------------------------------------------------
 
 /// Version byte for an Ed25519 public key account ID ("G..." address).
 /// Value: 6 << 3 = 0x30.
@@ -42,12 +30,9 @@ const VERSION_BYTE_ACCOUNT_ID: u8 = 6 << 3; // 0x30
 /// by the OWS HD deriver (`Curve::Ed25519` rejects non-hardened components).
 ///
 /// # Signature base
-/// Stellar signs a `TransactionSignaturePayload` constructed as:
-/// ```text
-/// SHA256(network_passphrase) || ENVELOPE_TYPE_TX (4 bytes, big-endian) || tx_xdr_bytes
-/// ```
-/// Forgetting the network hash is the "Stacks mistake" — our implementation
-/// always prepends it before signing.
+/// Stellar signs the canonical XDR encoding of `TransactionSignaturePayload`.
+/// This includes the network ID and the envelope type, so mainnet and testnet
+/// signatures differ for the same transaction envelope.
 ///
 /// # Soroban (smart-contract) compatibility
 /// Classic and Soroban (InvokeHostFunction) transactions share the same
@@ -79,27 +64,95 @@ impl StellarSigner {
 
     fn signing_key(private_key: &[u8]) -> Result<SigningKey, SignerError> {
         let bytes: [u8; 32] = private_key.try_into().map_err(|_| {
-            SignerError::InvalidPrivateKey(format!(
-                "expected 32 bytes, got {}",
-                private_key.len()
-            ))
+            SignerError::InvalidPrivateKey(format!("expected 32 bytes, got {}", private_key.len()))
         })?;
         Ok(SigningKey::from_bytes(&bytes))
     }
 
-    /// Build the Stellar signature base and return its SHA256 hash.
-    ///
-    /// `sign_transaction` requires signing the raw payload, NOT a double-hash.
-    /// Ed25519 (via ed25519-dalek) signs arbitrary-length messages internally
-    /// using SHA-512, so we DO NOT pre-hash again — we just pass the full
-    /// `network_id || ENVELOPE_TYPE_TX || tx_xdr_bytes` payload directly to
-    /// the Ed25519 signer. This matches the Stellar JS/Go/Python SDK behaviour.
-    fn signature_payload(&self, tx_xdr_bytes: &[u8]) -> Vec<u8> {
-        let mut payload = Vec::with_capacity(32 + 4 + tx_xdr_bytes.len());
-        payload.extend_from_slice(&self.network_id);
-        payload.extend_from_slice(&ENVELOPE_TYPE_TX);
-        payload.extend_from_slice(tx_xdr_bytes);
-        payload
+    fn parse_transaction_envelope(tx_xdr_bytes: &[u8]) -> Result<TransactionEnvelope, SignerError> {
+        TransactionEnvelope::from_xdr(tx_xdr_bytes, Limits::none()).map_err(|e| {
+            SignerError::InvalidTransaction(format!(
+                "invalid Stellar transaction envelope XDR: {e}"
+            ))
+        })
+    }
+
+    fn v0_transaction_to_v1(tx: &stellar_xdr::curr::TransactionV0) -> StellarTransaction {
+        StellarTransaction {
+            source_account: MuxedAccount::Ed25519(tx.source_account_ed25519.clone()),
+            fee: tx.fee,
+            seq_num: tx.seq_num.clone(),
+            cond: match tx.time_bounds.clone() {
+                Some(bounds) => stellar_xdr::curr::Preconditions::Time(bounds),
+                None => stellar_xdr::curr::Preconditions::None,
+            },
+            memo: tx.memo.clone(),
+            operations: tx.operations.clone(),
+            ext: TransactionExt::V0,
+        }
+    }
+
+    fn transaction_signature_payload(
+        &self,
+        envelope: &TransactionEnvelope,
+    ) -> Result<Vec<u8>, SignerError> {
+        let tagged_transaction = match envelope {
+            TransactionEnvelope::TxV0(env) => TransactionSignaturePayloadTaggedTransaction::Tx(
+                Self::v0_transaction_to_v1(&env.tx),
+            ),
+            TransactionEnvelope::Tx(env) => {
+                TransactionSignaturePayloadTaggedTransaction::Tx(env.tx.clone())
+            }
+            TransactionEnvelope::TxFeeBump(env) => {
+                TransactionSignaturePayloadTaggedTransaction::TxFeeBump(env.tx.clone())
+            }
+        };
+
+        TransactionSignaturePayload {
+            network_id: self.network_id.into(),
+            tagged_transaction,
+        }
+        .to_xdr(Limits::none())
+        .map_err(|e| {
+            SignerError::InvalidTransaction(format!(
+                "failed to encode Stellar transaction signature payload: {e}"
+            ))
+        })
+    }
+
+    fn transaction_signature_digest(
+        &self,
+        envelope: &TransactionEnvelope,
+    ) -> Result<[u8; 32], SignerError> {
+        let payload = self.transaction_signature_payload(envelope)?;
+        Ok(Sha256::digest(payload).into())
+    }
+
+    fn verifying_key_bytes(private_key: &[u8]) -> Result<[u8; 32], SignerError> {
+        let signing_key = Self::signing_key(private_key)?;
+        Ok(*signing_key.verifying_key().as_bytes())
+    }
+
+    fn decorated_signature(signature: &SignOutput) -> Result<DecoratedSignature, SignerError> {
+        let public_key = signature.public_key.as_ref().ok_or_else(|| {
+            SignerError::InvalidTransaction(
+                "stellar signed transaction encoding requires the signer's public key".into(),
+            )
+        })?;
+        let pubkey_bytes: [u8; 32] = public_key.as_slice().try_into().map_err(|_| {
+            SignerError::InvalidTransaction(format!(
+                "stellar signer public key must be 32 bytes, got {}",
+                public_key.len()
+            ))
+        })?;
+        let sig_bytes: BytesM<64> = signature.signature.clone().try_into().map_err(|_| {
+            SignerError::InvalidTransaction("stellar signature must be 64 bytes".into())
+        })?;
+
+        Ok(DecoratedSignature {
+            hint: SignatureHint(pubkey_bytes[28..32].try_into().unwrap()),
+            signature: Signature(sig_bytes),
+        })
     }
 
     /// Encode a 32-byte Ed25519 public key to a Stellar StrKey address ("G…").
@@ -115,7 +168,7 @@ impl StellarSigner {
 
         let crc = crc16_xmodem(&payload);
         payload.push((crc & 0xFF) as u8); // low byte first (little-endian)
-        payload.push((crc >> 8) as u8);   // high byte second
+        payload.push((crc >> 8) as u8); // high byte second
 
         base32_encode(&payload)
     }
@@ -172,22 +225,11 @@ impl ChainSigner for StellarSigner {
         })
     }
 
-    /// Sign a Stellar transaction XDR body.
+    /// Sign a Stellar `TransactionEnvelope` XDR blob.
     ///
-    /// `tx_xdr_bytes` — raw XDR bytes of the **Transaction** struct (the body
-    /// only, without the envelope wrapper or signatures array). This matches
-    /// what Stellar SDKs expose as `tx.toXDR()` on the inner transaction body.
-    ///
-    /// Internally constructs the signature payload per the Stellar spec:
-    /// ```text
-    /// payload = SHA256(network_passphrase) || ENVELOPE_TYPE_TX || tx_xdr_bytes
-    /// signature = Ed25519.sign(payload)
-    /// ```
-    ///
-    /// The returned `signature` is the 64-byte Ed25519 signature that should
-    /// be placed inside the `TransactionEnvelope.signatures` array as a
-    /// `DecoratedSignature`. The caller is responsible for assembling the
-    /// final `TransactionEnvelope` XDR using the Stellar SDK.
+    /// The input must be unsigned envelope XDR, not arbitrary bytes. The signer
+    /// parses the envelope, constructs the canonical `TransactionSignaturePayload`,
+    /// hashes it with SHA-256, then signs the 32-byte digest with Ed25519.
     fn sign_transaction(
         &self,
         private_key: &[u8],
@@ -198,13 +240,62 @@ impl ChainSigner for StellarSigner {
                 "transaction XDR bytes must not be empty".into(),
             ));
         }
+        let envelope = Self::parse_transaction_envelope(tx_xdr_bytes)?;
         let signing_key = Self::signing_key(private_key)?;
-        let payload = self.signature_payload(tx_xdr_bytes);
-        let signature = signing_key.sign(&payload);
+        let digest = self.transaction_signature_digest(&envelope)?;
+        let signature = signing_key.sign(&digest);
         Ok(SignOutput {
             signature: signature.to_bytes().to_vec(),
             recovery_id: None,
-            public_key: None,
+            public_key: Some(Self::verifying_key_bytes(private_key)?.to_vec()),
+        })
+    }
+
+    fn encode_signed_transaction(
+        &self,
+        tx_xdr_bytes: &[u8],
+        signature: &SignOutput,
+    ) -> Result<Vec<u8>, SignerError> {
+        let decorated = Self::decorated_signature(signature)?;
+        let envelope = Self::parse_transaction_envelope(tx_xdr_bytes)?;
+
+        let signed_envelope = match envelope {
+            TransactionEnvelope::TxV0(mut env) => {
+                let mut signatures: Vec<_> = env.signatures.into();
+                signatures.push(decorated);
+                env.signatures = signatures.try_into().map_err(|e| {
+                    SignerError::InvalidTransaction(format!(
+                        "failed to append Stellar signature to tx_v0 envelope: {e}"
+                    ))
+                })?;
+                TransactionEnvelope::TxV0(env)
+            }
+            TransactionEnvelope::Tx(mut env) => {
+                let mut signatures: Vec<_> = env.signatures.into();
+                signatures.push(decorated);
+                env.signatures = signatures.try_into().map_err(|e| {
+                    SignerError::InvalidTransaction(format!(
+                        "failed to append Stellar signature to tx envelope: {e}"
+                    ))
+                })?;
+                TransactionEnvelope::Tx(env)
+            }
+            TransactionEnvelope::TxFeeBump(mut env) => {
+                let mut signatures: Vec<_> = env.signatures.into();
+                signatures.push(decorated);
+                env.signatures = signatures.try_into().map_err(|e| {
+                    SignerError::InvalidTransaction(format!(
+                        "failed to append Stellar signature to fee bump envelope: {e}"
+                    ))
+                })?;
+                TransactionEnvelope::TxFeeBump(env)
+            }
+        };
+
+        signed_envelope.to_xdr(Limits::none()).map_err(|e| {
+            SignerError::InvalidTransaction(format!(
+                "failed to encode signed Stellar transaction envelope: {e}"
+            ))
         })
     }
 
@@ -249,7 +340,7 @@ const BASE32_ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
 /// Encode `data` as RFC 4648 base32 without padding.
 fn base32_encode(data: &[u8]) -> String {
-    let mut output = String::with_capacity((data.len() * 8 + 4) / 5);
+    let mut output = String::with_capacity((data.len() * 8).div_ceil(5));
     let mut buffer: u32 = 0;
     let mut bits: u32 = 0;
 
@@ -279,9 +370,12 @@ mod tests {
     use crate::hd::HdDeriver;
     use crate::mnemonic::Mnemonic;
     use ed25519_dalek::Verifier;
+    use stellar_xdr::curr::{
+        Limits, Memo, Preconditions, Transaction as StellarTransaction, TransactionEnvelope,
+        TransactionExt, TransactionV1Envelope, Uint256,
+    };
 
-    const ABANDON_PHRASE: &str =
-        "abandon abandon abandon abandon abandon abandon abandon abandon \
+    const ABANDON_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon \
          abandon abandon abandon about";
 
     fn test_privkey() -> Vec<u8> {
@@ -292,6 +386,29 @@ mod tests {
             .unwrap()
             .expose()
             .to_vec()
+    }
+
+    fn test_pubkey() -> [u8; 32] {
+        StellarSigner::verifying_key_bytes(&test_privkey()).unwrap()
+    }
+
+    fn unsigned_test_envelope_xdr() -> Vec<u8> {
+        let envelope = TransactionEnvelope::Tx(TransactionV1Envelope {
+            tx: StellarTransaction {
+                source_account: MuxedAccount::Ed25519(Uint256::from(test_pubkey())),
+                fee: 100,
+                seq_num: 1_i64.into(),
+                cond: Preconditions::None,
+                memo: Memo::None,
+                operations: Vec::<stellar_xdr::curr::Operation>::new()
+                    .try_into()
+                    .unwrap(),
+                ext: TransactionExt::V0,
+            },
+            signatures: Vec::<DecoratedSignature>::new().try_into().unwrap(),
+        });
+
+        envelope.to_xdr(Limits::none()).unwrap()
     }
 
     // -----------------------------------------------------------------------
@@ -383,7 +500,9 @@ mod tests {
         let signer = StellarSigner::mainnet();
         let address = signer.derive_address(&privkey).unwrap();
         assert!(
-            address.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()),
+            address
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()),
             "Stellar address must be uppercase base32, got: {}",
             address
         );
@@ -405,17 +524,28 @@ mod tests {
 
         let addr0 = {
             let key = HdDeriver::derive_from_mnemonic(
-                &mnemonic, "", &signer.default_derivation_path(0), Curve::Ed25519,
-            ).unwrap();
+                &mnemonic,
+                "",
+                &signer.default_derivation_path(0),
+                Curve::Ed25519,
+            )
+            .unwrap();
             signer.derive_address(key.expose()).unwrap()
         };
         let addr1 = {
             let key = HdDeriver::derive_from_mnemonic(
-                &mnemonic, "", &signer.default_derivation_path(1), Curve::Ed25519,
-            ).unwrap();
+                &mnemonic,
+                "",
+                &signer.default_derivation_path(1),
+                Curve::Ed25519,
+            )
+            .unwrap();
             signer.derive_address(key.expose()).unwrap()
         };
-        assert_ne!(addr0, addr1, "different indices must produce different addresses");
+        assert_ne!(
+            addr0, addr1,
+            "different indices must produce different addresses"
+        );
     }
 
     /// CRC16-XModem known vector:
@@ -508,10 +638,11 @@ mod tests {
 
         let signing_key = SigningKey::from_bytes(&privkey.as_slice().try_into().unwrap());
         let verifying_key = signing_key.verifying_key();
-        let sig = ed25519_dalek::Signature::from_bytes(
-            &result.signature.as_slice().try_into().unwrap(),
-        );
-        verifying_key.verify(message, &sig).expect("signature must verify");
+        let sig =
+            ed25519_dalek::Signature::from_bytes(&result.signature.as_slice().try_into().unwrap());
+        verifying_key
+            .verify(message, &sig)
+            .expect("signature must verify");
     }
 
     // -----------------------------------------------------------------------
@@ -522,19 +653,20 @@ mod tests {
     fn test_sign_transaction_produces_64_byte_signature() {
         let privkey = test_privkey();
         let signer = StellarSigner::mainnet();
-        let fake_xdr = b"fake_xdr_transaction_bytes";
-        let result = signer.sign_transaction(&privkey, fake_xdr).unwrap();
+        let tx_xdr = unsigned_test_envelope_xdr();
+        let result = signer.sign_transaction(&privkey, &tx_xdr).unwrap();
         assert_eq!(result.signature.len(), 64);
         assert!(result.recovery_id.is_none());
+        assert_eq!(result.public_key.as_deref(), Some(&test_pubkey()[..]));
     }
 
     #[test]
     fn test_sign_transaction_is_deterministic() {
         let privkey = test_privkey();
         let signer = StellarSigner::mainnet();
-        let xdr = b"some_tx_xdr_bytes";
-        let sig1 = signer.sign_transaction(&privkey, xdr).unwrap();
-        let sig2 = signer.sign_transaction(&privkey, xdr).unwrap();
+        let tx_xdr = unsigned_test_envelope_xdr();
+        let sig1 = signer.sign_transaction(&privkey, &tx_xdr).unwrap();
+        let sig2 = signer.sign_transaction(&privkey, &tx_xdr).unwrap();
         assert_eq!(sig1.signature, sig2.signature);
     }
 
@@ -545,27 +677,33 @@ mod tests {
         assert!(signer.sign_transaction(&privkey, b"").is_err());
     }
 
-    /// Core interop validity check: sign_transaction(tx) must equal
-    /// sign(network_id || ENVELOPE_TYPE_TX || tx), proving the signature
-    /// base is constructed correctly.
     #[test]
-    fn test_sign_transaction_equals_sign_of_signature_payload() {
+    fn test_sign_transaction_rejects_arbitrary_bytes() {
         let privkey = test_privkey();
         let signer = StellarSigner::mainnet();
-        let tx_xdr = b"arbitrary_xdr_for_test";
+        assert!(signer
+            .sign_transaction(&privkey, b"fake_xdr_transaction_bytes")
+            .is_err());
+    }
 
-        let sig_tx = signer.sign_transaction(&privkey, tx_xdr).unwrap();
+    /// Core interop validity check: sign_transaction(tx) must equal
+    /// sign(SHA256(network_id || ENVELOPE_TYPE_TX || tx)), proving the
+    /// signature base is constructed correctly.
+    #[test]
+    fn test_sign_transaction_equals_sign_of_signature_payload_digest() {
+        let privkey = test_privkey();
+        let signer = StellarSigner::mainnet();
+        let tx_xdr = unsigned_test_envelope_xdr();
+        let envelope = StellarSigner::parse_transaction_envelope(&tx_xdr).unwrap();
 
-        // Build the payload manually
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&signer.network_id);
-        payload.extend_from_slice(&ENVELOPE_TYPE_TX);
-        payload.extend_from_slice(tx_xdr);
-        let sig_direct = signer.sign(&privkey, &payload).unwrap();
+        let sig_tx = signer.sign_transaction(&privkey, &tx_xdr).unwrap();
+
+        let digest = signer.transaction_signature_digest(&envelope).unwrap();
+        let sig_direct = signer.sign(&privkey, &digest).unwrap();
 
         assert_eq!(
             sig_tx.signature, sig_direct.signature,
-            "sign_transaction must equal sign(network_id || ENVELOPE_TYPE_TX || tx)"
+            "sign_transaction must equal signing the SHA256 of the canonical TransactionSignaturePayload XDR"
         );
     }
 
@@ -576,10 +714,10 @@ mod tests {
         let privkey = test_privkey();
         let mainnet = StellarSigner::mainnet();
         let testnet = StellarSigner::testnet();
-        let tx_xdr = b"same_xdr_bytes";
+        let tx_xdr = unsigned_test_envelope_xdr();
 
-        let sig_main = mainnet.sign_transaction(&privkey, tx_xdr).unwrap();
-        let sig_test = testnet.sign_transaction(&privkey, tx_xdr).unwrap();
+        let sig_main = mainnet.sign_transaction(&privkey, &tx_xdr).unwrap();
+        let sig_test = testnet.sign_transaction(&privkey, &tx_xdr).unwrap();
 
         assert_ne!(
             sig_main.signature, sig_test.signature,
@@ -587,30 +725,51 @@ mod tests {
         );
     }
 
-    /// The signing payload verifies against the correct Ed25519 public key,
-    /// confirming end-to-end correctness of the full pipeline.
+    /// The signing payload digest verifies against the correct Ed25519 public
+    /// key, confirming end-to-end correctness of the full pipeline.
     #[test]
-    fn test_sign_transaction_verifies_with_pubkey() {
+    fn test_sign_transaction_verifies_payload_digest_with_pubkey() {
         let privkey = test_privkey();
         let signer = StellarSigner::mainnet();
-        let tx_xdr = b"payment_tx_xdr";
+        let tx_xdr = unsigned_test_envelope_xdr();
+        let envelope = StellarSigner::parse_transaction_envelope(&tx_xdr).unwrap();
 
-        let result = signer.sign_transaction(&privkey, tx_xdr).unwrap();
+        let result = signer.sign_transaction(&privkey, &tx_xdr).unwrap();
 
-        // Build expected payload
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&signer.network_id);
-        payload.extend_from_slice(&ENVELOPE_TYPE_TX);
-        payload.extend_from_slice(tx_xdr);
+        let digest = signer.transaction_signature_digest(&envelope).unwrap();
 
         let signing_key = SigningKey::from_bytes(&privkey.as_slice().try_into().unwrap());
         let verifying_key = signing_key.verifying_key();
-        let sig = ed25519_dalek::Signature::from_bytes(
-            &result.signature.as_slice().try_into().unwrap(),
-        );
+        let sig =
+            ed25519_dalek::Signature::from_bytes(&result.signature.as_slice().try_into().unwrap());
         verifying_key
-            .verify(&payload, &sig)
-            .expect("signature must verify against the full payload");
+            .verify(&digest, &sig)
+            .expect("signature must verify against the payload digest");
+    }
+
+    #[test]
+    fn test_encode_signed_transaction_appends_decorated_signature() {
+        let privkey = test_privkey();
+        let signer = StellarSigner::mainnet();
+        let tx_xdr = unsigned_test_envelope_xdr();
+
+        let signed = signer
+            .encode_signed_transaction(
+                &tx_xdr,
+                &signer.sign_transaction(&privkey, &tx_xdr).unwrap(),
+            )
+            .unwrap();
+        let envelope = TransactionEnvelope::from_xdr(&signed, Limits::none()).unwrap();
+
+        match envelope {
+            TransactionEnvelope::Tx(env) => {
+                assert_eq!(env.signatures.len(), 1);
+                let expected_hint: [u8; 4] = test_pubkey()[28..32].try_into().unwrap();
+                assert_eq!(env.signatures[0].hint.0, expected_hint);
+                assert_eq!(env.signatures[0].signature.0.len(), 64);
+            }
+            other => panic!("expected tx envelope, got {:?}", other.name()),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -668,8 +827,9 @@ mod tests {
     #[test]
     fn test_sign_transaction_invalid_key_length() {
         let signer = StellarSigner::mainnet();
-        assert!(signer.sign_transaction(&[], b"xdr").is_err());
-        assert!(signer.sign_transaction(&[0u8; 16], b"xdr").is_err());
+        let tx_xdr = unsigned_test_envelope_xdr();
+        assert!(signer.sign_transaction(&[], &tx_xdr).is_err());
+        assert!(signer.sign_transaction(&[0u8; 16], &tx_xdr).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -688,9 +848,10 @@ mod tests {
         // Verify
         let signing_key = SigningKey::from_bytes(&privkey.as_slice().try_into().unwrap());
         let verifying_key = signing_key.verifying_key();
-        let sig = ed25519_dalek::Signature::from_bytes(
-            &result.signature.as_slice().try_into().unwrap(),
-        );
-        verifying_key.verify(message, &sig).expect("sign_message must verify");
+        let sig =
+            ed25519_dalek::Signature::from_bytes(&result.signature.as_slice().try_into().unwrap());
+        verifying_key
+            .verify(message, &sig)
+            .expect("sign_message must verify");
     }
 }
