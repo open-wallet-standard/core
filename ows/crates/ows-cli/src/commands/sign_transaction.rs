@@ -1,4 +1,4 @@
-use ows_signer::signer_for_chain;
+use ows_signer::signer_for_chain_info;
 
 use crate::{parse_chain, CliError};
 
@@ -34,7 +34,7 @@ pub fn run(
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| CliError::InvalidArgs(format!("invalid hex transaction: {e}")))?;
 
-    let signer = signer_for_chain(chain.chain_type);
+    let signer = signer_for_chain_info(&chain);
     let signable = signer.extract_signable_bytes(&tx_bytes)?;
     let output = signer.sign_transaction(key.expose(), signable)?;
 

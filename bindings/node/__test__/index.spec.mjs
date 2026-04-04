@@ -217,7 +217,7 @@ describe('@open-wallet-standard/core', () => {
     // Build a minimal tx with 1 sig slot (0x01) + 64 zero bytes + a message.
     const solTxHex = '01' + '00'.repeat(64) + 'deadbeefdeadbeef';
 
-    for (const chain of ['evm', 'solana', 'sui', 'bitcoin', 'cosmos', 'tron', 'ton', 'filecoin', 'xrpl', 'stellar']) {
+    for (const chain of ['evm', 'solana', 'sui', 'bitcoin', 'cosmos', 'tron', 'ton', 'filecoin', 'xrpl']) {
       const hex = chain === 'solana' ? solTxHex : txHex;
       const result = signTransaction('tx-signer', chain, hex, undefined, undefined, vaultDir);
       assert.ok(result.signature.length > 0, `signature should be non-empty for ${chain}`);

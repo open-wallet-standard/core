@@ -23,10 +23,19 @@ pub use self::tron::TronSigner;
 pub use self::xrpl::XrplSigner;
 
 use crate::traits::ChainSigner;
-use ows_core::ChainType;
+use ows_core::{Chain, ChainType};
 
 /// Get a default signer for a given chain type.
 pub fn signer_for_chain(chain: ChainType) -> Box<dyn ChainSigner> {
+    signer_for_chain_id(chain, None)
+}
+
+/// Get a signer for a specific chain ID when network-specific behavior matters.
+pub fn signer_for_chain_info(chain: &Chain) -> Box<dyn ChainSigner> {
+    signer_for_chain_id(chain.chain_type, Some(chain.chain_id))
+}
+
+fn signer_for_chain_id(chain: ChainType, chain_id: Option<&str>) -> Box<dyn ChainSigner> {
     match chain {
         ChainType::Evm => Box::new(EvmSigner),
         ChainType::Solana => Box::new(SolanaSigner),
@@ -38,7 +47,9 @@ pub fn signer_for_chain(chain: ChainType) -> Box<dyn ChainSigner> {
         ChainType::Filecoin => Box::new(FilecoinSigner),
         ChainType::Sui => Box::new(SuiSigner),
         ChainType::Xrpl => Box::new(XrplSigner),
-        // Stellar defaults to mainnet; use StellarSigner::testnet() for testnet ops
-        ChainType::Stellar => Box::new(StellarSigner::mainnet()),
+        ChainType::Stellar => match chain_id {
+            Some("stellar:testnet") => Box::new(StellarSigner::testnet()),
+            _ => Box::new(StellarSigner::mainnet()),
+        },
     }
 }
