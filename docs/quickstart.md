@@ -82,6 +82,34 @@ ows sign message --wallet agent-treasury --chain ethereum --message "hello"
 ows sign tx --wallet agent-treasury --chain solana --tx "deadbeef..."
 ```
 
+## Configure RPC endpoints
+
+By default, OWS uses built-in public RPC endpoints. For production or team workflows, you can configure custom endpoints via RPC profiles.
+
+```bash
+# Add a custom endpoint to a named profile
+ows rpc add --name team-dev --chain evm --url https://dev-eth.example.com
+
+# Add multiple chains to the same profile
+ows rpc add --name team-dev \
+  --chain evm --url https://dev-eth.example.com \
+  --chain solana --url https://dev-sol.example.com
+
+# List configured profiles
+ows rpc list
+
+# Activate a profile (signing will use endpoints from this profile)
+ows rpc use --name team-dev
+
+# Show the active profile
+ows rpc show
+
+# Clear the active profile (revert to global/default endpoints)
+ows rpc clear
+```
+
+When a profile is active, its endpoints take precedence over built-in defaults when signing or broadcasting transactions. The `--rpc-url` argument (supported by some commands) overrides everything.
+
 ## Use in code
 
 ### Node.js

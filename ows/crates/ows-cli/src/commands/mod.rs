@@ -6,6 +6,7 @@ pub mod info;
 pub mod key;
 pub mod pay;
 pub mod policy;
+pub mod rpc;
 pub mod send_transaction;
 pub mod sign_message;
 pub mod sign_transaction;

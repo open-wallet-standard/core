@@ -92,6 +92,54 @@ Each wallet is stored as a single JSON file extending the Ethereum Keystore v3 s
 | `key_type` | string | yes | `mnemonic` (BIP-39) or `private_key` (raw) |
 | `metadata` | object | no | Extensible metadata |
 
+## Config File Format
+
+The `~/.ows/config.json` file stores global configuration including RPC endpoint profiles.
+
+```json
+{
+  "vault_path": "~/.ows",
+  "rpc": {
+    "eip155:1": "https://eth.llamarpc.com",
+    "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": "https://api.mainnet-beta.solana.com"
+  },
+  "rpc_config": {
+    "activeProfile": "team-dev",
+    "profiles": {
+      "team-dev": {
+        "chains": {
+          "eip155:1": { "url": "https://dev-eth.example.com" },
+          "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": { "url": "https://dev-sol.example.com" }
+        }
+      },
+      "mainnet-evm": {
+        "chains": {
+          "eip155:1": { "url": "https://mainnet-eth.example.com" }
+        }
+      }
+    }
+  }
+}
+```
+
+### Field Definitions
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `vault_path` | string | yes | Path to the vault directory |
+| `rpc` | object | yes | Global RPC endpoints (chain_id → URL). These are the fallback endpoints used when no profile is active. |
+| `rpc_config` | object | no | Structured RPC profile configuration |
+| `rpc_config.activeProfile` | string | no | Name of the currently active RPC profile |
+| `rpc_config.profiles` | object | no | Named profiles, each containing chain-specific endpoint overrides |
+
+The `rpc` field uses chain identifiers like `eip155:1` (Ethereum mainnet), `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` (Solana mainnet), or friendly aliases like `evm` or `solana`.
+
+When resolving RPC endpoints, the following precedence applies:
+1. Explicit `--rpc-url` argument (if supported by the command)
+2. Active profile endpoint for the requested chain
+3. Global `rpc` endpoints
+4. Built-in defaults
+
 ## API Key File Format
 
 Each API key is stored as a JSON file in `~/.ows/keys/`. The key file contains metadata, policy attachments, and **encrypted copies of wallet secrets** re-encrypted under the API token (see [Policy Engine](03-policy-engine) for the full cryptographic design).

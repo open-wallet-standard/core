@@ -130,6 +130,12 @@ Agent / CLI / App
 | `ows key create` | Create an API key for agent access |
 | `ows key list` | List all API keys |
 | `ows key revoke` | Revoke an API key |
+| `ows rpc add` | Add RPC endpoint(s) to a profile |
+| `ows rpc list` | List all RPC profiles |
+| `ows rpc show` | Show active or named profile |
+| `ows rpc use` | Set the active RPC profile |
+| `ows rpc remove` | Delete an RPC profile |
+| `ows rpc clear` | Clear the active profile |
 | `ows update` | Update ows and bindings |
 | `ows uninstall` | Remove ows from the system |
 

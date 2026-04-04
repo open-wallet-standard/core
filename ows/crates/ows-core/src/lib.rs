@@ -12,7 +12,7 @@ pub use caip::ChainId;
 pub use chain::{
     default_chain_for_type, parse_chain, Chain, ChainType, ALL_CHAIN_TYPES, KNOWN_CHAINS,
 };
-pub use config::Config;
+pub use config::{ChainEndpoint, Config, RpcConfig, RpcProfile};
 pub use error::{OwsError, OwsErrorCode};
 pub use policy::{Policy, PolicyAction, PolicyContext, PolicyResult, PolicyRule};
 pub use types::*;
