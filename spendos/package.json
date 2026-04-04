@@ -1,0 +1,35 @@
+{
+  "name": "spendos",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@prisma/client": "5.22.0",
+    "autoprefixer": "^10.4.27",
+    "framer-motion": "^12.38.0",
+    "lucide-react": "^1.7.0",
+    "next": "^16.2.2",
+    "postcss": "^8.5.8",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "uuid": "^13.0.0",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20.19.39",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19",
+    "@types/uuid": "^10.0.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.2",
+    "prisma": "5.22.0",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,48 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Agent {
+  id            String        @id @default(uuid())
+  name          String
+  apiKeyHash    String        @unique
+  apiKeyPrefix  String        @default("sk_live_")
+  wallet        String        @default("")
+  dailyLimit    Float         @default(100)
+  monthlyLimit Float         @default(1000)
+  chains       String        @default("ethereum,polygon")
+  status        String        @default("active")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  transactions  Transaction[]
+  spendLogs     SpendLog[]
+}
+
+model Transaction {
+  id            String   @id @default(uuid())
+  agentId       String
+  agent         Agent    @relation(fields: [agentId], references: [id])
+  hash          String   @unique
+  chain         String
+  amount        Float
+  currency      String   @default("USDC")
+  toAddress     String
+  status        String   @default("pending")
+  createdAt     DateTime @default(now())
+}
+
+model SpendLog {
+  id        String   @id @default(uuid())
+  agentId   String
+  agent     Agent    @relation(fields: [agentId], references: [id])
+  amount    Float
+  currency  String   @default("USDC")
+  action    String
+  details   String
+  createdAt DateTime @default(now())
+}

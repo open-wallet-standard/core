@@ -148,6 +148,48 @@ Reference implementation documentation:
 - [Python SDK](docs/sdk-python.md)
 - [Policy Engine Implementation Guide](docs/policy-engine-implementation.md)
 
+## Hackathon: Track 02 - Agent Spend Governance & Identity
+
+### SpendOS Dashboard
+**Stripe Dashboard for AI Agents** — Give agents wallets, not blank checks.
+
+**Live Demo:** https://spendos-ten.vercel.app
+
+SpendOS demonstrates:
+- **Social Recovery** — Guardian-based wallet recovery with Shamir Secret Sharing
+- **Dead Man's Switch** — Auto-revoke agent access after inactivity
+- **Spending Controls** — Per-agent limits, chain restrictions, real-time monitoring
+- **API Key Management** — Issue, rotate, and revoke agent access
+
+```
+┌─────────────┐      ┌──────────────┐      ┌─────────┐
+│  AI Agent  │ ──── │   SpendOS   │ ──── │   OWS   │
+│             │      │  Dashboard  │      │ Wallet  │
+└─────────────┘      └──────────────┘      └─────────┘
+```
+
+### Guardian Recovery (PR #182)
+
+Social recovery + dead man's switch using Shamir Secret Sharing:
+- Split wallet secrets into N encrypted shards
+- Require M-of-N guardians to recover
+- Time-locked recovery window
+- Emergency freeze by guardians
+
+```bash
+# Set up guardians for a wallet
+ows guardian setup --wallet my-agent --threshold 2 --guardians-file guardians.json
+
+# Initiate recovery (guardian action)
+ows guardian recover init --wallet my-agent --guardian-id guardian-1
+
+# Submit shards
+ows guardian recover submit --wallet my-agent --guardian-id guardian-1
+
+# Complete recovery
+ows guardian recover complete --wallet my-agent --new-name recovered-agent
+```
+
 ## License
 
 MIT
