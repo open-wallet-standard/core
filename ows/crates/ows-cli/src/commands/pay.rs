@@ -105,7 +105,9 @@ pub fn run(
 
     let result = rt.block_on(ows_pay::pay(&wallet, url, method, body))?;
 
-    if let Some(ref payment) = result.payment {
+    if result.status >= 400 {
+        eprintln!("HTTP {} — payment rejected by server", result.status);
+    } else if let Some(ref payment) = result.payment {
         if !payment.amount.is_empty() {
             eprintln!(
                 "Paid {} on {} via {}",
@@ -114,10 +116,6 @@ pub fn run(
         } else {
             eprintln!("Paid via {}", result.protocol);
         }
-    }
-
-    if result.status >= 400 {
-        eprintln!("HTTP {}", result.status);
     }
 
     println!("{}", result.body);
