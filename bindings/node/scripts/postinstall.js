@@ -11,14 +11,15 @@
  *
  * Safety rules:
  *   - Only runs on global installs (skips `npm install` / `npm ci`)
- *   - Only runs in interactive terminals (skips CI / piped stdin)
+ *   - Only runs in interactive terminals (silent in CI / piped stdin)
+ *   - Only runs once per $HOME (persists marker at ~/.ows/.onboarding-done)
  *   - Entire main() is wrapped in .catch(() => {}) — never breaks installation
  *   - Zero external dependencies — Node.js built-ins only
  */
 
 const { createInterface } = require("readline");
 const { execFileSync, spawn } = require("child_process");
-const { existsSync } = require("fs");
+const { existsSync, mkdirSync, writeFileSync } = require("fs");
 const { join } = require("path");
 
 // ── ANSI helpers ────────────────────────────────────────────────────────────
@@ -140,26 +141,32 @@ function skillInstalled() {
   return dirs.some((d) => existsSync(d));
 }
 
+function onboardingDone() {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  return existsSync(join(home, ".ows", ".onboarding-done"));
+}
+
+function markOnboardingDone() {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const dir = join(home, ".ows");
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, ".onboarding-done"), "", "utf8");
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
   // Only run on global installs
   if (process.env.npm_config_global !== "true") return;
 
-  // Only run in interactive terminals
-  if (!process.stdin.isTTY) {
-    writeln();
-    writeln(`${GREEN}${BOLD}Open Wallet Standard CLI installed!${RESET}`);
-    writeln();
-    writeln(
-      `${DIM}Tip: Run 'npx -y skills add https://github.com/open-wallet-standard/core --skill ows' to install the AI coding skill.${RESET}`
-    );
-    writeln(
-      `${DIM}Tip: Run 'ows wallet create --name my-wallet' to create your first wallet.${RESET}`
-    );
-    writeln();
-    return;
-  }
+  // Only run in interactive terminals — stay silent in CI / piped stdin
+  if (!process.stdin.isTTY) return;
+
+  // Only run once — skip if the user already completed onboarding
+  if (onboardingDone()) return;
+
+  // Mark onboarding as shown so upgrades won't re-prompt
+  markOnboardingDone();
 
   writeln();
   writeln(`${GREEN}${BOLD}✦ Open Wallet Standard CLI installed!${RESET}`);
