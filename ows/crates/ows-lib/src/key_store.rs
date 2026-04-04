@@ -149,6 +149,79 @@ pub fn delete_api_key(id: &str, vault_path: Option<&Path>) -> Result<(), OwsLibE
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Store-aware API key CRUD
+// ---------------------------------------------------------------------------
+
+use ows_core::{store_set_indexed, store_remove_indexed, Store};
+
+/// Save an API key via a Store.
+pub fn save_api_key_with_store(
+    key: &ApiKeyFile,
+    store: &dyn Store,
+) -> Result<(), OwsLibError> {
+    let store_key = format!("keys/{}", key.id);
+    let json = serde_json::to_string_pretty(key)?;
+    store_set_indexed(store, &store_key, &json, "keys")?;
+    Ok(())
+}
+
+/// Load an API key by ID via a Store.
+pub fn load_api_key_with_store(
+    id: &str,
+    store: &dyn Store,
+) -> Result<ApiKeyFile, OwsLibError> {
+    let key = format!("keys/{id}");
+    match store.get(&key)? {
+        Some(json) => Ok(serde_json::from_str(&json)?),
+        None => Err(OwsLibError::Core(ows_core::OwsError::ApiKeyNotFound)),
+    }
+}
+
+/// Look up an API key by token hash via a Store.
+pub fn load_api_key_by_token_hash_with_store(
+    token_hash: &str,
+    store: &dyn Store,
+) -> Result<ApiKeyFile, OwsLibError> {
+    let keys = list_api_keys_with_store(store)?;
+    keys.into_iter()
+        .find(|k| k.token_hash == token_hash)
+        .ok_or(OwsLibError::Core(ows_core::OwsError::ApiKeyNotFound))
+}
+
+/// List all API keys via a Store, sorted by creation time (newest first).
+pub fn list_api_keys_with_store(
+    store: &dyn Store,
+) -> Result<Vec<ApiKeyFile>, OwsLibError> {
+    let store_keys = store.list("keys")?;
+    let mut keys = Vec::new();
+
+    for store_key in store_keys {
+        if let Some(json) = store.get(&store_key)? {
+            match serde_json::from_str::<ApiKeyFile>(&json) {
+                Ok(k) => keys.push(k),
+                Err(e) => eprintln!("warning: skipping {store_key}: {e}"),
+            }
+        }
+    }
+
+    keys.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(keys)
+}
+
+/// Delete an API key by ID via a Store.
+pub fn delete_api_key_with_store(
+    id: &str,
+    store: &dyn Store,
+) -> Result<(), OwsLibError> {
+    let key = format!("keys/{id}");
+    if store.get(&key)?.is_none() {
+        return Err(OwsLibError::Core(ows_core::OwsError::ApiKeyNotFound));
+    }
+    store_remove_indexed(store, &key, "keys")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +384,74 @@ mod tests {
             "keys dir should have 0700 permissions, got {:04o}",
             dir_mode
         );
+    }
+
+    // == Store-aware API key CRUD tests ==
+
+    #[test]
+    fn store_save_and_load_api_key() {
+        let store = ows_core::InMemoryStore::new();
+        let key = test_key("sk1", "store-key", "ows_key_test");
+
+        save_api_key_with_store(&key, &store).unwrap();
+        let loaded = load_api_key_with_store("sk1", &store).unwrap();
+        assert_eq!(loaded.id, "sk1");
+        assert_eq!(loaded.name, "store-key");
+    }
+
+    #[test]
+    fn store_load_api_key_not_found() {
+        let store = ows_core::InMemoryStore::new();
+        let result = load_api_key_with_store("nonexistent", &store);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn store_load_api_key_by_token_hash() {
+        let store = ows_core::InMemoryStore::new();
+        let token = "ows_key_findme";
+        let key = test_key("sk2", "finder", token);
+
+        save_api_key_with_store(&key, &store).unwrap();
+        let found = load_api_key_by_token_hash_with_store(&hash_token(token), &store).unwrap();
+        assert_eq!(found.id, "sk2");
+    }
+
+    #[test]
+    fn store_list_api_keys_sorted() {
+        let store = ows_core::InMemoryStore::new();
+
+        let mut k1 = test_key("k1", "first", "t1");
+        k1.created_at = "2026-03-20T10:00:00Z".to_string();
+
+        let mut k2 = test_key("k2", "second", "t2");
+        k2.created_at = "2026-03-22T10:00:00Z".to_string();
+
+        save_api_key_with_store(&k1, &store).unwrap();
+        save_api_key_with_store(&k2, &store).unwrap();
+
+        let keys = list_api_keys_with_store(&store).unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].id, "k2"); // newest first
+        assert_eq!(keys[1].id, "k1");
+    }
+
+    #[test]
+    fn store_delete_api_key() {
+        let store = ows_core::InMemoryStore::new();
+        let key = test_key("del-k", "delete-me", "token");
+
+        save_api_key_with_store(&key, &store).unwrap();
+        assert_eq!(list_api_keys_with_store(&store).unwrap().len(), 1);
+
+        delete_api_key_with_store("del-k", &store).unwrap();
+        assert_eq!(list_api_keys_with_store(&store).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn store_delete_api_key_not_found() {
+        let store = ows_core::InMemoryStore::new();
+        let result = delete_api_key_with_store("nonexistent", &store);
+        assert!(result.is_err());
     }
 }

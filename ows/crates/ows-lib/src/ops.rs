@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Command;
 
 use ows_core::{
-    default_chain_for_type, ChainType, Config, EncryptedWallet, KeyType, WalletAccount,
+    default_chain_for_type, ChainType, Config, EncryptedWallet, KeyType, Store, WalletAccount,
     ALL_CHAIN_TYPES,
 };
 use ows_signer::{
@@ -196,6 +196,17 @@ pub fn create_wallet(
     passphrase: Option<&str>,
     vault_path: Option<&Path>,
 ) -> Result<WalletInfo, OwsLibError> {
+    let store = crate::FsStore::new(vault_path);
+    create_wallet_with_store(name, words, passphrase, &store)
+}
+
+/// Create a new universal wallet using a pluggable Store.
+pub fn create_wallet_with_store(
+    name: &str,
+    words: Option<u32>,
+    passphrase: Option<&str>,
+    store: &dyn Store,
+) -> Result<WalletInfo, OwsLibError> {
     let passphrase = passphrase.unwrap_or("");
     let words = words.unwrap_or(12);
     let strength = match words {
@@ -204,7 +215,7 @@ pub fn create_wallet(
         _ => return Err(OwsLibError::InvalidInput("words must be 12 or 24".into())),
     };
 
-    if vault::wallet_name_exists(name, vault_path)? {
+    if vault::wallet_name_exists_with_store(name, store)? {
         return Err(OwsLibError::WalletNameExists(name.to_string()));
     }
 
@@ -225,7 +236,7 @@ pub fn create_wallet(
         KeyType::Mnemonic,
     );
 
-    vault::save_encrypted_wallet(&wallet, vault_path)?;
+    vault::save_wallet_with_store(&wallet, store)?;
     Ok(wallet_to_info(&wallet))
 }
 
@@ -237,10 +248,22 @@ pub fn import_wallet_mnemonic(
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<WalletInfo, OwsLibError> {
+    let store = crate::FsStore::new(vault_path);
+    import_wallet_mnemonic_with_store(name, mnemonic_phrase, passphrase, index, &store)
+}
+
+/// Import a wallet from a mnemonic phrase using a pluggable Store.
+pub fn import_wallet_mnemonic_with_store(
+    name: &str,
+    mnemonic_phrase: &str,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    store: &dyn Store,
+) -> Result<WalletInfo, OwsLibError> {
     let passphrase = passphrase.unwrap_or("");
     let index = index.unwrap_or(0);
 
-    if vault::wallet_name_exists(name, vault_path)? {
+    if vault::wallet_name_exists_with_store(name, store)? {
         return Err(OwsLibError::WalletNameExists(name.to_string()));
     }
 
@@ -261,7 +284,7 @@ pub fn import_wallet_mnemonic(
         KeyType::Mnemonic,
     );
 
-    vault::save_encrypted_wallet(&wallet, vault_path)?;
+    vault::save_wallet_with_store(&wallet, store)?;
     Ok(wallet_to_info(&wallet))
 }
 
@@ -289,23 +312,36 @@ pub fn import_wallet_private_key(
     secp256k1_key_hex: Option<&str>,
     ed25519_key_hex: Option<&str>,
 ) -> Result<WalletInfo, OwsLibError> {
+    let store = crate::FsStore::new(vault_path);
+    import_wallet_private_key_with_store(
+        name, private_key_hex, chain, passphrase, &store,
+        secp256k1_key_hex, ed25519_key_hex,
+    )
+}
+
+/// Import a wallet from a private key using a pluggable Store.
+pub fn import_wallet_private_key_with_store(
+    name: &str,
+    private_key_hex: &str,
+    chain: Option<&str>,
+    passphrase: Option<&str>,
+    store: &dyn Store,
+    secp256k1_key_hex: Option<&str>,
+    ed25519_key_hex: Option<&str>,
+) -> Result<WalletInfo, OwsLibError> {
     let passphrase = passphrase.unwrap_or("");
 
-    if vault::wallet_name_exists(name, vault_path)? {
+    if vault::wallet_name_exists_with_store(name, store)? {
         return Err(OwsLibError::WalletNameExists(name.to_string()));
     }
 
     let keys = match (secp256k1_key_hex, ed25519_key_hex) {
-        // Both curve keys explicitly provided — use them directly
         (Some(secp_hex), Some(ed_hex)) => KeyPair {
             secp256k1: decode_hex_key(secp_hex)?,
             ed25519: decode_hex_key(ed_hex)?,
         },
-        // Existing single-key behavior
         _ => {
             let key_bytes = decode_hex_key(private_key_hex)?;
-
-            // Determine curve from the source chain (default: secp256k1)
             let source_curve = match chain {
                 Some(c) => {
                     let parsed = parse_chain(c)?;
@@ -314,7 +350,6 @@ pub fn import_wallet_private_key(
                 None => ows_signer::Curve::Secp256k1,
             };
 
-            // Build key pair: provided key for its curve, random 32 bytes for the other
             let mut other_key = vec![0u8; 32];
             getrandom::getrandom(&mut other_key).map_err(|e| {
                 OwsLibError::InvalidInput(format!("failed to generate random key: {e}"))
@@ -340,11 +375,9 @@ pub fn import_wallet_private_key(
     };
 
     let accounts = derive_all_accounts_from_keys(&keys)?;
-
     let payload = keys.to_json_bytes();
     let crypto_envelope = encrypt(&payload, passphrase)?;
     let crypto_json = serde_json::to_value(&crypto_envelope)?;
-
     let wallet_id = uuid::Uuid::new_v4().to_string();
 
     let wallet = EncryptedWallet::new(
@@ -355,26 +388,50 @@ pub fn import_wallet_private_key(
         KeyType::PrivateKey,
     );
 
-    vault::save_encrypted_wallet(&wallet, vault_path)?;
+    vault::save_wallet_with_store(&wallet, store)?;
     Ok(wallet_to_info(&wallet))
 }
 
 /// List all wallets in the vault.
 pub fn list_wallets(vault_path: Option<&Path>) -> Result<Vec<WalletInfo>, OwsLibError> {
-    let wallets = vault::list_encrypted_wallets(vault_path)?;
+    let store = crate::FsStore::new(vault_path);
+    list_wallets_with_store(&store)
+}
+
+/// List all wallets using a pluggable Store.
+pub fn list_wallets_with_store(store: &dyn Store) -> Result<Vec<WalletInfo>, OwsLibError> {
+    let wallets = vault::list_wallets_with_store(store)?;
     Ok(wallets.iter().map(wallet_to_info).collect())
 }
 
 /// Get a single wallet by name or ID.
 pub fn get_wallet(name_or_id: &str, vault_path: Option<&Path>) -> Result<WalletInfo, OwsLibError> {
-    let wallet = vault::load_wallet_by_name_or_id(name_or_id, vault_path)?;
+    let store = crate::FsStore::new(vault_path);
+    get_wallet_with_store(name_or_id, &store)
+}
+
+/// Get a single wallet by name or ID using a pluggable Store.
+pub fn get_wallet_with_store(
+    name_or_id: &str,
+    store: &dyn Store,
+) -> Result<WalletInfo, OwsLibError> {
+    let wallet = vault::load_wallet_by_name_or_id_with_store(name_or_id, store)?;
     Ok(wallet_to_info(&wallet))
 }
 
 /// Delete a wallet from the vault.
 pub fn delete_wallet(name_or_id: &str, vault_path: Option<&Path>) -> Result<(), OwsLibError> {
-    let wallet = vault::load_wallet_by_name_or_id(name_or_id, vault_path)?;
-    vault::delete_wallet_file(&wallet.id, vault_path)?;
+    let store = crate::FsStore::new(vault_path);
+    delete_wallet_with_store(name_or_id, &store)
+}
+
+/// Delete a wallet using a pluggable Store.
+pub fn delete_wallet_with_store(
+    name_or_id: &str,
+    store: &dyn Store,
+) -> Result<(), OwsLibError> {
+    let wallet = vault::load_wallet_by_name_or_id_with_store(name_or_id, store)?;
+    vault::delete_wallet_with_store(&wallet.id, store)?;
     Ok(())
 }
 
@@ -385,8 +442,18 @@ pub fn export_wallet(
     passphrase: Option<&str>,
     vault_path: Option<&Path>,
 ) -> Result<String, OwsLibError> {
+    let store = crate::FsStore::new(vault_path);
+    export_wallet_with_store(name_or_id, passphrase, &store)
+}
+
+/// Export a wallet's secret using a pluggable Store.
+pub fn export_wallet_with_store(
+    name_or_id: &str,
+    passphrase: Option<&str>,
+    store: &dyn Store,
+) -> Result<String, OwsLibError> {
     let passphrase = passphrase.unwrap_or("");
-    let wallet = vault::load_wallet_by_name_or_id(name_or_id, vault_path)?;
+    let wallet = vault::load_wallet_by_name_or_id_with_store(name_or_id, store)?;
     let envelope: CryptoEnvelope = serde_json::from_value(wallet.crypto.clone())?;
     let secret = decrypt(&envelope, passphrase)?;
 
@@ -395,7 +462,6 @@ pub fn export_wallet(
             OwsLibError::InvalidInput("wallet contains invalid UTF-8 mnemonic".into())
         }),
         KeyType::PrivateKey => {
-            // Return the JSON key pair as-is
             String::from_utf8(secret.expose().to_vec())
                 .map_err(|_| OwsLibError::InvalidInput("wallet contains invalid key data".into()))
         }
@@ -408,18 +474,28 @@ pub fn rename_wallet(
     new_name: &str,
     vault_path: Option<&Path>,
 ) -> Result<(), OwsLibError> {
-    let mut wallet = vault::load_wallet_by_name_or_id(name_or_id, vault_path)?;
+    let store = crate::FsStore::new(vault_path);
+    rename_wallet_with_store(name_or_id, new_name, &store)
+}
+
+/// Rename a wallet using a pluggable Store.
+pub fn rename_wallet_with_store(
+    name_or_id: &str,
+    new_name: &str,
+    store: &dyn Store,
+) -> Result<(), OwsLibError> {
+    let mut wallet = vault::load_wallet_by_name_or_id_with_store(name_or_id, store)?;
 
     if wallet.name == new_name {
         return Ok(());
     }
 
-    if vault::wallet_name_exists(new_name, vault_path)? {
+    if vault::wallet_name_exists_with_store(new_name, store)? {
         return Err(OwsLibError::WalletNameExists(new_name.to_string()));
     }
 
     wallet.name = new_name.to_string();
-    vault::save_encrypted_wallet(&wallet, vault_path)?;
+    vault::save_wallet_with_store(&wallet, store)?;
     Ok(())
 }
 
@@ -436,23 +512,34 @@ pub fn sign_transaction(
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<SignResult, OwsLibError> {
+    let store = crate::FsStore::new(vault_path);
+    sign_transaction_with_store(wallet, chain, tx_hex, passphrase, index, &store)
+}
+
+/// Sign a transaction using a pluggable Store.
+pub fn sign_transaction_with_store(
+    wallet: &str,
+    chain: &str,
+    tx_hex: &str,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    store: &dyn Store,
+) -> Result<SignResult, OwsLibError> {
     let credential = passphrase.unwrap_or("");
 
     let tx_hex_clean = tx_hex.strip_prefix("0x").unwrap_or(tx_hex);
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| OwsLibError::InvalidInput(format!("invalid hex transaction: {e}")))?;
 
-    // Agent mode: token-based signing with policy enforcement
     if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
         let chain = parse_chain(chain)?;
-        return crate::key_ops::sign_with_api_key(
-            credential, wallet, &chain, &tx_bytes, index, vault_path,
+        return crate::key_ops::sign_with_api_key_with_store(
+            credential, wallet, &chain, &tx_bytes, index, store,
         );
     }
 
-    // Owner mode: existing passphrase-based signing (unchanged)
     let chain = parse_chain(chain)?;
-    let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
+    let key = decrypt_signing_key_with_store(wallet, chain.chain_type, credential, index, store)?;
     let signer = signer_for_chain(chain.chain_type);
     let signable = signer.extract_signable_bytes(&tx_bytes)?;
     let output = signer.sign_transaction(key.expose(), signable)?;
@@ -476,6 +563,20 @@ pub fn sign_message(
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<SignResult, OwsLibError> {
+    let store = crate::FsStore::new(vault_path);
+    sign_message_with_store(wallet, chain, message, passphrase, encoding, index, &store)
+}
+
+/// Sign a message using a pluggable Store.
+pub fn sign_message_with_store(
+    wallet: &str,
+    chain: &str,
+    message: &str,
+    passphrase: Option<&str>,
+    encoding: Option<&str>,
+    index: Option<u32>,
+    store: &dyn Store,
+) -> Result<SignResult, OwsLibError> {
     let credential = passphrase.unwrap_or("");
 
     let encoding = encoding.unwrap_or("utf8");
@@ -490,17 +591,15 @@ pub fn sign_message(
         }
     };
 
-    // Agent mode
     if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
         let chain = parse_chain(chain)?;
-        return crate::key_ops::sign_message_with_api_key(
-            credential, wallet, &chain, &msg_bytes, index, vault_path,
+        return crate::key_ops::sign_message_with_api_key_with_store(
+            credential, wallet, &chain, &msg_bytes, index, store,
         );
     }
 
-    // Owner mode
     let chain = parse_chain(chain)?;
-    let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
+    let key = decrypt_signing_key_with_store(wallet, chain.chain_type, credential, index, store)?;
     let signer = signer_for_chain(chain.chain_type);
     let output = signer.sign_message(key.expose(), &msg_bytes)?;
 
@@ -523,6 +622,19 @@ pub fn sign_typed_data(
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<SignResult, OwsLibError> {
+    let store = crate::FsStore::new(vault_path);
+    sign_typed_data_with_store(wallet, chain, typed_data_json, passphrase, index, &store)
+}
+
+/// Sign EIP-712 typed data using a pluggable Store.
+pub fn sign_typed_data_with_store(
+    wallet: &str,
+    chain: &str,
+    typed_data_json: &str,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    store: &dyn Store,
+) -> Result<SignResult, OwsLibError> {
     let credential = passphrase.unwrap_or("");
     let chain = parse_chain(chain)?;
 
@@ -539,7 +651,7 @@ pub fn sign_typed_data(
         ));
     }
 
-    let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
+    let key = decrypt_signing_key_with_store(wallet, chain.chain_type, credential, index, store)?;
     let evm_signer = ows_signer::chains::EvmSigner;
     let output = evm_signer.sign_typed_data(key.expose(), typed_data_json)?;
 
@@ -563,29 +675,41 @@ pub fn sign_and_send(
     rpc_url: Option<&str>,
     vault_path: Option<&Path>,
 ) -> Result<SendResult, OwsLibError> {
+    let store = crate::FsStore::new(vault_path);
+    sign_and_send_with_store(wallet, chain, tx_hex, passphrase, index, rpc_url, &store)
+}
+
+/// Sign and broadcast a transaction using a pluggable Store.
+pub fn sign_and_send_with_store(
+    wallet: &str,
+    chain: &str,
+    tx_hex: &str,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    rpc_url: Option<&str>,
+    store: &dyn Store,
+) -> Result<SendResult, OwsLibError> {
     let credential = passphrase.unwrap_or("");
 
     let tx_hex_clean = tx_hex.strip_prefix("0x").unwrap_or(tx_hex);
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| OwsLibError::InvalidInput(format!("invalid hex transaction: {e}")))?;
 
-    // Agent mode: enforce policies, decrypt key, then sign + broadcast
     if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
         let chain_info = parse_chain(chain)?;
-        let (key, _) = crate::key_ops::enforce_policy_and_decrypt_key(
+        let (key, _) = crate::key_ops::enforce_policy_and_decrypt_key_with_store(
             credential,
             wallet,
             &chain_info,
             &tx_bytes,
             index,
-            vault_path,
+            store,
         )?;
         return sign_encode_and_broadcast(key.expose(), chain, &tx_bytes, rpc_url);
     }
 
-    // Owner mode
     let chain_info = parse_chain(chain)?;
-    let key = decrypt_signing_key(wallet, chain_info.chain_type, credential, index, vault_path)?;
+    let key = decrypt_signing_key_with_store(wallet, chain_info.chain_type, credential, index, store)?;
 
     sign_encode_and_broadcast(key.expose(), chain, &tx_bytes, rpc_url)
 }
@@ -636,7 +760,19 @@ pub fn decrypt_signing_key(
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<SecretBytes, OwsLibError> {
-    let wallet = vault::load_wallet_by_name_or_id(wallet_name_or_id, vault_path)?;
+    let store = crate::FsStore::new(vault_path);
+    decrypt_signing_key_with_store(wallet_name_or_id, chain_type, passphrase, index, &store)
+}
+
+/// Decrypt a wallet and return the private key using a pluggable Store.
+pub fn decrypt_signing_key_with_store(
+    wallet_name_or_id: &str,
+    chain_type: ChainType,
+    passphrase: &str,
+    index: Option<u32>,
+    store: &dyn Store,
+) -> Result<SecretBytes, OwsLibError> {
+    let wallet = vault::load_wallet_by_name_or_id_with_store(wallet_name_or_id, store)?;
     let envelope: CryptoEnvelope = serde_json::from_value(wallet.crypto.clone())?;
     let secret = decrypt(&envelope, passphrase)?;
     secret_to_signing_key(&secret, &wallet.key_type, chain_type, index)
@@ -2909,5 +3045,89 @@ mod tests {
                 // We expect errors like "insufficient funds" or simulation failure
             }
         }
+    }
+
+    // ================================================================
+    // Store-aware ops tests (InMemoryStore)
+    // ================================================================
+
+    #[test]
+    fn create_wallet_with_store_works() {
+        let store = ows_core::InMemoryStore::new();
+        let info = create_wallet_with_store("test-wallet", None, Some("pass"), &store).unwrap();
+        assert!(!info.id.is_empty());
+        assert_eq!(info.name, "test-wallet");
+        assert!(!info.accounts.is_empty());
+    }
+
+    #[test]
+    fn create_wallet_with_store_duplicate_name_fails() {
+        let store = ows_core::InMemoryStore::new();
+        create_wallet_with_store("dup", None, Some("pass"), &store).unwrap();
+        let err = create_wallet_with_store("dup", None, Some("pass"), &store);
+        assert!(matches!(err, Err(OwsLibError::WalletNameExists(_))));
+    }
+
+    #[test]
+    fn list_wallets_with_store_works() {
+        let store = ows_core::InMemoryStore::new();
+        create_wallet_with_store("w1", None, Some("p"), &store).unwrap();
+        create_wallet_with_store("w2", None, Some("p"), &store).unwrap();
+        let wallets = list_wallets_with_store(&store).unwrap();
+        assert_eq!(wallets.len(), 2);
+    }
+
+    #[test]
+    fn get_wallet_with_store_works() {
+        let store = ows_core::InMemoryStore::new();
+        let created = create_wallet_with_store("gw", None, Some("p"), &store).unwrap();
+        let fetched = get_wallet_with_store(&created.id, &store).unwrap();
+        assert_eq!(fetched.id, created.id);
+        assert_eq!(fetched.name, "gw");
+    }
+
+    #[test]
+    fn delete_wallet_with_store_works() {
+        let store = ows_core::InMemoryStore::new();
+        let info = create_wallet_with_store("del", None, Some("p"), &store).unwrap();
+        delete_wallet_with_store(&info.id, &store).unwrap();
+        assert!(list_wallets_with_store(&store).unwrap().is_empty());
+    }
+
+    #[test]
+    fn export_wallet_with_store_works() {
+        let store = ows_core::InMemoryStore::new();
+        let info = create_wallet_with_store("exp", None, Some("pass"), &store).unwrap();
+        let secret = export_wallet_with_store(&info.id, Some("pass"), &store).unwrap();
+        // Mnemonic wallet — export should be 12 words
+        assert_eq!(secret.split_whitespace().count(), 12);
+    }
+
+    #[test]
+    fn rename_wallet_with_store_works() {
+        let store = ows_core::InMemoryStore::new();
+        let info = create_wallet_with_store("old-name", None, Some("p"), &store).unwrap();
+        rename_wallet_with_store(&info.id, "new-name", &store).unwrap();
+        let fetched = get_wallet_with_store(&info.id, &store).unwrap();
+        assert_eq!(fetched.name, "new-name");
+    }
+
+    #[test]
+    fn import_wallet_mnemonic_with_store_works() {
+        let store = ows_core::InMemoryStore::new();
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let info = import_wallet_mnemonic_with_store("imported", mnemonic, Some("pass"), None, &store).unwrap();
+        assert_eq!(info.name, "imported");
+        assert!(!info.accounts.is_empty());
+    }
+
+    #[test]
+    fn sign_message_with_store_works() {
+        let store = ows_core::InMemoryStore::new();
+        let info = create_wallet_with_store("signer", None, Some("pass"), &store).unwrap();
+        let result = sign_message_with_store(
+            &info.id, "evm", "hello", Some("pass"), None, None, &store,
+        ).unwrap();
+        assert!(!result.signature.is_empty());
     }
 }

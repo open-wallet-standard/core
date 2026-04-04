@@ -4,6 +4,7 @@ pub mod chain;
 pub mod config;
 pub mod error;
 pub mod policy;
+pub mod store;
 pub mod types;
 pub mod wallet_file;
 
@@ -15,5 +16,6 @@ pub use chain::{
 pub use config::Config;
 pub use error::{OwsError, OwsErrorCode};
 pub use policy::{Policy, PolicyAction, PolicyContext, PolicyResult, PolicyRule};
+pub use store::{InMemoryStore, Store, StoreError, store_remove_indexed, store_set_indexed};
 pub use types::*;
 pub use wallet_file::*;

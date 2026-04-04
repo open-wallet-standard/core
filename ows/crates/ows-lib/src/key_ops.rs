@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use ows_core::{ApiKeyFile, EncryptedWallet, OwsError};
+use ows_core::{ApiKeyFile, EncryptedWallet, OwsError, Store};
 use ows_signer::{decrypt, encrypt_with_hkdf, signer_for_chain, CryptoEnvelope, SecretBytes};
 
 use crate::error::OwsLibError;
@@ -26,13 +26,26 @@ pub fn create_api_key(
     expires_at: Option<&str>,
     vault_path: Option<&Path>,
 ) -> Result<(String, ApiKeyFile), OwsLibError> {
+    let store = crate::FsStore::new(vault_path);
+    create_api_key_with_store(name, wallet_ids, policy_ids, passphrase, expires_at, &store)
+}
+
+/// Create an API key using a pluggable Store.
+pub fn create_api_key_with_store(
+    name: &str,
+    wallet_ids: &[String],
+    policy_ids: &[String],
+    passphrase: &str,
+    expires_at: Option<&str>,
+    store: &dyn Store,
+) -> Result<(String, ApiKeyFile), OwsLibError> {
     // Validate that all wallets exist and passphrase works
     let mut wallet_secrets = HashMap::new();
     let mut resolved_wallet_ids = Vec::with_capacity(wallet_ids.len());
     let token = key_store::generate_token();
 
     for wallet_id in wallet_ids {
-        let wallet = vault::load_wallet_by_name_or_id(wallet_id, vault_path)?;
+        let wallet = vault::load_wallet_by_name_or_id_with_store(wallet_id, store)?;
         let envelope: CryptoEnvelope = serde_json::from_value(wallet.crypto.clone())?;
 
         // Decrypt with owner's passphrase to verify it works
@@ -50,7 +63,7 @@ pub fn create_api_key(
 
     // Validate that all policies exist
     for policy_id in policy_ids {
-        policy_store::load_policy(policy_id, vault_path)?;
+        policy_store::load_policy_with_store(policy_id, store)?;
     }
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -65,7 +78,7 @@ pub fn create_api_key(
         wallet_secrets,
     };
 
-    key_store::save_api_key(&key_file, vault_path)?;
+    key_store::save_api_key_with_store(&key_file, store)?;
 
     Ok((token, key_file))
 }
@@ -85,15 +98,25 @@ pub fn sign_with_api_key(
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<crate::types::SignResult, OwsLibError> {
-    // 1. Look up key file
-    let token_hash = key_store::hash_token(token);
-    let key_file = key_store::load_api_key_by_token_hash(&token_hash, vault_path)?;
+    let store = crate::FsStore::new(vault_path);
+    sign_with_api_key_with_store(token, wallet_name_or_id, chain, tx_bytes, index, &store)
+}
 
-    // 2. Check expiry
+/// Sign a transaction with an API key using a pluggable Store.
+pub fn sign_with_api_key_with_store(
+    token: &str,
+    wallet_name_or_id: &str,
+    chain: &ows_core::Chain,
+    tx_bytes: &[u8],
+    index: Option<u32>,
+    store: &dyn Store,
+) -> Result<crate::types::SignResult, OwsLibError> {
+    let token_hash = key_store::hash_token(token);
+    let key_file = key_store::load_api_key_by_token_hash_with_store(&token_hash, store)?;
+
     check_expiry(&key_file)?;
 
-    // 3. Resolve wallet and check scope
-    let wallet = vault::load_wallet_by_name_or_id(wallet_name_or_id, vault_path)?;
+    let wallet = vault::load_wallet_by_name_or_id_with_store(wallet_name_or_id, store)?;
     if !key_file.wallet_ids.contains(&wallet.id) {
         return Err(OwsLibError::InvalidInput(format!(
             "API key '{}' does not have access to wallet '{}'",
@@ -101,8 +124,7 @@ pub fn sign_with_api_key(
         )));
     }
 
-    // 4. Load policies and build context
-    let policies = load_policies_for_key(&key_file, vault_path)?;
+    let policies = load_policies_for_key_with_store(&key_file, store)?;
     let now = chrono::Utc::now();
     let date = now.format("%Y-%m-%d").to_string();
 
@@ -122,7 +144,6 @@ pub fn sign_with_api_key(
         timestamp: now.to_rfc3339(),
     };
 
-    // 5. Evaluate policies
     let result = policy_engine::evaluate_policies(&policies, &context);
     if !result.allow {
         return Err(OwsLibError::Core(OwsError::PolicyDenied {
@@ -131,10 +152,8 @@ pub fn sign_with_api_key(
         }));
     }
 
-    // 6. Decrypt wallet secret from key file using HKDF(token)
     let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
 
-    // 7. Sign (extract signable portion first — e.g. strips Solana sig-slot headers)
     let signer = signer_for_chain(chain.chain_type);
     let signable = signer.extract_signable_bytes(tx_bytes)?;
     let output = signer.sign_transaction(key.expose(), signable)?;
@@ -154,12 +173,25 @@ pub fn sign_message_with_api_key(
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<crate::types::SignResult, OwsLibError> {
+    let store = crate::FsStore::new(vault_path);
+    sign_message_with_api_key_with_store(token, wallet_name_or_id, chain, msg_bytes, index, &store)
+}
+
+/// Sign a message with an API key using a pluggable Store.
+pub fn sign_message_with_api_key_with_store(
+    token: &str,
+    wallet_name_or_id: &str,
+    chain: &ows_core::Chain,
+    msg_bytes: &[u8],
+    index: Option<u32>,
+    store: &dyn Store,
+) -> Result<crate::types::SignResult, OwsLibError> {
     let token_hash = key_store::hash_token(token);
-    let key_file = key_store::load_api_key_by_token_hash(&token_hash, vault_path)?;
+    let key_file = key_store::load_api_key_by_token_hash_with_store(&token_hash, store)?;
 
     check_expiry(&key_file)?;
 
-    let wallet = vault::load_wallet_by_name_or_id(wallet_name_or_id, vault_path)?;
+    let wallet = vault::load_wallet_by_name_or_id_with_store(wallet_name_or_id, store)?;
     if !key_file.wallet_ids.contains(&wallet.id) {
         return Err(OwsLibError::InvalidInput(format!(
             "API key '{}' does not have access to wallet '{}'",
@@ -167,7 +199,7 @@ pub fn sign_message_with_api_key(
         )));
     }
 
-    let policies = load_policies_for_key(&key_file, vault_path)?;
+    let policies = load_policies_for_key_with_store(&key_file, store)?;
     let now = chrono::Utc::now();
     let date = now.format("%Y-%m-%d").to_string();
 
@@ -213,11 +245,26 @@ pub fn enforce_policy_and_decrypt_key(
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<(SecretBytes, ApiKeyFile), OwsLibError> {
+    let store = crate::FsStore::new(vault_path);
+    enforce_policy_and_decrypt_key_with_store(
+        token, wallet_name_or_id, chain, tx_bytes, index, &store,
+    )
+}
+
+/// Enforce policies and decrypt key using a pluggable Store.
+pub fn enforce_policy_and_decrypt_key_with_store(
+    token: &str,
+    wallet_name_or_id: &str,
+    chain: &ows_core::Chain,
+    tx_bytes: &[u8],
+    index: Option<u32>,
+    store: &dyn Store,
+) -> Result<(SecretBytes, ApiKeyFile), OwsLibError> {
     let token_hash = key_store::hash_token(token);
-    let key_file = key_store::load_api_key_by_token_hash(&token_hash, vault_path)?;
+    let key_file = key_store::load_api_key_by_token_hash_with_store(&token_hash, store)?;
     check_expiry(&key_file)?;
 
-    let wallet = vault::load_wallet_by_name_or_id(wallet_name_or_id, vault_path)?;
+    let wallet = vault::load_wallet_by_name_or_id_with_store(wallet_name_or_id, store)?;
     if !key_file.wallet_ids.contains(&wallet.id) {
         return Err(OwsLibError::InvalidInput(format!(
             "API key '{}' does not have access to wallet '{}'",
@@ -225,7 +272,7 @@ pub fn enforce_policy_and_decrypt_key(
         )));
     }
 
-    let policies = load_policies_for_key(&key_file, vault_path)?;
+    let policies = load_policies_for_key_with_store(&key_file, store)?;
     let now = chrono::Utc::now();
     let date = now.format("%Y-%m-%d").to_string();
 
@@ -286,13 +333,13 @@ fn check_expiry(key_file: &ApiKeyFile) -> Result<(), OwsLibError> {
     Ok(())
 }
 
-fn load_policies_for_key(
+fn load_policies_for_key_with_store(
     key_file: &ApiKeyFile,
-    vault_path: Option<&Path>,
+    store: &dyn Store,
 ) -> Result<Vec<ows_core::Policy>, OwsLibError> {
     let mut policies = Vec::with_capacity(key_file.policy_ids.len());
     for pid in &key_file.policy_ids {
-        policies.push(policy_store::load_policy(pid, vault_path)?);
+        policies.push(policy_store::load_policy_with_store(pid, store)?);
     }
     Ok(policies)
 }
