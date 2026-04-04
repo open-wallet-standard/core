@@ -168,6 +168,89 @@ pub fn wallet_name_exists(name: &str, vault_path: Option<&Path>) -> Result<bool,
     Ok(wallets.iter().any(|w| w.name == name))
 }
 
+// ---------------------------------------------------------------------------
+// Store-aware wallet CRUD
+// ---------------------------------------------------------------------------
+
+use ows_core::{store_set_indexed, store_remove_indexed, Store};
+
+/// Save an encrypted wallet via a Store.
+pub fn save_wallet_with_store(
+    wallet: &EncryptedWallet,
+    store: &dyn Store,
+) -> Result<(), OwsLibError> {
+    let key = format!("wallets/{}", wallet.id);
+    let json = serde_json::to_string_pretty(wallet)?;
+    store_set_indexed(store, &key, &json, "wallets")?;
+    Ok(())
+}
+
+/// List all encrypted wallets via a Store, sorted by created_at descending.
+pub fn list_wallets_with_store(
+    store: &dyn Store,
+) -> Result<Vec<EncryptedWallet>, OwsLibError> {
+    let keys = store.list("wallets")?;
+    let mut wallets = Vec::new();
+
+    for key in keys {
+        if let Some(json) = store.get(&key)? {
+            match serde_json::from_str::<EncryptedWallet>(&json) {
+                Ok(w) => wallets.push(w),
+                Err(e) => eprintln!("warning: skipping {key}: {e}"),
+            }
+        }
+    }
+
+    wallets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(wallets)
+}
+
+/// Look up a wallet by exact ID first, then by name (case-sensitive) via a Store.
+pub fn load_wallet_by_name_or_id_with_store(
+    name_or_id: &str,
+    store: &dyn Store,
+) -> Result<EncryptedWallet, OwsLibError> {
+    // Try direct ID lookup first (fast path — avoids listing all).
+    let key = format!("wallets/{name_or_id}");
+    if let Some(json) = store.get(&key)? {
+        if let Ok(w) = serde_json::from_str::<EncryptedWallet>(&json) {
+            return Ok(w);
+        }
+    }
+
+    // Fall back to name search.
+    let wallets = list_wallets_with_store(store)?;
+    let matches: Vec<&EncryptedWallet> = wallets.iter().filter(|w| w.name == name_or_id).collect();
+    match matches.len() {
+        0 => Err(OwsLibError::WalletNotFound(name_or_id.to_string())),
+        1 => Ok(matches[0].clone()),
+        n => Err(OwsLibError::AmbiguousWallet {
+            name: name_or_id.to_string(),
+            count: n,
+        }),
+    }
+}
+
+/// Delete a wallet by ID via a Store.
+pub fn delete_wallet_with_store(id: &str, store: &dyn Store) -> Result<(), OwsLibError> {
+    // Check existence first.
+    let key = format!("wallets/{id}");
+    if store.get(&key)?.is_none() {
+        return Err(OwsLibError::WalletNotFound(id.to_string()));
+    }
+    store_remove_indexed(store, &key, "wallets")?;
+    Ok(())
+}
+
+/// Check whether a wallet with the given name already exists via a Store.
+pub fn wallet_name_exists_with_store(
+    name: &str,
+    store: &dyn Store,
+) -> Result<bool, OwsLibError> {
+    let wallets = list_wallets_with_store(store)?;
+    Ok(wallets.iter().any(|w| w.name == name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,5 +583,138 @@ mod tests {
             "wallets directory should have 0700 permissions, got {:04o}",
             dir_mode
         );
+    }
+
+    // == Store-aware CRUD tests ==
+
+    #[test]
+    fn store_save_and_list_wallets() {
+        let store = ows_core::InMemoryStore::new();
+        let wallet = EncryptedWallet::new(
+            "s-w1".to_string(),
+            "store-wallet".to_string(),
+            vec![],
+            serde_json::json!({}),
+            KeyType::Mnemonic,
+        );
+
+        save_wallet_with_store(&wallet, &store).unwrap();
+        let wallets = list_wallets_with_store(&store).unwrap();
+        assert_eq!(wallets.len(), 1);
+        assert_eq!(wallets[0].id, "s-w1");
+    }
+
+    #[test]
+    fn store_load_wallet_by_id() {
+        let store = ows_core::InMemoryStore::new();
+        let wallet = EncryptedWallet::new(
+            "id-123".to_string(),
+            "my-wallet".to_string(),
+            vec![],
+            serde_json::json!({}),
+            KeyType::Mnemonic,
+        );
+
+        save_wallet_with_store(&wallet, &store).unwrap();
+        let loaded = load_wallet_by_name_or_id_with_store("id-123", &store).unwrap();
+        assert_eq!(loaded.name, "my-wallet");
+    }
+
+    #[test]
+    fn store_load_wallet_by_name() {
+        let store = ows_core::InMemoryStore::new();
+        let wallet = EncryptedWallet::new(
+            "uuid-456".to_string(),
+            "named-wallet".to_string(),
+            vec![],
+            serde_json::json!({}),
+            KeyType::Mnemonic,
+        );
+
+        save_wallet_with_store(&wallet, &store).unwrap();
+        let loaded = load_wallet_by_name_or_id_with_store("named-wallet", &store).unwrap();
+        assert_eq!(loaded.id, "uuid-456");
+    }
+
+    #[test]
+    fn store_load_wallet_not_found() {
+        let store = ows_core::InMemoryStore::new();
+        let result = load_wallet_by_name_or_id_with_store("nonexistent", &store);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            OwsLibError::WalletNotFound(name) => assert_eq!(name, "nonexistent"),
+            other => panic!("expected WalletNotFound, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn store_delete_wallet() {
+        let store = ows_core::InMemoryStore::new();
+        let wallet = EncryptedWallet::new(
+            "del-w".to_string(),
+            "delete-me".to_string(),
+            vec![],
+            serde_json::json!({}),
+            KeyType::Mnemonic,
+        );
+
+        save_wallet_with_store(&wallet, &store).unwrap();
+        assert_eq!(list_wallets_with_store(&store).unwrap().len(), 1);
+
+        delete_wallet_with_store("del-w", &store).unwrap();
+        assert_eq!(list_wallets_with_store(&store).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn store_delete_wallet_not_found() {
+        let store = ows_core::InMemoryStore::new();
+        let result = delete_wallet_with_store("nonexistent", &store);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn store_wallet_name_exists() {
+        let store = ows_core::InMemoryStore::new();
+        let wallet = EncryptedWallet::new(
+            "e-w1".to_string(),
+            "existing".to_string(),
+            vec![],
+            serde_json::json!({}),
+            KeyType::Mnemonic,
+        );
+
+        save_wallet_with_store(&wallet, &store).unwrap();
+        assert!(wallet_name_exists_with_store("existing", &store).unwrap());
+        assert!(!wallet_name_exists_with_store("other", &store).unwrap());
+    }
+
+    #[test]
+    fn store_list_wallets_sorted_newest_first() {
+        let store = ows_core::InMemoryStore::new();
+
+        let w1 = EncryptedWallet::new(
+            "w1".to_string(),
+            "first".to_string(),
+            vec![],
+            serde_json::json!({}),
+            KeyType::Mnemonic,
+        );
+        save_wallet_with_store(&w1, &store).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let w2 = EncryptedWallet::new(
+            "w2".to_string(),
+            "second".to_string(),
+            vec![],
+            serde_json::json!({}),
+            KeyType::Mnemonic,
+        );
+        save_wallet_with_store(&w2, &store).unwrap();
+
+        let wallets = list_wallets_with_store(&store).unwrap();
+        assert_eq!(wallets.len(), 2);
+        assert_eq!(wallets[0].id, "w2"); // newest first
+        assert_eq!(wallets[1].id, "w1");
     }
 }

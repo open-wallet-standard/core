@@ -40,4 +40,7 @@ pub enum OwsLibError {
 
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("store error: {0}")]
+    Store(#[from] ows_core::StoreError),
 }

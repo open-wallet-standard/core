@@ -76,6 +76,68 @@ pub fn delete_policy(id: &str, vault_path: Option<&Path>) -> Result<(), OwsLibEr
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Store-aware policy CRUD
+// ---------------------------------------------------------------------------
+
+use ows_core::{store_set_indexed, store_remove_indexed, Store};
+
+/// Save a policy via a Store.
+pub fn save_policy_with_store(
+    policy: &Policy,
+    store: &dyn Store,
+) -> Result<(), OwsLibError> {
+    let key = format!("policies/{}", policy.id);
+    let json = serde_json::to_string_pretty(policy)?;
+    store_set_indexed(store, &key, &json, "policies")?;
+    Ok(())
+}
+
+/// Load a policy by ID via a Store.
+pub fn load_policy_with_store(
+    id: &str,
+    store: &dyn Store,
+) -> Result<Policy, OwsLibError> {
+    let key = format!("policies/{id}");
+    match store.get(&key)? {
+        Some(json) => Ok(serde_json::from_str(&json)?),
+        None => Err(OwsLibError::InvalidInput(format!("policy not found: {id}"))),
+    }
+}
+
+/// List all policies via a Store, sorted alphabetically by name.
+pub fn list_policies_with_store(
+    store: &dyn Store,
+) -> Result<Vec<Policy>, OwsLibError> {
+    let store_keys = store.list("policies")?;
+    let mut policies = Vec::new();
+
+    for store_key in store_keys {
+        if let Some(json) = store.get(&store_key)? {
+            match serde_json::from_str::<Policy>(&json) {
+                Ok(p) => policies.push(p),
+                Err(e) => eprintln!("warning: skipping {store_key}: {e}"),
+            }
+        }
+    }
+
+    policies.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(policies)
+}
+
+/// Delete a policy by ID via a Store.
+pub fn delete_policy_with_store(
+    id: &str,
+    store: &dyn Store,
+) -> Result<(), OwsLibError> {
+    let key = format!("policies/{id}");
+    if store.get(&key)?.is_none() {
+        return Err(OwsLibError::InvalidInput(format!("policy not found: {id}")));
+    }
+    store_remove_indexed(store, &key, "policies")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,5 +265,58 @@ mod tests {
         let loaded = load_policy("sim-policy", Some(&vault)).unwrap();
         assert_eq!(loaded.executable.unwrap(), "/usr/local/bin/simulate-tx");
         assert!(loaded.config.is_some());
+    }
+
+    // == Store-aware policy CRUD tests ==
+
+    #[test]
+    fn store_save_and_load_policy() {
+        let store = ows_core::InMemoryStore::new();
+        let policy = test_policy("sp1", "Store Policy");
+
+        save_policy_with_store(&policy, &store).unwrap();
+        let loaded = load_policy_with_store("sp1", &store).unwrap();
+        assert_eq!(loaded.id, "sp1");
+        assert_eq!(loaded.name, "Store Policy");
+    }
+
+    #[test]
+    fn store_load_policy_not_found() {
+        let store = ows_core::InMemoryStore::new();
+        let result = load_policy_with_store("nonexistent", &store);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn store_list_policies_sorted_by_name() {
+        let store = ows_core::InMemoryStore::new();
+
+        save_policy_with_store(&test_policy("z-p", "Zebra"), &store).unwrap();
+        save_policy_with_store(&test_policy("a-p", "Alpha"), &store).unwrap();
+        save_policy_with_store(&test_policy("m-p", "Middle"), &store).unwrap();
+
+        let policies = list_policies_with_store(&store).unwrap();
+        assert_eq!(policies.len(), 3);
+        assert_eq!(policies[0].name, "Alpha");
+        assert_eq!(policies[1].name, "Middle");
+        assert_eq!(policies[2].name, "Zebra");
+    }
+
+    #[test]
+    fn store_delete_policy() {
+        let store = ows_core::InMemoryStore::new();
+
+        save_policy_with_store(&test_policy("del-p", "Delete Me"), &store).unwrap();
+        assert_eq!(list_policies_with_store(&store).unwrap().len(), 1);
+
+        delete_policy_with_store("del-p", &store).unwrap();
+        assert_eq!(list_policies_with_store(&store).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn store_delete_policy_not_found() {
+        let store = ows_core::InMemoryStore::new();
+        let result = delete_policy_with_store("nonexistent", &store);
+        assert!(result.is_err());
     }
 }

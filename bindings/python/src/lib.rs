@@ -1,3 +1,4 @@
+use ows_core::{Store, StoreError};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::path::PathBuf;
@@ -8,6 +9,85 @@ fn vault_path(p: Option<String>) -> Option<PathBuf> {
 
 fn map_err(e: ows_lib::OwsLibError) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// PyStore — bridges a Python store object to Rust Store
+// ---------------------------------------------------------------------------
+
+struct PyStore {
+    obj: PyObject,
+}
+
+// SAFETY: PyStore methods always acquire the GIL before accessing the Python object.
+unsafe impl Send for PyStore {}
+unsafe impl Sync for PyStore {}
+
+impl Store for PyStore {
+    fn get(&self, key: &str) -> Result<Option<String>, StoreError> {
+        Python::with_gil(|py| {
+            let result = self
+                .obj
+                .call_method1(py, "get", (key,))
+                .map_err(|e| StoreError(e.to_string().into()))?;
+            if result.is_none(py) {
+                Ok(None)
+            } else {
+                let s: String = result
+                    .extract(py)
+                    .map_err(|e| StoreError(e.to_string().into()))?;
+                Ok(Some(s))
+            }
+        })
+    }
+
+    fn set(&self, key: &str, value: &str) -> Result<(), StoreError> {
+        Python::with_gil(|py| {
+            self.obj
+                .call_method1(py, "set", (key, value))
+                .map_err(|e| StoreError(e.to_string().into()))?;
+            Ok(())
+        })
+    }
+
+    fn remove(&self, key: &str) -> Result<(), StoreError> {
+        Python::with_gil(|py| {
+            self.obj
+                .call_method1(py, "remove", (key,))
+                .map_err(|e| StoreError(e.to_string().into()))?;
+            Ok(())
+        })
+    }
+
+    fn list(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
+        Python::with_gil(|py| {
+            let has_list = self
+                .obj
+                .getattr(py, "list")
+                .is_ok();
+
+            if !has_list {
+                let index_key = format!("_index/{prefix}");
+                return match self.get(&index_key)? {
+                    Some(json) => {
+                        let keys: Vec<String> = serde_json::from_str(&json)
+                            .map_err(|e| StoreError(e.to_string().into()))?;
+                        Ok(keys)
+                    }
+                    None => Ok(vec![]),
+                };
+            }
+
+            let result = self
+                .obj
+                .call_method1(py, "list", (prefix,))
+                .map_err(|e| StoreError(e.to_string().into()))?;
+            let keys: Vec<String> = result
+                .extract(py)
+                .map_err(|e| StoreError(e.to_string().into()))?;
+            Ok(keys)
+        })
+    }
 }
 
 /// Generate a new BIP-39 mnemonic phrase.
@@ -410,6 +490,268 @@ fn wallet_info_to_dict_inner<'py>(
     Ok(dict)
 }
 
+// ---------------------------------------------------------------------------
+// OWS class — pluggable store support
+// ---------------------------------------------------------------------------
+
+/// OWS client with a custom store backend.
+///
+/// ```python
+/// ows = OWS(store=MyStore())
+/// wallet = ows.create_wallet("my-wallet")
+/// ```
+#[pyclass]
+struct OWS {
+    store: Box<dyn Store>,
+}
+
+#[pymethods]
+impl OWS {
+    #[new]
+    #[pyo3(signature = (store=None, vault_path=None))]
+    fn new(store: Option<PyObject>, vault_path: Option<String>) -> Self {
+        let store: Box<dyn Store> = match store {
+            Some(py_obj) => Box::new(PyStore { obj: py_obj }),
+            None => Box::new(ows_lib::FsStore::new(
+                vault_path.as_deref().map(std::path::Path::new),
+            )),
+        };
+        OWS { store }
+    }
+
+    #[pyo3(signature = (name, passphrase=None, words=None))]
+    fn create_wallet(
+        &self,
+        name: &str,
+        passphrase: Option<&str>,
+        words: Option<u32>,
+    ) -> PyResult<PyObject> {
+        let info = ows_lib::create_wallet_with_store(name, words, passphrase, &*self.store)
+            .map_err(map_err)?;
+        Python::with_gil(|py| wallet_info_to_dict(py, &info))
+    }
+
+    #[pyo3(signature = (name, mnemonic, passphrase=None, index=None))]
+    fn import_wallet_mnemonic(
+        &self,
+        name: &str,
+        mnemonic: &str,
+        passphrase: Option<&str>,
+        index: Option<u32>,
+    ) -> PyResult<PyObject> {
+        let info = ows_lib::import_wallet_mnemonic_with_store(
+            name, mnemonic, passphrase, index, &*self.store,
+        )
+        .map_err(map_err)?;
+        Python::with_gil(|py| wallet_info_to_dict(py, &info))
+    }
+
+    #[pyo3(signature = (name, private_key_hex, chain=None, passphrase=None, secp256k1_key=None, ed25519_key=None))]
+    fn import_wallet_private_key(
+        &self,
+        name: &str,
+        private_key_hex: &str,
+        chain: Option<&str>,
+        passphrase: Option<&str>,
+        secp256k1_key: Option<&str>,
+        ed25519_key: Option<&str>,
+    ) -> PyResult<PyObject> {
+        let info = ows_lib::import_wallet_private_key_with_store(
+            name,
+            private_key_hex,
+            chain,
+            passphrase,
+            &*self.store,
+            secp256k1_key,
+            ed25519_key,
+        )
+        .map_err(map_err)?;
+        Python::with_gil(|py| wallet_info_to_dict(py, &info))
+    }
+
+    fn list_wallets(&self) -> PyResult<PyObject> {
+        let wallets = ows_lib::list_wallets_with_store(&*self.store).map_err(map_err)?;
+        Python::with_gil(|py| {
+            let list = pyo3::types::PyList::empty(py);
+            for w in &wallets {
+                let dict = wallet_info_to_dict_inner(py, w)?;
+                list.append(dict)?;
+            }
+            Ok(list.unbind().into())
+        })
+    }
+
+    fn get_wallet(&self, name_or_id: &str) -> PyResult<PyObject> {
+        let info = ows_lib::get_wallet_with_store(name_or_id, &*self.store).map_err(map_err)?;
+        Python::with_gil(|py| wallet_info_to_dict(py, &info))
+    }
+
+    fn delete_wallet(&self, name_or_id: &str) -> PyResult<()> {
+        ows_lib::delete_wallet_with_store(name_or_id, &*self.store).map_err(map_err)
+    }
+
+    #[pyo3(signature = (name_or_id, passphrase=None))]
+    fn export_wallet(&self, name_or_id: &str, passphrase: Option<&str>) -> PyResult<String> {
+        ows_lib::export_wallet_with_store(name_or_id, passphrase, &*self.store).map_err(map_err)
+    }
+
+    fn rename_wallet(&self, name_or_id: &str, new_name: &str) -> PyResult<()> {
+        ows_lib::rename_wallet_with_store(name_or_id, new_name, &*self.store).map_err(map_err)
+    }
+
+    #[pyo3(signature = (wallet, chain, tx_hex, passphrase=None, index=None))]
+    fn sign_transaction(
+        &self,
+        wallet: &str,
+        chain: &str,
+        tx_hex: &str,
+        passphrase: Option<&str>,
+        index: Option<u32>,
+    ) -> PyResult<PyObject> {
+        let result = ows_lib::sign_transaction_with_store(
+            wallet, chain, tx_hex, passphrase, index, &*self.store,
+        )
+        .map_err(map_err)?;
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("signature", &result.signature)?;
+            dict.set_item("recovery_id", result.recovery_id)?;
+            Ok(dict.unbind().into())
+        })
+    }
+
+    #[pyo3(signature = (wallet, chain, message, passphrase=None, encoding=None, index=None))]
+    fn sign_message(
+        &self,
+        wallet: &str,
+        chain: &str,
+        message: &str,
+        passphrase: Option<&str>,
+        encoding: Option<&str>,
+        index: Option<u32>,
+    ) -> PyResult<PyObject> {
+        let result = ows_lib::sign_message_with_store(
+            wallet, chain, message, passphrase, encoding, index, &*self.store,
+        )
+        .map_err(map_err)?;
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("signature", &result.signature)?;
+            dict.set_item("recovery_id", result.recovery_id)?;
+            Ok(dict.unbind().into())
+        })
+    }
+
+    #[pyo3(signature = (wallet, chain, typed_data_json, passphrase=None, index=None))]
+    fn sign_typed_data(
+        &self,
+        wallet: &str,
+        chain: &str,
+        typed_data_json: &str,
+        passphrase: Option<&str>,
+        index: Option<u32>,
+    ) -> PyResult<PyObject> {
+        let result = ows_lib::sign_typed_data_with_store(
+            wallet, chain, typed_data_json, passphrase, index, &*self.store,
+        )
+        .map_err(map_err)?;
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("signature", &result.signature)?;
+            dict.set_item("recovery_id", result.recovery_id)?;
+            Ok(dict.unbind().into())
+        })
+    }
+
+    fn create_policy(&self, policy_json: &str) -> PyResult<()> {
+        let policy: ows_core::Policy = serde_json::from_str(policy_json)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        ows_lib::policy_store::save_policy_with_store(&policy, &*self.store).map_err(map_err)
+    }
+
+    fn list_policies(&self) -> PyResult<PyObject> {
+        let policies =
+            ows_lib::policy_store::list_policies_with_store(&*self.store).map_err(map_err)?;
+        let json_str =
+            serde_json::to_string(&policies).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Python::with_gil(|py| {
+            let json_mod = py.import("json")?;
+            json_mod
+                .call_method1("loads", (json_str,))
+                .map(|o| o.unbind())
+        })
+    }
+
+    fn get_policy(&self, id: &str) -> PyResult<PyObject> {
+        let policy =
+            ows_lib::policy_store::load_policy_with_store(id, &*self.store).map_err(map_err)?;
+        let json_str =
+            serde_json::to_string(&policy).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Python::with_gil(|py| {
+            let json_mod = py.import("json")?;
+            json_mod
+                .call_method1("loads", (json_str,))
+                .map(|o| o.unbind())
+        })
+    }
+
+    fn delete_policy(&self, id: &str) -> PyResult<()> {
+        ows_lib::policy_store::delete_policy_with_store(id, &*self.store).map_err(map_err)
+    }
+
+    #[pyo3(signature = (name, wallet_ids, policy_ids, passphrase, expires_at=None))]
+    fn create_api_key(
+        &self,
+        name: &str,
+        wallet_ids: Vec<String>,
+        policy_ids: Vec<String>,
+        passphrase: &str,
+        expires_at: Option<&str>,
+    ) -> PyResult<PyObject> {
+        let (token, key_file) = ows_lib::key_ops::create_api_key_with_store(
+            name,
+            &wallet_ids,
+            &policy_ids,
+            passphrase,
+            expires_at,
+            &*self.store,
+        )
+        .map_err(map_err)?;
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("token", token)?;
+            dict.set_item("id", &key_file.id)?;
+            dict.set_item("name", &key_file.name)?;
+            Ok(dict.unbind().into())
+        })
+    }
+
+    fn list_api_keys(&self) -> PyResult<PyObject> {
+        let keys =
+            ows_lib::key_store::list_api_keys_with_store(&*self.store).map_err(map_err)?;
+        let sanitized: Vec<serde_json::Value> = keys
+            .iter()
+            .map(|k| {
+                let mut v = serde_json::to_value(k).unwrap_or_default();
+                v.as_object_mut().map(|m| m.remove("wallet_secrets"));
+                v
+            })
+            .collect();
+        let json_str = serde_json::to_string(&sanitized)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Python::with_gil(|py| {
+            let json_mod = py.import("json")?;
+            json_mod
+                .call_method1("loads", (json_str,))
+                .map(|o| o.unbind())
+        })
+    }
+
+    fn revoke_api_key(&self, id: &str) -> PyResult<()> {
+        ows_lib::key_store::delete_api_key_with_store(id, &*self.store).map_err(map_err)
+    }
+}
+
 /// Python module definition.
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -434,5 +776,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_api_key, m)?)?;
     m.add_function(wrap_pyfunction!(list_api_keys, m)?)?;
     m.add_function(wrap_pyfunction!(revoke_api_key, m)?)?;
+    m.add_class::<OWS>()?;
     Ok(())
 }
