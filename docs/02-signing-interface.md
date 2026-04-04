@@ -57,7 +57,7 @@ An implementation that exposes `signAndSend`:
 
 ### `signMessage(request: SignMessageRequest): Promise<SignMessageResult>`
 
-Signs an arbitrary message (for authentication, attestation, or off-chain signatures like EIP-712).
+Signs a message using the chain's message-signing convention. The exact bytes signed are chain-specific and may differ across chains.
 
 ```typescript
 interface SignMessageRequest {
@@ -65,7 +65,6 @@ interface SignMessageRequest {
   chainId: ChainId;
   message: string | Uint8Array;
   encoding?: "utf8" | "hex";
-  typedData?: TypedData;               // EIP-712 typed data (EVM only)
 }
 
 interface SignMessageResult {
@@ -74,12 +73,18 @@ interface SignMessageResult {
 }
 ```
 
-Message signing follows chain-specific conventions:
-- **EVM**: `personal_sign` (EIP-191) or `eth_signTypedData_v4` (EIP-712)
-- **Solana**: Ed25519 signature over the raw message bytes
-- **Sui**: Intent-prefixed (scope=3) BLAKE2b-256 digest, Ed25519 signature
-- **Cosmos**: ADR-036 off-chain signing
+Current reference implementation behavior varies by chain:
+- **EVM**: `personal_sign` (EIP-191)
+- **Bitcoin**: Bitcoin Signed Message
+- **Tron**: TRON-specific personal-message prefix
+- **Sui**: personal-message intent hashing before signing
+- **Cosmos**: hash-then-sign behavior
 - **Filecoin**: Blake2b-256 hash then secp256k1 signing
+- **Solana**: Ed25519 signature over the raw message bytes
+- **TON**: Ed25519 signature over the raw message bytes
+- **XRPL**: unsupported in the current reference implementation
+
+Use `signTypedData` for EIP-712 typed structured data on EVM chains.
 
 ### `signTypedData(request: SignTypedDataRequest): Promise<SignMessageResult>`
 
