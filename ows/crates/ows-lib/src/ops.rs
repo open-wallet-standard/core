@@ -698,6 +698,9 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         )),
         ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
         ChainType::Xrpl => broadcast_xrpl(rpc_url, signed_bytes),
+        ChainType::Stacks => Err(OwsLibError::InvalidInput(
+            "Stacks broadcast not yet supported".into(),
+        )),
     }
 }
 
