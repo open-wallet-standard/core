@@ -25,6 +25,7 @@ getrandom = "0.2"
 zeroize = "1"
 sha2 = "0.10"
 rand = "0.8"
+ureq = { version = "2", features = ["json"] }
 prost = "0.13"
 tonic = { version = "0.12", features = ["transport"] }
 tokio = { version = "1", features = ["rt"] }
