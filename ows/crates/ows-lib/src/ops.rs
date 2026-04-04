@@ -978,6 +978,10 @@ mod tests {
         hex::encode(envelope.to_xdr(Limits::none()).unwrap())
     }
 
+    fn xrpl_unsigned_tx_hex() -> &'static str {
+        "12000024000000016140000000000F424068400000000000000C7321035D8892C99D4F17B2775EC428ED65B6335A5D588AC2057B81C8C38C59C72B68D98114B22CCE5BFD693ED7FA15B57B6B5370551B7E6DB58314F667B0CA50CC7709A220B0561B85E53A48461FA8"
+    }
+
     const TEST_PRIVKEY: &str = "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318";
 
     // ================================================================
@@ -1139,6 +1143,7 @@ mod tests {
         solana_tx.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // message payload
         let solana_tx_hex = hex::encode(&solana_tx);
         let stellar_tx_hex = stellar_unsigned_tx_hex();
+        let xrpl_tx_hex = xrpl_unsigned_tx_hex();
 
         let chains = [
             "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "xrpl", "stellar",
@@ -1148,6 +1153,8 @@ mod tests {
                 &solana_tx_hex
             } else if *chain == "stellar" {
                 &stellar_tx_hex
+            } else if *chain == "xrpl" {
+                xrpl_tx_hex
             } else {
                 generic_tx_hex
             };
