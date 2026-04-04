@@ -15,10 +15,11 @@ pub enum ChainType {
     Filecoin,
     Sui,
     Xrpl,
+    Stacks,
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 9] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 10] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
@@ -28,6 +29,7 @@ pub const ALL_CHAIN_TYPES: [ChainType; 9] = [
     ChainType::Filecoin,
     ChainType::Sui,
     ChainType::Xrpl,
+    ChainType::Stacks,
 ];
 
 /// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
@@ -131,6 +133,16 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_id: "xrpl:mainnet",
     },
     Chain {
+        name: "stacks",
+        chain_type: ChainType::Stacks,
+        chain_id: "stacks:1",
+    },
+    Chain {
+        name: "stacks-testnet",
+        chain_type: ChainType::Stacks,
+        chain_id: "stacks:2147483648",
+    },
+    Chain {
         name: "xrpl-testnet",
         chain_type: ChainType::Xrpl,
         chain_id: "xrpl:testnet",
@@ -205,6 +217,7 @@ impl ChainType {
             ChainType::Filecoin => "fil",
             ChainType::Sui => "sui",
             ChainType::Xrpl => "xrpl",
+            ChainType::Stacks => "stacks",
         }
     }
 
@@ -221,6 +234,7 @@ impl ChainType {
             ChainType::Filecoin => 461,
             ChainType::Sui => 784,
             ChainType::Xrpl => 144,
+            ChainType::Stacks => 5757,
         }
     }
 
@@ -237,6 +251,7 @@ impl ChainType {
             "fil" => Some(ChainType::Filecoin),
             "sui" => Some(ChainType::Sui),
             "xrpl" => Some(ChainType::Xrpl),
+            "stacks" => Some(ChainType::Stacks),
             _ => None,
         }
     }
@@ -255,6 +270,7 @@ impl fmt::Display for ChainType {
             ChainType::Filecoin => "filecoin",
             ChainType::Sui => "sui",
             ChainType::Xrpl => "xrpl",
+            ChainType::Stacks => "stacks",
         };
         write!(f, "{}", s)
     }
@@ -460,7 +476,7 @@ mod tests {
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 9);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 10);
     }
 
     #[test]
