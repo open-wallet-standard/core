@@ -189,12 +189,22 @@ fn parse_evm_tx_fields(tx_bytes: &[u8]) -> (Option<String>, Option<String>) {
     let value = items.get(value_idx).map(|b| {
         if b.is_empty() {
             "0".to_string()
+        } else if b.len() > 32 {
+            // Value exceeds uint256 — return sentinel to trigger policy denial
+            "U256_OVERFLOW".to_string()
         } else {
-            let mut n: u128 = 0;
-            for byte in b.iter().take(16) {
-                n = n.wrapping_shl(8) | (*byte as u128);
+            // Decode big-endian bytes as u128 (safe for values up to ~3.4e38)
+            // For values > u128::MAX, return a string that exceeds any reasonable max_wei
+            if b.len() > 16 {
+                // Value is > u128::MAX — treat as effectively infinite
+                u128::MAX.to_string()
+            } else {
+                let mut n: u128 = 0;
+                for byte in b {
+                    n = n.wrapping_shl(8) | (*byte as u128);
+                }
+                n.to_string()
             }
-            n.to_string()
         }
     });
 
@@ -363,14 +373,19 @@ pub fn enforce_policy_and_decrypt_key(
 
     let tx_hex = hex::encode(tx_bytes);
 
+    let (parsed_to, parsed_value) = if chain.chain_id.starts_with("eip155:") {
+        parse_evm_tx_fields(tx_bytes)
+    } else {
+        (None, None)
+    };
     let context = ows_core::PolicyContext {
         chain_id: chain.chain_id.to_string(),
         wallet_id: wallet.id.clone(),
         api_key_id: key_file.id.clone(),
-        operation: ows_core::policy::SigningOperation::SignMessage,
+        operation: ows_core::policy::SigningOperation::SignTransaction,
         transaction: ows_core::policy::TransactionContext {
-            to: None,
-            value: None,
+            to: parsed_to,
+            value: parsed_value,
             raw_hex: tx_hex,
             data: None,
         },
