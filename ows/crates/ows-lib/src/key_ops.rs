@@ -170,12 +170,12 @@ fn parse_evm_tx_fields(tx_bytes: &[u8]) -> (Option<String>, Option<String>) {
     // EIP-1559 (0x02): chain_id, nonce, max_priority_fee, max_fee, gas, to, value, data, access_list
     // Legacy:          nonce, gas_price, gas, to, value, data, v, r, s
     // EIP-2930 (0x01): chain_id, nonce, gas_price, gas, to, value, data, access_list
-    let (to_idx, value_idx) = if tx_bytes[0] == 0x02 {
-        (5, 6) // EIP-1559
-    } else if tx_bytes[0] == 0x01 {
+    let (to_idx, value_idx) = if tx_bytes[0] == 0x01 {
         (4, 5) // EIP-2930
+    } else if tx_bytes[0] <= 0x7f {
+        (5, 6) // EIP-1559 layout: 0x02, 0x03 (EIP-4844), 0x04 (EIP-7702), future types
     } else {
-        (3, 4) // Legacy
+        (3, 4) // Legacy (first byte >= 0xc0)
     };
 
     let to = items.get(to_idx).and_then(|b| {
