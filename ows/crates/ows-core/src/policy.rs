@@ -42,12 +42,23 @@ pub struct Policy {
     pub action: PolicyAction,
 }
 
+/// The signing operation type — used to gate rules to specific operations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SigningOperation {
+    SignTransaction,
+    SignMessage,
+    SignHash,
+    SignTypedData,
+}
+
 /// Context passed to policy evaluation (and to executable policies via stdin).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyContext {
     pub chain_id: String,
     pub wallet_id: String,
     pub api_key_id: String,
+    pub operation: SigningOperation,
     pub transaction: TransactionContext,
     pub spending: SpendingContext,
     pub timestamp: String,
@@ -187,6 +198,7 @@ mod tests {
             chain_id: "eip155:8453".into(),
             wallet_id: "3198bc9c-6672-5ab3-d995-4942343ae5b6".into(),
             api_key_id: "7a2f1b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c".into(),
+            operation: SigningOperation::SignTransaction,
             transaction: TransactionContext {
                 to: Some("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into()),
                 value: Some("100000000000000000".into()),

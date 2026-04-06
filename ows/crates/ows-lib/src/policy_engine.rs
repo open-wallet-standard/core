@@ -75,8 +75,11 @@ fn eval_allowed_recipients(
     addresses: &[String],
     ctx: &PolicyContext,
 ) -> PolicyResult {
-    // Only gate EVM transactions — non-EVM and message signing pass through
+    // Only applies to EVM sign_transaction — message signing has no recipient
     if !ctx.chain_id.starts_with("eip155:") {
+        return PolicyResult::allowed();
+    }
+    if ctx.operation != ows_core::policy::SigningOperation::SignTransaction {
         return PolicyResult::allowed();
     }
     match &ctx.transaction.to {
@@ -99,8 +102,11 @@ fn eval_allowed_recipients(
 }
 
 fn eval_max_transaction_value(policy_id: &str, max_wei: &str, ctx: &PolicyContext) -> PolicyResult {
-    // Only gate EVM transactions — non-EVM chains pass through
+    // Only applies to EVM sign_transaction — message signing has no value
     if !ctx.chain_id.starts_with("eip155:") {
+        return PolicyResult::allowed();
+    }
+    if ctx.operation != ows_core::policy::SigningOperation::SignTransaction {
         return PolicyResult::allowed();
     }
     let value_str = match &ctx.transaction.value {
@@ -264,6 +270,7 @@ mod tests {
             chain_id: "eip155:8453".to_string(),
             wallet_id: "wallet-1".to_string(),
             api_key_id: "key-1".to_string(),
+            operation: ows_core::policy::SigningOperation::SignTransaction,
             transaction: TransactionContext {
                 to: Some("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".to_string()),
                 value: Some("100000000000000000".to_string()), // 0.1 ETH
@@ -648,5 +655,40 @@ mod tests {
         let result = evaluate_policies(&[policy], &ctx);
         assert!(result.allow);
     }
-}
+    #[test]
+    fn allowed_recipients_passes_message_signing() {
+        // Message signing should pass through AllowedRecipients regardless
+        let mut ctx = base_context();
+        ctx.operation = ows_core::policy::SigningOperation::SignMessage;
+        ctx.transaction.to = None; // messages have no recipient
+        let policy = policy_with_rules(
+            "recipients",
+            vec![PolicyRule::AllowedRecipients {
+                addresses: vec!["0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".to_string()],
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(
+            result.allow,
+            "message signing should not be blocked by AllowedRecipients"
+        );
+    }
 
+    #[test]
+    fn max_transaction_value_passes_message_signing() {
+        let mut ctx = base_context();
+        ctx.operation = ows_core::policy::SigningOperation::SignMessage;
+        ctx.transaction.value = Some("999999999999999999".to_string()); // huge value
+        let policy = policy_with_rules(
+            "max-value",
+            vec![PolicyRule::MaxTransactionValue {
+                max_wei: "1".to_string(), // very low cap
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(
+            result.allow,
+            "message signing should not be blocked by MaxTransactionValue"
+        );
+    }
+}

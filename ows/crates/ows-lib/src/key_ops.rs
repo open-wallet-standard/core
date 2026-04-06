@@ -84,7 +84,8 @@ fn parse_evm_tx_fields(tx_bytes: &[u8]) -> (Option<String>, Option<String>) {
     }
 
     // Determine tx type and skip type byte for typed txs
-    let (data, _typed) = if tx_bytes[0] == 0x02 || tx_bytes[0] == 0x01 {
+    // EIP-2718: any first byte in [0x00, 0x7f] is a typed transaction
+    let (data, _typed) = if tx_bytes[0] <= 0x7f {
         (&tx_bytes[1..], true)
     } else {
         (tx_bytes, false)
@@ -241,6 +242,7 @@ pub fn sign_with_api_key(
         chain_id: chain.chain_id.to_string(),
         wallet_id: wallet.id.clone(),
         api_key_id: key_file.id.clone(),
+        operation: ows_core::policy::SigningOperation::SignTransaction,
         transaction: ows_core::policy::TransactionContext {
             to: parsed_to,
             value: parsed_value,
@@ -304,6 +306,7 @@ pub fn sign_message_with_api_key(
         chain_id: chain.chain_id.to_string(),
         wallet_id: wallet.id.clone(),
         api_key_id: key_file.id.clone(),
+        operation: ows_core::policy::SigningOperation::SignMessage,
         transaction: ows_core::policy::TransactionContext {
             to: None,
             value: None,
@@ -364,6 +367,7 @@ pub fn enforce_policy_and_decrypt_key(
         chain_id: chain.chain_id.to_string(),
         wallet_id: wallet.id.clone(),
         api_key_id: key_file.id.clone(),
+        operation: ows_core::policy::SigningOperation::SignMessage,
         transaction: ows_core::policy::TransactionContext {
             to: None,
             value: None,
