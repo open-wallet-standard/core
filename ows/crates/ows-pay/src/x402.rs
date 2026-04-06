@@ -23,11 +23,11 @@ pub(crate) async fn handle_x402(
     body_402: &str,
     preferred_network: Option<&str>,
 ) -> Result<PayResult, PayError> {
-    let (x402_version, resource, requirements) = parse_requirements(resp_headers, body_402)?;
+    let (x402_version, resource, requirements, extensions) = parse_requirements(resp_headers, body_402)?;
     let (req, network) = pick_payment_option(wallet, &requirements, preferred_network)?;
 
     let (payload, payment_info) =
-        build_signed_payment(wallet, req, &network, x402_version, resource).await?;
+        build_signed_payment(wallet, req, &network, x402_version, resource, extensions).await?;
 
     let payload_json = serde_json::to_string(&payload)?;
     let payload_b64 = B64.encode(payload_json.as_bytes());
@@ -59,16 +59,17 @@ async fn build_signed_payment(
     network: &str,
     x402_version: u32,
     resource: Option<serde_json::Value>,
+    extensions: Option<serde_json::Value>,
 ) -> Result<(PaymentPayload, PaymentInfo), PayError> {
     match req.scheme.as_str() {
         "exact" => {
             let chain_type = chains::resolve_chain_type(network);
             match chain_type {
                 Some(ows_core::ChainType::Stellar) => {
-                    build_stellar_exact(wallet, req, network, x402_version, resource).await
+                    build_stellar_exact(wallet, req, network, x402_version, resource, extensions).await
                 }
                 Some(ows_core::ChainType::Evm) | None => {
-                    build_evm_exact(wallet, req, network, x402_version, resource)
+                    build_evm_exact(wallet, req, network, x402_version, resource, extensions)
                 }
                 Some(_) => Err(PayError::new(
                     PayErrorCode::UnsupportedChain,
@@ -90,6 +91,7 @@ fn build_evm_exact(
     network: &str,
     x402_version: u32,
     resource: Option<serde_json::Value>,
+    extensions: Option<serde_json::Value>,
 ) -> Result<(PaymentPayload, PaymentInfo), PayError> {
     let account = wallet.account(network)?;
 
@@ -177,6 +179,7 @@ fn build_evm_exact(
             accepted: req.clone(),
             resource,
             payload: inner,
+            extensions,
         })
     } else {
         PaymentPayload::V1(PaymentPayloadV1 {
@@ -228,6 +231,7 @@ async fn build_stellar_exact(
     network: &str,
     x402_version: u32,
     resource: Option<serde_json::Value>,
+    extensions: Option<serde_json::Value>,
 ) -> Result<(PaymentPayload, PaymentInfo), PayError> {
     let account = wallet.account(network)?;
     let rpc_url = stellar_rpc_url(network)?;
@@ -376,6 +380,7 @@ async fn build_stellar_exact(
             accepted: req.clone(),
             resource,
             payload: inner,
+            extensions,
         })
     } else {
         PaymentPayload::V1(PaymentPayloadV1 {
@@ -808,7 +813,7 @@ fn assemble_stellar_tx(
 fn parse_requirements(
     headers: &reqwest::header::HeaderMap,
     body_text: &str,
-) -> Result<(u32, Option<serde_json::Value>, Vec<PaymentRequirements>), PayError> {
+) -> Result<(u32, Option<serde_json::Value>, Vec<PaymentRequirements>, Option<serde_json::Value>), PayError> {
     for header_name in &[HEADER_PAYMENT_REQUIRED_V2, HEADER_PAYMENT_REQUIRED] {
         if let Some(header_val) = headers.get(*header_name) {
             if let Ok(header_str) = header_val.to_str() {
@@ -819,7 +824,7 @@ fn parse_requirements(
                                 HEADER_PAYMENT_REQUIRED_V2 => parsed.x402_version.unwrap_or(2),
                                 _ => parsed.x402_version.unwrap_or(1),
                             };
-                            return Ok((version, parsed.resource, parsed.accepts));
+                            return Ok((version, parsed.resource, parsed.accepts, parsed.extensions));
                         }
                     }
                 }
@@ -845,6 +850,7 @@ fn parse_requirements(
         parsed.x402_version.unwrap_or(1),
         parsed.resource,
         parsed.accepts,
+        parsed.extensions,
     ))
 }
 
@@ -1207,7 +1213,7 @@ mod tests {
         })
         .to_string();
 
-        let (_, _, reqs) = parse_requirements(&headers, &body).unwrap();
+        let (_, _, reqs, _) = parse_requirements(&headers, &body).unwrap();
         assert_eq!(reqs.len(), 1);
         assert_eq!(reqs[0].scheme, "exact");
         assert_eq!(reqs[0].network, "eip155:8453");
@@ -1229,7 +1235,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-payment-required", encoded.parse().unwrap());
 
-        let (_, _, reqs) = parse_requirements(&headers, "not json").unwrap();
+        let (_, _, reqs, _) = parse_requirements(&headers, "not json").unwrap();
         assert_eq!(reqs.len(), 1);
         assert_eq!(reqs[0].pay_to, "0xdef");
     }
@@ -1250,7 +1256,7 @@ mod tests {
         })
         .to_string();
 
-        let (_, _, reqs) = parse_requirements(&headers, &body).unwrap();
+        let (_, _, reqs, _) = parse_requirements(&headers, &body).unwrap();
         assert_eq!(reqs[0].pay_to, "0xbbb");
     }
 
@@ -1270,7 +1276,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("payment-required", encoded.parse().unwrap());
 
-        let (_, _, reqs) = parse_requirements(&headers, "not json").unwrap();
+        let (_, _, reqs, _) = parse_requirements(&headers, "not json").unwrap();
         assert_eq!(reqs.len(), 1);
         assert_eq!(reqs[0].pay_to, "0xv2");
     }
@@ -1291,7 +1297,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("payment-required", encoded.parse().unwrap());
 
-        let (version, _, reqs) = parse_requirements(&headers, "not json").unwrap();
+        let (version, _, reqs, _) = parse_requirements(&headers, "not json").unwrap();
         assert_eq!(version, 2);
         assert_eq!(reqs.len(), 1);
         assert_eq!(reqs[0].pay_to, "0xv2");
@@ -1317,10 +1323,10 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("payment-required", encoded.parse().unwrap());
 
-        let (version, resource, reqs) = parse_requirements(&headers, "not json").unwrap();
+        let (version, resource, reqs, extensions) = parse_requirements(&headers, "not json").unwrap();
         let (req, network) = pick_payment_option(&EvmWallet, &reqs, None).unwrap();
         let (payload, _) =
-            build_signed_payment(&EvmWallet, req, &network, version, resource).await.unwrap();
+            build_signed_payment(&EvmWallet, req, &network, version, resource, extensions).await.unwrap();
 
         match payload {
             PaymentPayload::V2(v2) => {
@@ -1353,7 +1359,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let (_, _, reqs) = parse_requirements(&headers, "not json").unwrap();
+        let (_, _, reqs, _) = parse_requirements(&headers, "not json").unwrap();
         assert_eq!(reqs[0].pay_to, "0xv2");
     }
 
@@ -1504,7 +1510,7 @@ mod tests {
     #[test]
     fn build_evm_exact_produces_valid_payload() {
         let req = base_requirement();
-        let (payload, info) = build_evm_exact(&EvmWallet, &req, "eip155:8453", 1, None).unwrap();
+        let (payload, info) = build_evm_exact(&EvmWallet, &req, "eip155:8453", 1, None, None).unwrap();
 
         let v1 = match &payload {
             PaymentPayload::V1(p) => p,
@@ -1534,7 +1540,7 @@ mod tests {
             "mimeType": "application/json"
         });
         let (payload, _) =
-            build_evm_exact(&EvmWallet, &req, "eip155:8453", 2, Some(resource.clone())).unwrap();
+            build_evm_exact(&EvmWallet, &req, "eip155:8453", 2, Some(resource.clone()), None).unwrap();
 
         let v2 = match &payload {
             PaymentPayload::V2(p) => p,
@@ -1556,7 +1562,7 @@ mod tests {
     #[test]
     fn build_evm_exact_v2_with_no_resource() {
         let req = base_requirement();
-        let (payload, _) = build_evm_exact(&EvmWallet, &req, "eip155:8453", 2, None).unwrap();
+        let (payload, _) = build_evm_exact(&EvmWallet, &req, "eip155:8453", 2, None, None).unwrap();
 
         let v2 = match &payload {
             PaymentPayload::V2(p) => p,
@@ -1573,7 +1579,7 @@ mod tests {
         req.description = None;
         req.resource = None;
 
-        let (payload, _) = build_evm_exact(&EvmWallet, &req, "eip155:8453", 2, None).unwrap();
+        let (payload, _) = build_evm_exact(&EvmWallet, &req, "eip155:8453", 2, None, None).unwrap();
         let encoded = serde_json::to_value(payload).unwrap();
         let accepted = &encoded["accepted"];
 
@@ -1585,7 +1591,7 @@ mod tests {
     #[test]
     fn build_evm_exact_fails_for_non_numeric_chain_id() {
         let req = base_requirement();
-        let err = build_evm_exact(&EvmWallet, &req, "solana:mainnet", 1, None).unwrap_err();
+        let err = build_evm_exact(&EvmWallet, &req, "solana:mainnet", 1, None, None).unwrap_err();
         assert_eq!(err.code, PayErrorCode::ProtocolMalformed);
     }
 
@@ -1610,7 +1616,7 @@ mod tests {
         .to_string();
 
         let headers = HeaderMap::new();
-        let (_, _, reqs) = parse_requirements(&headers, &body).unwrap();
+        let (_, _, reqs, _) = parse_requirements(&headers, &body).unwrap();
         let (req, network) = pick_payment_option(&EvmWallet, &reqs, None).unwrap();
         assert_eq!(req.pay_to, "0x7d9d1821d15B9e0b8Ab98A058361233E255E405D");
         assert_eq!(network, "eip155:8453"); // "base" resolved to CAIP-2
