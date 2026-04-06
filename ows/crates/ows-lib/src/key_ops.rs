@@ -77,6 +77,140 @@ pub fn create_api_key(
 /// 3. Load and evaluate policies
 /// 4. HKDF(token) → decrypt wallet secret
 /// 5. Resolve signing key → sign
+// Parse to/value from EVM tx bytes for policy evaluation.
+fn parse_evm_tx_fields(tx_bytes: &[u8]) -> (Option<String>, Option<String>) {
+    if tx_bytes.is_empty() {
+        return (None, None);
+    }
+
+    // Determine tx type and skip type byte for typed txs
+    // EIP-2718: any first byte in [0x00, 0x7f] is a typed transaction
+    let (data, _typed) = if tx_bytes[0] <= 0x7f {
+        (&tx_bytes[1..], true)
+    } else {
+        (tx_bytes, false)
+    };
+
+    // Parse RLP list
+    if data.is_empty() || data[0] < 0xc0 {
+        return (None, None);
+    }
+
+    let payload = if data[0] <= 0xf7 {
+        let len = (data[0] - 0xc0) as usize;
+        if data.len() < 1 + len {
+            return (None, None);
+        }
+        &data[1..1 + len]
+    } else {
+        let len_of_len = (data[0] - 0xf7) as usize;
+        if data.len() < 1 + len_of_len {
+            return (None, None);
+        }
+        let mut len = 0usize;
+        for b in &data[1..1 + len_of_len] {
+            len = (len << 8) | (*b as usize);
+        }
+        if data.len() < 1 + len_of_len + len {
+            return (None, None);
+        }
+        &data[1 + len_of_len..1 + len_of_len + len]
+    };
+
+    // Decode RLP items from payload
+    let mut items: Vec<Vec<u8>> = Vec::new();
+    let mut pos = 0;
+    while pos < payload.len() {
+        let b = payload[pos];
+        if b < 0x80 {
+            items.push(vec![b]);
+            pos += 1;
+        } else if b <= 0xb7 {
+            let len = (b - 0x80) as usize;
+            if pos + 1 + len > payload.len() {
+                break;
+            }
+            items.push(payload[pos + 1..pos + 1 + len].to_vec());
+            pos += 1 + len;
+        } else if b <= 0xbf {
+            let len_of_len = (b - 0xb7) as usize;
+            if pos + 1 + len_of_len > payload.len() {
+                break;
+            }
+            let mut len = 0usize;
+            for byte in &payload[pos + 1..pos + 1 + len_of_len] {
+                len = (len << 8) | (*byte as usize);
+            }
+            if pos + 1 + len_of_len + len > payload.len() {
+                break;
+            }
+            items.push(payload[pos + 1 + len_of_len..pos + 1 + len_of_len + len].to_vec());
+            pos += 1 + len_of_len + len;
+        } else {
+            // List item — skip for now
+            if b <= 0xf7 {
+                let len = (b - 0xc0) as usize;
+                items.push(vec![]);
+                pos += 1 + len;
+            } else {
+                let len_of_len = (b - 0xf7) as usize;
+                if pos + 1 + len_of_len > payload.len() {
+                    break;
+                }
+                let mut len = 0usize;
+                for byte in &payload[pos + 1..pos + 1 + len_of_len] {
+                    len = (len << 8) | (*byte as usize);
+                }
+                items.push(vec![]);
+                pos += 1 + len_of_len + len;
+            }
+        }
+    }
+
+    // EIP-1559 (0x02): chain_id, nonce, max_priority_fee, max_fee, gas, to, value, data, access_list
+    // Legacy:          nonce, gas_price, gas, to, value, data, v, r, s
+    // EIP-2930 (0x01): chain_id, nonce, gas_price, gas, to, value, data, access_list
+    let (to_idx, value_idx) = if tx_bytes[0] == 0x01 {
+        (4, 5) // EIP-2930
+    } else if tx_bytes[0] <= 0x7f {
+        (5, 6) // EIP-1559 layout: 0x02, 0x03 (EIP-4844), 0x04 (EIP-7702), future types
+    } else {
+        (3, 4) // Legacy (first byte >= 0xc0)
+    };
+
+    let to = items.get(to_idx).and_then(|b| {
+        if b.len() == 20 {
+            Some(format!("0x{}", hex::encode(b)))
+        } else {
+            None // contract creation
+        }
+    });
+
+    let value = items.get(value_idx).map(|b| {
+        if b.is_empty() {
+            "0".to_string()
+        } else if b.len() > 32 {
+            // Value exceeds uint256 — return sentinel to trigger policy denial
+            "U256_OVERFLOW".to_string()
+        } else {
+            // Decode big-endian bytes as u128 (safe for values up to ~3.4e38)
+            // For values > u128::MAX, return a string that exceeds any reasonable max_wei
+            if b.len() > 16 {
+                // Value exceeds u128::MAX — use non-parseable sentinel to force denial
+                "U128_OVERFLOW".to_string()
+            } else {
+                let mut n: u128 = 0;
+                for byte in b {
+                    n = n.wrapping_shl(8) | (*byte as u128);
+                }
+                n.to_string()
+            }
+        }
+    });
+
+    (to, value)
+}
+
 pub fn sign_with_api_key(
     token: &str,
     wallet_name_or_id: &str,
@@ -108,13 +242,20 @@ pub fn sign_with_api_key(
 
     let tx_hex = hex::encode(tx_bytes);
 
+    let (parsed_to, parsed_value) = if chain.chain_id.starts_with("eip155:") {
+        parse_evm_tx_fields(tx_bytes)
+    } else {
+        (None, None)
+    };
+
     let context = ows_core::PolicyContext {
         chain_id: chain.chain_id.to_string(),
         wallet_id: wallet.id.clone(),
         api_key_id: key_file.id.clone(),
+        operation: ows_core::policy::SigningOperation::SignTransaction,
         transaction: ows_core::policy::TransactionContext {
-            to: None,
-            value: None,
+            to: parsed_to,
+            value: parsed_value,
             raw_hex: tx_hex,
             data: None,
         },
@@ -175,6 +316,7 @@ pub fn sign_message_with_api_key(
         chain_id: chain.chain_id.to_string(),
         wallet_id: wallet.id.clone(),
         api_key_id: key_file.id.clone(),
+        operation: ows_core::policy::SigningOperation::SignMessage,
         transaction: ows_core::policy::TransactionContext {
             to: None,
             value: None,
@@ -231,13 +373,19 @@ pub fn enforce_policy_and_decrypt_key(
 
     let tx_hex = hex::encode(tx_bytes);
 
+    let (parsed_to, parsed_value) = if chain.chain_id.starts_with("eip155:") {
+        parse_evm_tx_fields(tx_bytes)
+    } else {
+        (None, None)
+    };
     let context = ows_core::PolicyContext {
         chain_id: chain.chain_id.to_string(),
         wallet_id: wallet.id.clone(),
         api_key_id: key_file.id.clone(),
+        operation: ows_core::policy::SigningOperation::SignTransaction,
         transaction: ows_core::policy::TransactionContext {
-            to: None,
-            value: None,
+            to: parsed_to,
+            value: parsed_value,
             raw_hex: tx_hex,
             data: None,
         },

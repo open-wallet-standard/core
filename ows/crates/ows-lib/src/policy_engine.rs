@@ -41,6 +41,12 @@ fn evaluate_rule(rule: &PolicyRule, policy_id: &str, ctx: &PolicyContext) -> Pol
     match rule {
         PolicyRule::AllowedChains { chain_ids } => eval_allowed_chains(policy_id, chain_ids, ctx),
         PolicyRule::ExpiresAt { timestamp } => eval_expires_at(policy_id, timestamp, ctx),
+        PolicyRule::AllowedRecipients { addresses } => {
+            eval_allowed_recipients(policy_id, addresses, ctx)
+        }
+        PolicyRule::MaxTransactionValue { max_wei } => {
+            eval_max_transaction_value(policy_id, max_wei, ctx)
+        }
     }
 }
 
@@ -70,6 +76,77 @@ fn eval_expires_at(policy_id: &str, timestamp: &str, ctx: &PolicyContext) -> Pol
                 ctx.timestamp, timestamp
             ),
         ),
+    }
+}
+
+fn eval_allowed_recipients(
+    policy_id: &str,
+    addresses: &[String],
+    ctx: &PolicyContext,
+) -> PolicyResult {
+    // Only applies to EVM sign_transaction — message signing has no recipient
+    if !ctx.chain_id.starts_with("eip155:") {
+        return PolicyResult::allowed();
+    }
+    if ctx.operation != ows_core::policy::SigningOperation::SignTransaction {
+        return PolicyResult::allowed();
+    }
+    match &ctx.transaction.to {
+        None => PolicyResult::denied(
+            policy_id,
+            "contract creation denied: no recipient address (allowed_recipients policy)",
+        ),
+        Some(to) => {
+            let to_lower = to.to_lowercase();
+            if addresses.iter().any(|a| a.to_lowercase() == to_lower) {
+                PolicyResult::allowed()
+            } else {
+                PolicyResult::denied(
+                    policy_id,
+                    format!("recipient {to} not in allowed_recipients allowlist"),
+                )
+            }
+        }
+    }
+}
+
+fn eval_max_transaction_value(policy_id: &str, max_wei: &str, ctx: &PolicyContext) -> PolicyResult {
+    // Only applies to EVM sign_transaction — message signing has no value
+    if !ctx.chain_id.starts_with("eip155:") {
+        return PolicyResult::allowed();
+    }
+    if ctx.operation != ows_core::policy::SigningOperation::SignTransaction {
+        return PolicyResult::allowed();
+    }
+    let value_str = match &ctx.transaction.value {
+        None => return PolicyResult::allowed(),
+        Some(v) => v,
+    };
+    let value: u128 = match value_str.parse() {
+        Ok(v) => v,
+        Err(_) => {
+            return PolicyResult::denied(
+                policy_id,
+                format!("could not parse transaction value '{value_str}' as integer"),
+            )
+        }
+    };
+    let max: u128 = match max_wei.parse() {
+        Ok(v) => v,
+        Err(_) => {
+            return PolicyResult::denied(
+                policy_id,
+                format!("could not parse max_wei '{max_wei}' as integer"),
+            )
+        }
+    };
+    if value <= max {
+        PolicyResult::allowed()
+    } else {
+        PolicyResult::denied(
+            policy_id,
+            format!("transaction value {value} wei exceeds max_wei {max}"),
+        )
     }
 }
 
@@ -202,6 +279,7 @@ mod tests {
             chain_id: "eip155:8453".to_string(),
             wallet_id: "wallet-1".to_string(),
             api_key_id: "key-1".to_string(),
+            operation: ows_core::policy::SigningOperation::SignTransaction,
             transaction: TransactionContext {
                 to: Some("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".to_string()),
                 value: Some("100000000000000000".to_string()), // 0.1 ETH
@@ -475,5 +553,151 @@ mod tests {
         let result = evaluate_policies(&[policy], &ctx);
         assert!(!result.allow);
         assert!(!marker.exists(), "executable should not have run");
+    }
+    // --- AllowedRecipients ---
+    #[test]
+    fn allowed_recipients_passes_matching_address() {
+        let ctx = base_context();
+        let policy = policy_with_rules(
+            "recipients",
+            vec![PolicyRule::AllowedRecipients {
+                addresses: vec!["0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".to_string()],
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(result.allow);
+    }
+
+    #[test]
+    fn allowed_recipients_is_case_insensitive() {
+        let ctx = base_context();
+        let policy = policy_with_rules(
+            "recipients",
+            vec![PolicyRule::AllowedRecipients {
+                addresses: vec!["0x742d35cc6634c0532925a3b844bc9e7595f2bd0c".to_string()],
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(result.allow);
+    }
+
+    #[test]
+    fn allowed_recipients_denies_unlisted_address() {
+        let ctx = base_context();
+        let policy = policy_with_rules(
+            "recipients",
+            vec![PolicyRule::AllowedRecipients {
+                addresses: vec!["0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string()],
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(!result.allow);
+        assert!(result.reason.unwrap().contains("not in allowed_recipients"));
+    }
+
+    #[test]
+    fn allowed_recipients_denies_contract_creation() {
+        let mut ctx = base_context();
+        ctx.transaction.to = None;
+        let policy = policy_with_rules(
+            "recipients",
+            vec![PolicyRule::AllowedRecipients {
+                addresses: vec!["0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".to_string()],
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(!result.allow);
+        assert!(result.reason.unwrap().contains("contract creation denied"));
+    }
+
+    // --- MaxTransactionValue ---
+    #[test]
+    fn max_transaction_value_passes_under_limit() {
+        let ctx = base_context();
+        let policy = policy_with_rules(
+            "max-value",
+            vec![PolicyRule::MaxTransactionValue {
+                max_wei: "200000000000000000".to_string(),
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(result.allow);
+    }
+
+    #[test]
+    fn max_transaction_value_passes_exact_limit() {
+        let ctx = base_context();
+        let policy = policy_with_rules(
+            "max-value",
+            vec![PolicyRule::MaxTransactionValue {
+                max_wei: "100000000000000000".to_string(),
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(result.allow);
+    }
+
+    #[test]
+    fn max_transaction_value_denies_over_limit() {
+        let ctx = base_context();
+        let policy = policy_with_rules(
+            "max-value",
+            vec![PolicyRule::MaxTransactionValue {
+                max_wei: "50000000000000000".to_string(),
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(!result.allow);
+        assert!(result.reason.unwrap().contains("exceeds max_wei"));
+    }
+
+    #[test]
+    fn max_transaction_value_passes_when_value_is_none() {
+        let mut ctx = base_context();
+        ctx.transaction.value = None;
+        let policy = policy_with_rules(
+            "max-value",
+            vec![PolicyRule::MaxTransactionValue {
+                max_wei: "1".to_string(),
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(result.allow);
+    }
+    #[test]
+    fn allowed_recipients_passes_message_signing() {
+        // Message signing should pass through AllowedRecipients regardless
+        let mut ctx = base_context();
+        ctx.operation = ows_core::policy::SigningOperation::SignMessage;
+        ctx.transaction.to = None; // messages have no recipient
+        let policy = policy_with_rules(
+            "recipients",
+            vec![PolicyRule::AllowedRecipients {
+                addresses: vec!["0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".to_string()],
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(
+            result.allow,
+            "message signing should not be blocked by AllowedRecipients"
+        );
+    }
+
+    #[test]
+    fn max_transaction_value_passes_message_signing() {
+        let mut ctx = base_context();
+        ctx.operation = ows_core::policy::SigningOperation::SignMessage;
+        ctx.transaction.value = Some("999999999999999999".to_string()); // huge value
+        let policy = policy_with_rules(
+            "max-value",
+            vec![PolicyRule::MaxTransactionValue {
+                max_wei: "1".to_string(), // very low cap
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(
+            result.allow,
+            "message signing should not be blocked by MaxTransactionValue"
+        );
     }
 }

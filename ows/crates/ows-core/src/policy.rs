@@ -16,6 +16,13 @@ pub enum PolicyRule {
 
     /// Deny if current time is past the timestamp.
     ExpiresAt { timestamp: String },
+    /// Deny if `to` address is not in the allowlist (EVM sign_transaction only).
+    /// Contract creation (to = None) is always denied when this rule is present.
+    AllowedRecipients { addresses: Vec<String> },
+
+    /// Deny if transaction value (in wei) exceeds the cap (EVM sign_transaction only).
+    /// Non-EVM chains and message signing pass through.
+    MaxTransactionValue { max_wei: String },
 }
 
 /// A stored policy definition.
@@ -35,12 +42,23 @@ pub struct Policy {
     pub action: PolicyAction,
 }
 
+/// The signing operation type — used to gate rules to specific operations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SigningOperation {
+    SignTransaction,
+    SignMessage,
+    SignHash,
+    SignTypedData,
+}
+
 /// Context passed to policy evaluation (and to executable policies via stdin).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyContext {
     pub chain_id: String,
     pub wallet_id: String,
     pub api_key_id: String,
+    pub operation: SigningOperation,
     pub transaction: TransactionContext,
     pub spending: SpendingContext,
     pub timestamp: String,
@@ -180,6 +198,7 @@ mod tests {
             chain_id: "eip155:8453".into(),
             wallet_id: "3198bc9c-6672-5ab3-d995-4942343ae5b6".into(),
             api_key_id: "7a2f1b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c".into(),
+            operation: SigningOperation::SignTransaction,
             transaction: TransactionContext {
                 to: Some("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into()),
                 value: Some("100000000000000000".into()),
@@ -238,5 +257,37 @@ mod tests {
 
         let deserialized: PolicyAction = serde_json::from_value(json).unwrap();
         assert_eq!(deserialized, PolicyAction::Deny);
+    }
+
+    #[test]
+    fn test_policy_rule_serde_allowed_recipients() {
+        let rule = PolicyRule::AllowedRecipients {
+            addresses: vec![
+                "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".to_string(),
+                "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string(),
+            ],
+        };
+        let json = serde_json::to_value(&rule).unwrap();
+        assert_eq!(json["type"], "allowed_recipients");
+        assert_eq!(
+            json["addresses"][0],
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C"
+        );
+
+        let deserialized: PolicyRule = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, rule);
+    }
+
+    #[test]
+    fn test_policy_rule_serde_max_transaction_value() {
+        let rule = PolicyRule::MaxTransactionValue {
+            max_wei: "100000000000000000".to_string(),
+        };
+        let json = serde_json::to_value(&rule).unwrap();
+        assert_eq!(json["type"], "max_transaction_value");
+        assert_eq!(json["max_wei"], "100000000000000000");
+
+        let deserialized: PolicyRule = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, rule);
     }
 }
