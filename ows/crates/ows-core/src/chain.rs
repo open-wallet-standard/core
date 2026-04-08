@@ -21,7 +21,7 @@ pub enum ChainType {
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 10] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 11] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
@@ -593,7 +593,7 @@ mod tests {
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 10);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 11);
     }
 
     #[test]
