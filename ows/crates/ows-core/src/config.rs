@@ -77,6 +77,7 @@ impl Config {
             "xrpl:devnet".into(),
             "https://s.devnet.rippletest.net:51234".into(),
         );
+        rpc.insert("nano:mainnet".into(), "https://rpc.nano.to".into());
         rpc
     }
 }

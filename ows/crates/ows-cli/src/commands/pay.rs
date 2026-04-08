@@ -105,18 +105,18 @@ pub fn run(
 
     let result = rt.block_on(ows_pay::pay(&wallet, url, method, body))?;
 
-    if let Some(ref payment) = result.payment {
-        if !payment.amount.is_empty() {
-            eprintln!(
-                "Paid {} on {} via {}",
-                payment.amount, payment.network, result.protocol
-            );
-        } else {
-            eprintln!("Paid via {}", result.protocol);
+    if result.status < 400 {
+        if let Some(ref payment) = result.payment {
+            if !payment.amount.is_empty() {
+                eprintln!(
+                    "Paid {} on {} via {}",
+                    payment.amount, payment.network, result.protocol
+                );
+            } else {
+                eprintln!("Paid via {}", result.protocol);
+            }
         }
-    }
-
-    if result.status >= 400 {
+    } else {
         eprintln!("HTTP {}", result.status);
     }
 

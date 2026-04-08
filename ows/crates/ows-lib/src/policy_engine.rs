@@ -41,6 +41,9 @@ fn evaluate_rule(rule: &PolicyRule, policy_id: &str, ctx: &PolicyContext) -> Pol
     match rule {
         PolicyRule::AllowedChains { chain_ids } => eval_allowed_chains(policy_id, chain_ids, ctx),
         PolicyRule::ExpiresAt { timestamp } => eval_expires_at(policy_id, timestamp, ctx),
+        PolicyRule::AllowedTypedDataContracts { contracts } => {
+            eval_allowed_typed_data_contracts(policy_id, contracts, ctx)
+        }
     }
 }
 
@@ -70,6 +73,37 @@ fn eval_expires_at(policy_id: &str, timestamp: &str, ctx: &PolicyContext) -> Pol
                 ctx.timestamp, timestamp
             ),
         ),
+    }
+}
+
+fn eval_allowed_typed_data_contracts(
+    policy_id: &str,
+    contracts: &[String],
+    ctx: &PolicyContext,
+) -> PolicyResult {
+    let td = match &ctx.typed_data {
+        None => return PolicyResult::allowed(),
+        Some(td) => td,
+    };
+
+    let contract = match &td.verifying_contract {
+        None => {
+            return PolicyResult::denied(
+                policy_id,
+                "typed data has no verifyingContract but policy requires one",
+            );
+        }
+        Some(c) => c,
+    };
+
+    let contract_lower = contract.to_lowercase();
+    if contracts.iter().any(|c| c.to_lowercase() == contract_lower) {
+        PolicyResult::allowed()
+    } else {
+        PolicyResult::denied(
+            policy_id,
+            format!("verifyingContract {contract} not in allowed list"),
+        )
     }
 }
 
@@ -194,7 +228,7 @@ fn wait_with_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ows_core::policy::{SpendingContext, TransactionContext};
+    use ows_core::policy::{SpendingContext, TransactionContext, TypedDataContext};
     use ows_core::PolicyAction;
 
     fn base_context() -> PolicyContext {
@@ -213,6 +247,7 @@ mod tests {
                 date: "2026-03-22".to_string(),
             },
             timestamp: "2026-03-22T10:35:22Z".to_string(),
+            typed_data: None,
         }
     }
 
@@ -475,5 +510,132 @@ mod tests {
         let result = evaluate_policies(&[policy], &ctx);
         assert!(!result.allow);
         assert!(!marker.exists(), "executable should not have run");
+    }
+
+    // --- AllowedTypedDataContracts ---
+
+    fn typed_data_context(verifying_contract: Option<&str>) -> TypedDataContext {
+        TypedDataContext {
+            verifying_contract: verifying_contract.map(String::from),
+            domain_chain_id: Some(8453),
+            primary_type: "PermitSingle".into(),
+            domain_name: Some("Permit2".into()),
+            domain_version: Some("1".into()),
+            raw_json: "{}".into(),
+        }
+    }
+
+    #[test]
+    fn allowed_typed_data_contracts_matching_allows() {
+        let mut ctx = base_context();
+        ctx.typed_data = Some(typed_data_context(Some(
+            "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+        )));
+        let policy = policy_with_rules(
+            "td",
+            vec![PolicyRule::AllowedTypedDataContracts {
+                contracts: vec!["0x000000000022D473030F116dDEE9F6B43aC78BA3".into()],
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(result.allow);
+    }
+
+    #[test]
+    fn allowed_typed_data_contracts_non_matching_denies() {
+        let mut ctx = base_context();
+        ctx.typed_data = Some(typed_data_context(Some("0xDEAD")));
+        let policy = policy_with_rules(
+            "td",
+            vec![PolicyRule::AllowedTypedDataContracts {
+                contracts: vec!["0x000000000022D473030F116dDEE9F6B43aC78BA3".into()],
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(!result.allow);
+        assert!(result.reason.unwrap().contains("not in allowed list"));
+    }
+
+    #[test]
+    fn allowed_typed_data_contracts_case_insensitive() {
+        let mut ctx = base_context();
+        ctx.typed_data = Some(typed_data_context(Some(
+            "0x000000000022d473030f116ddee9f6b43ac78ba3",
+        )));
+        let policy = policy_with_rules(
+            "td",
+            vec![PolicyRule::AllowedTypedDataContracts {
+                contracts: vec!["0x000000000022D473030F116dDEE9F6B43aC78BA3".into()],
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(result.allow);
+    }
+
+    #[test]
+    fn allowed_typed_data_contracts_no_typed_data_passes() {
+        let ctx = base_context();
+        let policy = policy_with_rules(
+            "td",
+            vec![PolicyRule::AllowedTypedDataContracts {
+                contracts: vec!["0x000000000022D473030F116dDEE9F6B43aC78BA3".into()],
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(result.allow);
+    }
+
+    #[test]
+    fn allowed_typed_data_contracts_no_verifying_contract_denies() {
+        let mut ctx = base_context();
+        ctx.typed_data = Some(typed_data_context(None));
+        let policy = policy_with_rules(
+            "td",
+            vec![PolicyRule::AllowedTypedDataContracts {
+                contracts: vec!["0x000000000022D473030F116dDEE9F6B43aC78BA3".into()],
+            }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(!result.allow);
+        assert!(result.reason.unwrap().contains("no verifyingContract"));
+    }
+
+    #[test]
+    fn allowed_typed_data_contracts_empty_list_denies_everything() {
+        let mut ctx = base_context();
+        ctx.typed_data = Some(typed_data_context(Some(
+            "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+        )));
+        let policy = policy_with_rules(
+            "td",
+            vec![PolicyRule::AllowedTypedDataContracts { contracts: vec![] }],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(!result.allow);
+        assert!(result.reason.unwrap().contains("not in allowed list"));
+    }
+
+    #[test]
+    fn combined_rules_with_typed_data_contracts() {
+        let mut ctx = base_context();
+        ctx.typed_data = Some(typed_data_context(Some(
+            "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+        )));
+        let policy = policy_with_rules(
+            "combined",
+            vec![
+                PolicyRule::AllowedChains {
+                    chain_ids: vec!["eip155:8453".into()],
+                },
+                PolicyRule::AllowedTypedDataContracts {
+                    contracts: vec!["0x000000000022D473030F116dDEE9F6B43aC78BA3".into()],
+                },
+                PolicyRule::ExpiresAt {
+                    timestamp: "2027-01-01T00:00:00Z".into(),
+                },
+            ],
+        );
+        let result = evaluate_policies(&[policy], &ctx);
+        assert!(result.allow);
     }
 }

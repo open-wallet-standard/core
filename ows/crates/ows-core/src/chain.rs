@@ -1,3 +1,4 @@
+use crate::caip::ChainId;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -16,6 +17,7 @@ pub enum ChainType {
     Sui,
     Stacks,
     Xrpl,
+    Nano,
 }
 
 /// All supported chain families, used for universal wallet derivation.
@@ -30,6 +32,7 @@ pub const ALL_CHAIN_TYPES: [ChainType; 10] = [
     ChainType::Sui,
     ChainType::Stacks,
     ChainType::Xrpl,
+    ChainType::Nano,
 ];
 
 /// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
@@ -38,6 +41,38 @@ pub struct Chain {
     pub name: &'static str,
     pub chain_type: ChainType,
     pub chain_id: &'static str,
+}
+
+impl Chain {
+    /// Return the EIP-155 reference portion of this chain's CAIP-2 ID.
+    pub fn evm_chain_reference(&self) -> Result<&str, String> {
+        if self.chain_type != ChainType::Evm {
+            return Err(format!("chain '{}' is not an EVM chain", self.chain_id));
+        }
+
+        let chain_id = self
+            .chain_id
+            .parse::<ChainId>()
+            .map_err(|e| e.to_string())?;
+        if chain_id.namespace != "eip155" {
+            return Err(format!(
+                "EVM chain '{}' is missing an eip155 reference",
+                self.chain_id
+            ));
+        }
+
+        self.chain_id
+            .split_once(':')
+            .map(|(_, reference)| reference)
+            .ok_or_else(|| format!("invalid CAIP-2 chain ID: '{}'", self.chain_id))
+    }
+
+    /// Return the numeric EIP-155 chain ID for an EVM chain.
+    pub fn evm_chain_id_u64(&self) -> Result<u64, String> {
+        self.evm_chain_reference()?
+            .parse()
+            .map_err(|_| format!("cannot extract numeric chain ID from: {}", self.chain_id))
+    }
 }
 
 /// Known chains registry.
@@ -147,6 +182,11 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_type: ChainType::Xrpl,
         chain_id: "xrpl:devnet",
     },
+    Chain {
+        name: "nano",
+        chain_type: ChainType::Nano,
+        chain_id: "nano:mainnet",
+    },
 ];
 
 /// Parse a chain string into a `Chain`. Accepts:
@@ -211,7 +251,7 @@ pub fn parse_chain(s: &str) -> Result<Chain, String> {
            EVM:     ethereum, base, arbitrum, optimism, polygon, bsc, avalanche, plasma, etherlink\n  \
            Solana:  solana\n  \
            Bitcoin: bitcoin\n  \
-           Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl\n\n\
+           Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl, nano\n\n\
          Or use a CAIP-2 ID (eip155:8453) or bare EVM chain ID (8453)"
     ))
 }
@@ -236,6 +276,7 @@ impl ChainType {
             ChainType::Sui => "sui",
             ChainType::Stacks => "stacks",
             ChainType::Xrpl => "xrpl",
+            ChainType::Nano => "nano",
         }
     }
 
@@ -253,6 +294,7 @@ impl ChainType {
             ChainType::Sui => 784,
             ChainType::Stacks => 5757,
             ChainType::Xrpl => 144,
+            ChainType::Nano => 165,
         }
     }
 
@@ -270,6 +312,7 @@ impl ChainType {
             "sui" => Some(ChainType::Sui),
             "stacks" => Some(ChainType::Stacks),
             "xrpl" => Some(ChainType::Xrpl),
+            "nano" => Some(ChainType::Nano),
             _ => None,
         }
     }
@@ -289,6 +332,7 @@ impl fmt::Display for ChainType {
             ChainType::Sui => "sui",
             ChainType::Stacks => "stacks",
             ChainType::Xrpl => "xrpl",
+            ChainType::Nano => "nano",
         };
         write!(f, "{}", s)
     }
@@ -310,6 +354,7 @@ impl FromStr for ChainType {
             "sui" => Ok(ChainType::Sui),
             "stacks" => Ok(ChainType::Stacks),
             "xrpl" => Ok(ChainType::Xrpl),
+            "nano" => Ok(ChainType::Nano),
             _ => Err(format!("unknown chain type: {}", s)),
         }
     }
@@ -342,6 +387,7 @@ mod tests {
             (ChainType::Sui, "\"sui\""),
             (ChainType::Stacks, "\"stacks\""),
             (ChainType::Xrpl, "\"xrpl\""),
+            (ChainType::Nano, "\"nano\""),
         ] {
             let json = serde_json::to_string(&chain).unwrap();
             assert_eq!(json, expected);
@@ -363,6 +409,7 @@ mod tests {
         assert_eq!(ChainType::Sui.namespace(), "sui");
         assert_eq!(ChainType::Stacks.namespace(), "stacks");
         assert_eq!(ChainType::Xrpl.namespace(), "xrpl");
+        assert_eq!(ChainType::Nano.namespace(), "nano");
     }
 
     #[test]
@@ -378,6 +425,7 @@ mod tests {
         assert_eq!(ChainType::Sui.default_coin_type(), 784);
         assert_eq!(ChainType::Stacks.default_coin_type(), 5757);
         assert_eq!(ChainType::Xrpl.default_coin_type(), 144);
+        assert_eq!(ChainType::Nano.default_coin_type(), 165);
     }
 
     #[test]
@@ -396,6 +444,7 @@ mod tests {
         assert_eq!(ChainType::from_namespace("sui"), Some(ChainType::Sui));
         assert_eq!(ChainType::from_namespace("stacks"), Some(ChainType::Stacks));
         assert_eq!(ChainType::from_namespace("xrpl"), Some(ChainType::Xrpl));
+        assert_eq!(ChainType::from_namespace("nano"), Some(ChainType::Nano));
         assert_eq!(ChainType::from_namespace("unknown"), None);
     }
 
@@ -457,6 +506,27 @@ mod tests {
         assert_eq!(chain.name, "eip155:9746");
         assert_eq!(chain.chain_type, ChainType::Evm);
         assert_eq!(chain.chain_id, "eip155:9746");
+    }
+
+    #[test]
+    fn test_evm_chain_reference_for_known_chain() {
+        let chain = parse_chain("base").unwrap();
+        assert_eq!(chain.evm_chain_reference().unwrap(), "8453");
+        assert_eq!(chain.evm_chain_id_u64().unwrap(), 8453);
+    }
+
+    #[test]
+    fn test_evm_chain_reference_for_unknown_caip2_chain() {
+        let chain = parse_chain("eip155:999999").unwrap();
+        assert_eq!(chain.evm_chain_reference().unwrap(), "999999");
+        assert_eq!(chain.evm_chain_id_u64().unwrap(), 999999);
+    }
+
+    #[test]
+    fn test_evm_chain_reference_rejects_non_evm_chain() {
+        let chain = parse_chain("solana").unwrap();
+        let err = chain.evm_chain_reference().unwrap_err();
+        assert!(err.contains("not an EVM chain"));
     }
 
     #[test]

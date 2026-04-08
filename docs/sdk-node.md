@@ -265,8 +265,6 @@ console.log(result.recoveryId); // 0 or 1
 
 Sign EIP-712 typed structured data (EVM only).
 
-Current implementations support typed-data signing for owner-mode credentials. API-token typed-data signing is not yet supported.
-
 ```javascript
 const typedData = JSON.stringify({
   types: {

@@ -513,8 +513,8 @@ pub fn sign_message(
 /// Sign EIP-712 typed structured data. Returns hex-encoded signature.
 /// Only supported for EVM chains.
 ///
-/// Note: API token signing is not supported for typed data (EVM-specific
-/// operation that requires full context). Use `sign_transaction` instead.
+/// Accepts either the owner's passphrase or an API token (`ows_key_...`).
+/// When a token is provided, policy enforcement occurs before signing.
 pub fn sign_typed_data(
     wallet: &str,
     chain: &str,
@@ -533,10 +533,14 @@ pub fn sign_typed_data(
     }
 
     if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
-        return Err(OwsLibError::InvalidInput(
-            "EIP-712 typed data signing via API key is not yet supported; use sign_transaction"
-                .into(),
-        ));
+        return crate::key_ops::sign_typed_data_with_api_key(
+            credential,
+            wallet,
+            &chain,
+            typed_data_json,
+            index,
+            vault_path,
+        );
     }
 
     let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
@@ -699,6 +703,7 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
         ChainType::Stacks => broadcast_stacks(rpc_url, signed_bytes),
         ChainType::Xrpl => broadcast_xrpl(rpc_url, signed_bytes),
+        ChainType::Nano => broadcast_nano(rpc_url, signed_bytes),
     }
 }
 
@@ -899,6 +904,87 @@ fn broadcast_stacks(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLib
     }
 
     Ok(resp.trim().trim_matches('"').to_string())
+}
+
+fn broadcast_nano(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
+    const STATE_BLOCK_LEN: usize = 176;
+    const SIGNATURE_LEN: usize = 64;
+    const SIGNED_BLOCK_LEN: usize = STATE_BLOCK_LEN + SIGNATURE_LEN;
+
+    if signed_bytes.len() != SIGNED_BLOCK_LEN {
+        return Err(OwsLibError::InvalidInput(format!(
+            "Nano signed block must be {} bytes ({} block + {} sig), got {}",
+            SIGNED_BLOCK_LEN,
+            STATE_BLOCK_LEN,
+            SIGNATURE_LEN,
+            signed_bytes.len()
+        )));
+    }
+
+    let block_bytes = &signed_bytes[..STATE_BLOCK_LEN];
+    let signature = &signed_bytes[STATE_BLOCK_LEN..SIGNED_BLOCK_LEN];
+
+    // Extract fields from the 176-byte canonical block
+    let account: [u8; 32] = block_bytes[32..64]
+        .try_into()
+        .map_err(|_| OwsLibError::InvalidInput("invalid account bytes in block".into()))?;
+    let previous = &block_bytes[64..96];
+    let representative: [u8; 32] = block_bytes[96..128]
+        .try_into()
+        .map_err(|_| OwsLibError::InvalidInput("invalid representative bytes in block".into()))?;
+    let balance_bytes: [u8; 16] = block_bytes[128..144]
+        .try_into()
+        .map_err(|_| OwsLibError::InvalidInput("invalid balance bytes in block".into()))?;
+    let balance = u128::from_be_bytes(balance_bytes);
+    let link = &block_bytes[144..STATE_BLOCK_LEN];
+
+    let previous_is_zero = previous == [0u8; 32];
+
+    let account_address = ows_signer::chains::nano::nano_address(&account);
+
+    // Determine block subtype by querying current account balance
+    let subtype = if previous_is_zero {
+        "open"
+    } else {
+        match crate::nano_rpc::account_info(rpc_url, &account_address)? {
+            Some(info) => {
+                let prev_balance: u128 = info.balance.parse().unwrap_or(0);
+                if balance < prev_balance {
+                    "send"
+                } else {
+                    "receive"
+                }
+            }
+            None => "open",
+        }
+    };
+
+    let difficulty = match subtype {
+        "send" => crate::nano_rpc::SEND_DIFFICULTY,
+        _ => crate::nano_rpc::RECEIVE_DIFFICULTY,
+    };
+
+    // PoW root: for open blocks, use account pubkey; otherwise use previous hash
+    let work_root = if previous_is_zero {
+        hex::encode(account)
+    } else {
+        hex::encode(previous)
+    };
+
+    let work = crate::nano_rpc::work_generate(rpc_url, &work_root, difficulty)?;
+
+    let block_json = serde_json::json!({
+        "type": "state",
+        "account": account_address,
+        "previous": hex::encode(previous),
+        "representative": ows_signer::chains::nano::nano_address(&representative),
+        "balance": balance.to_string(),
+        "link": hex::encode(link),
+        "signature": hex::encode(signature),
+        "work": work
+    });
+
+    crate::nano_rpc::process_block(rpc_url, &block_json, subtype)
 }
 
 fn curl_post_json(url: &str, body: &str) -> Result<String, OwsLibError> {

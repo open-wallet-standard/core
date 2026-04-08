@@ -17,6 +17,7 @@ import {
   importWalletPrivateKey,
   signTransaction,
   signMessage,
+  signTypedData,
   createPolicy,
   listPolicies,
   getPolicy,
@@ -51,7 +52,7 @@ describe('@open-wallet-standard/core', () => {
 
   it('derives addresses for all chains', () => {
     const phrase = generateMnemonic(12);
-    for (const chain of ['evm', 'solana', 'sui', 'bitcoin', 'cosmos', 'tron', 'ton', 'filecoin', 'xrpl']) {
+    for (const chain of ['evm', 'solana', 'sui', 'bitcoin', 'cosmos', 'tron', 'ton', 'filecoin', 'xrpl', 'nano']) {
       const addr = deriveAddress(phrase, chain);
       assert.ok(addr.length > 0, `address should be non-empty for ${chain}`);
     }
@@ -59,10 +60,10 @@ describe('@open-wallet-standard/core', () => {
 
   // ---- Universal wallet lifecycle ----
 
-  it('creates a universal wallet with 9 accounts', () => {
+  it('creates a universal wallet with 10 accounts', () => {
     const wallet = createWallet('lifecycle-test', undefined, 12, vaultDir);
     assert.equal(wallet.name, 'lifecycle-test');
-    assert.equal(wallet.accounts.length, 9);
+    assert.equal(wallet.accounts.length, 10);
 
     const chainIds = wallet.accounts.map((a) => a.chainId);
     assert.ok(chainIds.some((c) => c.startsWith('eip155:')));
@@ -74,6 +75,7 @@ describe('@open-wallet-standard/core', () => {
     assert.ok(chainIds.some((c) => c.startsWith('ton:')));
     assert.ok(chainIds.some((c) => c.startsWith('fil:')));
     assert.ok(chainIds.some((c) => c.startsWith('xrpl:')));
+    assert.ok(chainIds.some((c) => c.startsWith('nano:')));
 
     // List
     const wallets = listWallets(vaultDir);
@@ -107,7 +109,7 @@ describe('@open-wallet-standard/core', () => {
 
     const wallet = importWalletMnemonic('mn-import', phrase, undefined, undefined, vaultDir);
     assert.equal(wallet.name, 'mn-import');
-    assert.equal(wallet.accounts.length, 9);
+    assert.equal(wallet.accounts.length, 10);
 
     const evmAcct = wallet.accounts.find((a) => a.chainId.startsWith('eip155:'));
     assert.equal(evmAcct.address, expectedEvm);
@@ -120,12 +122,12 @@ describe('@open-wallet-standard/core', () => {
 
   // ---- Private key import (secp256k1) ----
 
-  it('imports a secp256k1 private key with all 9 accounts', () => {
+  it('imports a secp256k1 private key with all 10 accounts', () => {
     const privkey = '4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318';
     const wallet = importWalletPrivateKey('pk-secp', privkey, undefined, vaultDir, 'evm');
 
     assert.equal(wallet.name, 'pk-secp');
-    assert.equal(wallet.accounts.length, 9, 'should have all 9 chain accounts');
+    assert.equal(wallet.accounts.length, 10, 'should have all 10 chain accounts');
 
     // Sign on EVM (provided key's curve)
     const evmSig = signMessage('pk-secp', 'evm', 'hello', undefined, undefined, undefined, vaultDir);
@@ -145,11 +147,11 @@ describe('@open-wallet-standard/core', () => {
 
   // ---- Private key import (ed25519) ----
 
-  it('imports an ed25519 private key with all 9 accounts', () => {
+  it('imports an ed25519 private key with all 10 accounts', () => {
     const privkey = '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60';
     const wallet = importWalletPrivateKey('pk-ed', privkey, undefined, vaultDir, 'solana');
 
-    assert.equal(wallet.accounts.length, 9);
+    assert.equal(wallet.accounts.length, 10);
 
     // Sign on Solana (provided key)
     const solSig = signMessage('pk-ed', 'solana', 'hello', undefined, undefined, undefined, vaultDir);
@@ -177,7 +179,7 @@ describe('@open-wallet-standard/core', () => {
     );
 
     assert.equal(wallet.name, 'pk-both');
-    assert.equal(wallet.accounts.length, 9, 'should have all 9 chain accounts');
+    assert.equal(wallet.accounts.length, 10, 'should have all 10 chain accounts');
 
     // Sign on EVM (secp256k1 key)
     const evmSig = signMessage('pk-both', 'evm', 'hello', undefined, undefined, undefined, vaultDir);
@@ -200,6 +202,8 @@ describe('@open-wallet-standard/core', () => {
   it('signs messages on all chains', () => {
     createWallet('all-chain-signer', undefined, 12, vaultDir);
 
+    // XRPL and Nano are excluded here because their signers explicitly do not
+    // support generic off-chain message signing without a defined convention.
     for (const chain of ['evm', 'solana', 'sui', 'bitcoin', 'cosmos', 'tron', 'ton', 'filecoin']) {
       const result = signMessage('all-chain-signer', chain, 'test', undefined, undefined, undefined, vaultDir);
       assert.ok(result.signature.length > 0, `signature should be non-empty for ${chain}`);
@@ -215,9 +219,24 @@ describe('@open-wallet-standard/core', () => {
     // [compact-u16 sig count][64-byte sig slots...][message...]
     // Build a minimal tx with 1 sig slot (0x01) + 64 zero bytes + a message.
     const solTxHex = '01' + '00'.repeat(64) + 'deadbeefdeadbeef';
+    // Nano state block: 176-byte canonical layout (preamble + account + previous
+    // + representative + balance + link).
+    // https://docs.nano.org/integration-guides/the-basics/#self-signed-blocks
+    const nanoTxHex =
+      `${'00'.repeat(31)}06` +
+      `${'01'.repeat(32)}` +
+      `${'00'.repeat(32)}` +
+      `${'02'.repeat(32)}` +
+      '00000000033b2e3c9fd0803ce8000000' +
+      `${'03'.repeat(32)}`;
 
-    for (const chain of ['evm', 'solana', 'sui', 'bitcoin', 'cosmos', 'tron', 'ton', 'filecoin', 'xrpl']) {
-      const hex = chain === 'solana' ? solTxHex : txHex;
+    const txHexByChain = {
+      solana: solTxHex,
+      nano: nanoTxHex,
+    };
+
+    for (const chain of ['evm', 'solana', 'sui', 'bitcoin', 'cosmos', 'tron', 'ton', 'filecoin', 'xrpl', 'nano']) {
+      const hex = txHexByChain[chain] ?? txHex;
       const result = signTransaction('tx-signer', chain, hex, undefined, undefined, vaultDir);
       assert.ok(result.signature.length > 0, `signature should be non-empty for ${chain}`);
     }
@@ -346,6 +365,151 @@ describe('@open-wallet-standard/core', () => {
 
     revokeApiKey(key.id, vaultDir);
     deletePolicy('test-imported-wallet', vaultDir);
+    deleteWallet(wallet.id, vaultDir);
+  });
+
+  it('signs EIP-712 typed data with an API key token', () => {
+    const wallet = createWallet('typed-data-api', undefined, 12, vaultDir);
+
+    // Register a policy allowing Base chains
+    createPolicy(JSON.stringify({
+      id: 'td-base-only',
+      name: 'Base Only',
+      version: 1,
+      created_at: '2026-03-22T00:00:00Z',
+      rules: [
+        { type: 'allowed_chains', chain_ids: ['eip155:8453', 'eip155:84532'] },
+      ],
+      action: 'deny',
+    }), vaultDir);
+
+    // Create API key bound to the wallet and policy
+    const key = createApiKey('td-agent', [wallet.id], ['td-base-only'], '', null, vaultDir);
+    assert.ok(key.token.startsWith('ows_key_'));
+
+    // EIP-712 typed data (the standard "Mail" example)
+    const typedDataJson = JSON.stringify({
+      types: {
+        EIP712Domain: [
+          { name: 'name', type: 'string' },
+          { name: 'version', type: 'string' },
+          { name: 'chainId', type: 'uint256' },
+          { name: 'verifyingContract', type: 'address' },
+        ],
+        Person: [
+          { name: 'name', type: 'string' },
+          { name: 'wallet', type: 'address' },
+        ],
+        Mail: [
+          { name: 'from', type: 'Person' },
+          { name: 'to', type: 'Person' },
+          { name: 'contents', type: 'string' },
+        ],
+      },
+      primaryType: 'Mail',
+      domain: {
+        name: 'Ether Mail',
+        version: '1',
+        chainId: 8453,
+        verifyingContract: '0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC',
+      },
+      message: {
+        from: { name: 'Cow', wallet: '0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826' },
+        to: { name: 'Bob', wallet: '0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB' },
+        contents: 'Hello, Bob!',
+      },
+    });
+
+    // Sign on allowed chain — should succeed
+    const sig = signTypedData(wallet.id, 'base', typedDataJson, key.token, null, vaultDir);
+    assert.ok(sig.signature.length > 0, 'signature should be non-empty');
+    assert.ok(sig.recoveryId != null, 'recoveryId should be present for EIP-712');
+
+    // Sign on denied chain — should fail
+    // Build typed data with chainId=1 matching ethereum so the domain check passes
+    // and AllowedChains (base-only) correctly denies
+    const ethTypedDataJson = JSON.stringify({
+      ...JSON.parse(typedDataJson),
+      domain: { ...JSON.parse(typedDataJson).domain, chainId: 1 },
+    });
+    assert.throws(
+      () => signTypedData(wallet.id, 'ethereum', ethTypedDataJson, key.token, null, vaultDir),
+      (err) => err.message.includes('not in allowlist'),
+    );
+
+    // Cleanup
+    revokeApiKey(key.id, vaultDir);
+    deletePolicy('td-base-only', vaultDir);
+    deleteWallet(wallet.id, vaultDir);
+  });
+
+  it('enforces AllowedTypedDataContracts through the node binding', () => {
+    const wallet = createWallet('typed-data-contract-api', undefined, 12, vaultDir);
+
+    createPolicy(JSON.stringify({
+      id: 'td-contract-only',
+      name: 'Typed Data Contract Only',
+      version: 1,
+      created_at: '2026-03-22T00:00:00Z',
+      rules: [
+        { type: 'allowed_chains', chain_ids: ['eip155:8453'] },
+        {
+          type: 'allowed_typed_data_contracts',
+          contracts: ['0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC'],
+        },
+      ],
+      action: 'deny',
+    }), vaultDir);
+
+    const key = createApiKey('td-contract-agent', [wallet.id], ['td-contract-only'], '', null, vaultDir);
+
+    const typedData = {
+      types: {
+        EIP712Domain: [
+          { name: 'name', type: 'string' },
+          { name: 'version', type: 'string' },
+          { name: 'chainId', type: 'uint256' },
+          { name: 'verifyingContract', type: 'address' },
+        ],
+        Mail: [{ name: 'contents', type: 'string' }],
+      },
+      primaryType: 'Mail',
+      domain: {
+        name: 'Ether Mail',
+        version: '1',
+        chainId: 8453,
+        verifyingContract: '0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC',
+      },
+      message: {
+        contents: 'Hello, Bob!',
+      },
+    };
+
+    const allowed = signTypedData(
+      wallet.id,
+      'base',
+      JSON.stringify(typedData),
+      key.token,
+      null,
+      vaultDir,
+    );
+    assert.ok(allowed.signature.length > 0);
+
+    const deniedTypedData = {
+      ...typedData,
+      domain: {
+        ...typedData.domain,
+        verifyingContract: '0x00000000000000ADc04C56Bf30aC9d3c0aAF14dC',
+      },
+    };
+
+    assert.throws(
+      () => signTypedData(wallet.id, 'base', JSON.stringify(deniedTypedData), key.token, null, vaultDir),
+      (err) => err.message.includes('not in allowed list'),
+    );
+
+    revokeApiKey(key.id, vaultDir);
+    deletePolicy('td-contract-only', vaultDir);
     deleteWallet(wallet.id, vaultDir);
   });
 

@@ -148,7 +148,7 @@ fn filter_services(
             name: svc.resource.clone(),
             url: svc.resource,
             description: truncate(desc, 80),
-            price: format_usdc(&accept.amount),
+            price: format_price(&accept.amount, &accept.network),
             network: accept.network.clone(),
             tags: vec![],
         });
@@ -202,6 +202,14 @@ async fn fetch_x402(limit: u64, offset: u64) -> Result<FetchResult, PayError> {
 // Formatting helpers
 // ===========================================================================
 
+pub(crate) fn format_price(amount_str: &str, network: &str) -> String {
+    let chain_type = crate::chains::resolve_chain_type(network);
+    match chain_type {
+        Some(ows_core::ChainType::Nano) => format_nano(amount_str),
+        _ => format_usdc(amount_str),
+    }
+}
+
 pub(crate) fn format_usdc(amount_str: &str) -> String {
     let amount: u128 = amount_str.parse().unwrap_or(0);
     let whole = amount / 1_000_000;
@@ -210,6 +218,20 @@ pub(crate) fn format_usdc(amount_str: &str) -> String {
     let trimmed = frac_str.trim_end_matches('0');
     let trimmed = if trimmed.is_empty() { "00" } else { trimmed };
     format!("${whole}.{trimmed}")
+}
+
+pub(crate) fn format_nano(amount_str: &str) -> String {
+    let amount: u128 = amount_str.parse().unwrap_or(0);
+    let divisor = 1_000_000_000_000_000_000_000_000_000_000u128;
+    let whole = amount / divisor;
+    let frac = amount % divisor;
+    if frac == 0 {
+        format!("{whole} XNO")
+    } else {
+        let frac_str = format!("{frac:030}");
+        let trimmed = frac_str.trim_end_matches('0');
+        format!("{whole}.{trimmed} XNO")
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -275,6 +297,34 @@ mod tests {
     #[test]
     fn format_usdc_empty() {
         assert_eq!(format_usdc(""), "$0.00");
+    }
+
+    // -----------------------------------------------------------------------
+    // format_nano
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn format_nano_whole() {
+        assert_eq!(format_nano("1000000000000000000000000000000"), "1 XNO");
+    }
+
+    #[test]
+    fn format_nano_fractional() {
+        assert_eq!(format_nano("1500000000000000000000000000000"), "1.5 XNO");
+    }
+
+    #[test]
+    fn format_nano_very_small() {
+        assert_eq!(format_nano("1"), "0.000000000000000000000000000001 XNO");
+    }
+
+    #[test]
+    fn format_price_dispatches() {
+        assert_eq!(format_price("10000", "eip155:8453"), "$0.01");
+        assert_eq!(
+            format_price("1000000000000000000000000000000", "nano:mainnet"),
+            "1 XNO"
+        );
     }
 
     // -----------------------------------------------------------------------

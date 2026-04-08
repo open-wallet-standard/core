@@ -26,13 +26,6 @@ pub fn display_name(network: &str) -> &str {
     network
 }
 
-/// Extract the reference part of a CAIP-2 identifier.
-///
-/// `"eip155:8453"` → `Some("8453")`
-pub fn caip2_reference(network: &str) -> Option<&str> {
-    network.split(':').nth(1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,12 +71,5 @@ mod tests {
     #[test]
     fn display_unknown_passthrough() {
         assert_eq!(display_name("eip155:999999"), "eip155:999999");
-    }
-
-    #[test]
-    fn caip2_ref() {
-        assert_eq!(caip2_reference("eip155:8453"), Some("8453"));
-        assert_eq!(caip2_reference("solana:mainnet"), Some("mainnet"));
-        assert_eq!(caip2_reference("base"), None);
     }
 }

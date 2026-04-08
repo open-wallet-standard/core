@@ -126,6 +126,37 @@ Time-bound access (compares `PolicyContext.timestamp` to this ISO-8601 string).
 { "type": "expires_at", "timestamp": "2026-04-01T00:00:00Z" }
 ```
 
+### `allowed_typed_data_contracts`
+
+Restricts which smart contracts an API key can sign EIP-712 typed data for. The rule checks the `domain.verifyingContract` field of the typed data against an allowlist of addresses.
+
+```json
+{
+  "type": "allowed_typed_data_contracts",
+  "contracts": ["0x000000000022D473030F116dDEE9F6B43aC78BA3"]
+}
+```
+
+**Behavior:**
+- For `sign_message` and `sign_transaction` calls, this rule **passes through** (does not restrict).
+- For `sign_typed_data` calls where the domain includes a `verifyingContract`, the address must be in the `contracts` list (case-insensitive comparison).
+- For `sign_typed_data` calls where the domain **omits** `verifyingContract`, the rule **denies** — the contract cannot be verified.
+
+**Example policy:**
+```json
+{
+  "id": "permit2-only",
+  "name": "Restrict to Permit2 typed data",
+  "version": 1,
+  "created_at": "2026-03-30T00:00:00Z",
+  "rules": [
+    { "type": "allowed_chains", "chain_ids": ["eip155:8453"] },
+    { "type": "allowed_typed_data_contracts", "contracts": ["0x000000000022D473030F116dDEE9F6B43aC78BA3"] }
+  ],
+  "action": "deny"
+}
+```
+
 ## Custom Executable Policies
 
 For anything declarative rules can't express — on-chain simulation, external API calls, complex business logic. Custom executables are the escape hatch.
@@ -218,6 +249,25 @@ The base JSON object available to policy evaluation:
 | `timestamp` | string | yes | ISO 8601 timestamp of the signing request |
 
 For executable policies, the engine injects `policy_config` into the JSON payload when the policy file includes a `config` object.
+
+### `typed_data` (optional)
+
+Present only for `sign_typed_data` calls. Omitted entirely for `sign_message` and `sign_transaction`.
+
+```json
+{
+  "typed_data": {
+    "verifying_contract": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    "domain_chain_id": 8453,
+    "primary_type": "PermitSingle",
+    "domain_name": "Permit2",
+    "domain_version": "1",
+    "raw_json": "{...full EIP-712 JSON...}"
+  }
+}
+```
+
+All fields except `primary_type` and `raw_json` are optional (the EIP-712 domain can omit any field). Executable policies can use `raw_json` to inspect the full typed data structure including message fields.
 
 ## PolicyResult
 

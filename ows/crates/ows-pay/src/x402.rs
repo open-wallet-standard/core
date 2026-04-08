@@ -101,14 +101,10 @@ fn build_evm_exact(
         .and_then(|v| v.as_str())
         .unwrap_or("2");
 
-    let chain_id_num: u64 = chains::caip2_reference(network)
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| {
-            PayError::new(
-                PayErrorCode::ProtocolMalformed,
-                format!("cannot extract numeric chain ID from: {network}"),
-            )
-        })?;
+    let chain_id_num = ows_core::parse_chain(network)
+        .map_err(|err| PayError::new(PayErrorCode::ProtocolMalformed, err))?
+        .evm_chain_id_u64()
+        .map_err(|err| PayError::new(PayErrorCode::ProtocolMalformed, err))?;
 
     let typed_data_json = serde_json::json!({
         "types": {
