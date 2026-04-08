@@ -43,6 +43,8 @@ set_node_version() {
     '.optionalDependencies |= with_entries(.value = $v)' \
     package.json > tmp.json && mv tmp.json package.json
 
+  npm install
+
   cargo update --workspace
 }
 

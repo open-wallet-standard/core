@@ -271,8 +271,13 @@ fn noop_spending_context(date: &str) -> ows_core::policy::SpendingContext {
 
 fn check_expiry(key_file: &ApiKeyFile) -> Result<(), OwsLibError> {
     if let Some(ref expires) = key_file.expires_at {
-        let now = chrono::Utc::now().to_rfc3339();
-        if now.as_str() > expires.as_str() {
+        let now = chrono::Utc::now();
+        let exp = chrono::DateTime::parse_from_rfc3339(expires).map_err(|e| {
+            OwsLibError::Core(OwsError::InvalidInput {
+                message: format!("invalid expires_at timestamp '{}': {}", expires, e),
+            })
+        })?;
+        if now > exp {
             return Err(OwsLibError::Core(OwsError::ApiKeyExpired {
                 id: key_file.id.clone(),
             }));

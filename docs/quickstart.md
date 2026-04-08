@@ -76,7 +76,7 @@ ows pay discover --query "weather"
 
 ```bash
 # Sign a message
-ows sign message --wallet agent-treasury --chain evm --message "hello"
+ows sign message --wallet agent-treasury --chain ethereum --message "hello"
 
 # Sign a transaction
 ows sign tx --wallet agent-treasury --chain solana --tx "deadbeef..."

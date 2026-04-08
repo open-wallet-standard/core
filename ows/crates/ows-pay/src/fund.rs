@@ -105,44 +105,6 @@ fn resolve_moonpay_chain(chain: Option<&str>) -> Result<&'static MoonPayChain, P
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolve_bsc_to_bnb() {
-        let chain = resolve_moonpay_chain(Some("bsc")).unwrap();
-        assert_eq!(chain.display_name, "BNB Chain");
-        assert_eq!(chain.moonpay_name, "bnb");
-    }
-
-    #[test]
-    fn resolve_bnb_alias() {
-        let chain = resolve_moonpay_chain(Some("bnb")).unwrap();
-        assert_eq!(chain.display_name, "BNB Chain");
-        assert_eq!(chain.moonpay_name, "bnb");
-    }
-
-    #[test]
-    fn resolve_chain_is_case_insensitive() {
-        let chain = resolve_moonpay_chain(Some("BnB")).unwrap();
-        assert_eq!(chain.moonpay_name, "bnb");
-    }
-
-    #[test]
-    fn resolve_unknown_chain_errors() {
-        let err = resolve_moonpay_chain(Some("unknown")).unwrap_err();
-        assert_eq!(err.code, PayErrorCode::UnsupportedChain);
-    }
-
-    #[test]
-    fn resolve_defaults_to_base() {
-        let chain = resolve_moonpay_chain(None).unwrap();
-        assert_eq!(chain.display_name, "Base");
-        assert_eq!(chain.moonpay_name, "base");
-    }
-}
-
 /// Create a MoonPay deposit that auto-converts incoming crypto to USDC.
 pub async fn fund(
     wallet_address: &str,
@@ -219,4 +181,42 @@ pub async fn get_balances(
 
     let balance_resp: MoonPayBalanceResponse = resp.json().await?;
     Ok(balance_resp.items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_bsc_to_bnb() {
+        let chain = resolve_moonpay_chain(Some("bsc")).unwrap();
+        assert_eq!(chain.display_name, "BNB Chain");
+        assert_eq!(chain.moonpay_name, "bnb");
+    }
+
+    #[test]
+    fn resolve_bnb_alias() {
+        let chain = resolve_moonpay_chain(Some("bnb")).unwrap();
+        assert_eq!(chain.display_name, "BNB Chain");
+        assert_eq!(chain.moonpay_name, "bnb");
+    }
+
+    #[test]
+    fn resolve_chain_is_case_insensitive() {
+        let chain = resolve_moonpay_chain(Some("BnB")).unwrap();
+        assert_eq!(chain.moonpay_name, "bnb");
+    }
+
+    #[test]
+    fn resolve_unknown_chain_errors() {
+        let err = resolve_moonpay_chain(Some("unknown")).unwrap_err();
+        assert_eq!(err.code, PayErrorCode::UnsupportedChain);
+    }
+
+    #[test]
+    fn resolve_defaults_to_base() {
+        let chain = resolve_moonpay_chain(None).unwrap();
+        assert_eq!(chain.display_name, "Base");
+        assert_eq!(chain.moonpay_name, "base");
+    }
 }

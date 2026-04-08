@@ -150,26 +150,44 @@ pub const KNOWN_CHAINS: &[Chain] = &[
 ];
 
 /// Parse a chain string into a `Chain`. Accepts:
-/// - Friendly names: "ethereum", "arbitrum", "solana", etc.
-/// - CAIP-2 chain IDs: "eip155:1", "eip155:42161", etc.
-/// - Legacy family names for backward compat: "evm" → resolves to ethereum
+/// - Friendly names: "ethereum", "base", "arbitrum", "solana", etc.
+/// - CAIP-2 chain IDs: "eip155:1", "eip155:8453", etc.
+/// - Bare numeric EVM chain IDs: "8453" → eip155:8453
+/// - Legacy "evm" (deprecated, warns on stderr, resolves to ethereum)
 pub fn parse_chain(s: &str) -> Result<Chain, String> {
     let lower = s.to_lowercase();
 
-    // Legacy family name backward compat
-    let lookup = match lower.as_str() {
-        "evm" => "ethereum",
-        _ => &lower,
-    };
+    // Legacy "evm" — deprecated, warn and resolve
+    if lower == "evm" {
+        eprintln!(
+            "warning: '--chain evm' is deprecated; use '--chain ethereum' \
+             or a specific chain name (base, arbitrum, polygon, ...)"
+        );
+        return Ok(*KNOWN_CHAINS.iter().find(|c| c.name == "ethereum").unwrap());
+    }
 
     // Try friendly name match
-    if let Some(chain) = KNOWN_CHAINS.iter().find(|c| c.name == lookup) {
+    if let Some(chain) = KNOWN_CHAINS.iter().find(|c| c.name == lower) {
         return Ok(*chain);
     }
 
     // Try CAIP-2 chain ID match
     if let Some(chain) = KNOWN_CHAINS.iter().find(|c| c.chain_id == s) {
         return Ok(*chain);
+    }
+
+    // Bare numeric → treat as EVM chain ID (eip155:<n>)
+    if !lower.is_empty() && lower.chars().all(|c| c.is_ascii_digit()) {
+        let caip2 = format!("eip155:{}", lower);
+        if let Some(chain) = KNOWN_CHAINS.iter().find(|c| c.chain_id == caip2) {
+            return Ok(*chain);
+        }
+        let leaked: &'static str = Box::leak(caip2.into_boxed_str());
+        return Ok(Chain {
+            name: leaked,
+            chain_type: ChainType::Evm,
+            chain_id: leaked,
+        });
     }
 
     // Try namespace match for unknown CAIP-2 IDs (e.g. eip155:4217, eip155:84532).
@@ -188,8 +206,13 @@ pub fn parse_chain(s: &str) -> Result<Chain, String> {
     }
 
     Err(format!(
-        "unknown chain: '{}'. Use a chain name (ethereum, solana, bitcoin, ...) or CAIP-2 ID (eip155:1, ...)",
-        s
+        "unknown chain: '{s}'\n\n\
+         Supported chains:\n  \
+           EVM:     ethereum, base, arbitrum, optimism, polygon, bsc, avalanche, plasma, etherlink\n  \
+           Solana:  solana\n  \
+           Bitcoin: bitcoin\n  \
+           Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl\n\n\
+         Or use a CAIP-2 ID (eip155:8453) or bare EVM chain ID (8453)"
     ))
 }
 
@@ -467,6 +490,30 @@ mod tests {
         let via_caip2 = parse_chain("xrpl:testnet").unwrap();
         assert_eq!(via_caip2.chain_type, ChainType::Xrpl);
         assert_eq!(via_caip2.chain_id, "xrpl:testnet");
+    }
+
+    #[test]
+    fn test_parse_chain_bare_numeric_known() {
+        // "8453" → Base (eip155:8453)
+        let chain = parse_chain("8453").unwrap();
+        assert_eq!(chain.name, "base");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+        assert_eq!(chain.chain_id, "eip155:8453");
+    }
+
+    #[test]
+    fn test_parse_chain_bare_numeric_mainnet() {
+        let chain = parse_chain("1").unwrap();
+        assert_eq!(chain.name, "ethereum");
+        assert_eq!(chain.chain_id, "eip155:1");
+    }
+
+    #[test]
+    fn test_parse_chain_bare_numeric_unknown() {
+        // Unknown EVM chain ID still resolves
+        let chain = parse_chain("99999").unwrap();
+        assert_eq!(chain.chain_type, ChainType::Evm);
+        assert_eq!(chain.chain_id, "eip155:99999");
     }
 
     #[test]

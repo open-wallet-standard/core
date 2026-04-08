@@ -184,6 +184,16 @@ jobs:
       - name: Install dependencies
         run: npm install --ignore-scripts
 
+      - name: Create zig CC wrapper with proper argument quoting
+        if: contains(matrix.target, 'linux')
+        run: |
+          ZIG_TARGET=$(echo "${{ matrix.target }}" | sed 's/-unknown//')
+          mkdir -p /tmp/zig-wrappers
+          printf '#!/bin/bash\nexec zig cc "$@" -target %s.2.17\n' "$ZIG_TARGET" > /tmp/zig-wrappers/cc.sh
+          chmod +x /tmp/zig-wrappers/cc.sh
+          CC_VAR="CC_$(echo "${{ matrix.target }}" | tr '-' '_')"
+          echo "${CC_VAR}=/tmp/zig-wrappers/cc.sh" >> "$GITHUB_ENV"
+
       - name: Build native addon (Linux - glibc 2.17+)
         if: contains(matrix.target, 'linux')
         run: npx napi build --platform --release --target ${{ matrix.target }} --zig --zig-abi-suffix 2.17

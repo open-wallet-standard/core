@@ -56,11 +56,20 @@ fn eval_allowed_chains(policy_id: &str, chain_ids: &[String], ctx: &PolicyContex
 }
 
 fn eval_expires_at(policy_id: &str, timestamp: &str, ctx: &PolicyContext) -> PolicyResult {
-    // Compare ISO-8601 timestamps lexicographically — works for UTC timestamps
-    if ctx.timestamp.as_str() > timestamp {
-        PolicyResult::denied(policy_id, format!("policy expired at {timestamp}"))
-    } else {
-        PolicyResult::allowed()
+    let now = chrono::DateTime::parse_from_rfc3339(&ctx.timestamp);
+    let exp = chrono::DateTime::parse_from_rfc3339(timestamp);
+    match (now, exp) {
+        (Ok(now), Ok(exp)) if now > exp => {
+            PolicyResult::denied(policy_id, format!("policy expired at {timestamp}"))
+        }
+        (Ok(_), Ok(_)) => PolicyResult::allowed(),
+        _ => PolicyResult::denied(
+            policy_id,
+            format!(
+                "invalid timestamp in expiry check: ctx={}, rule={}",
+                ctx.timestamp, timestamp
+            ),
+        ),
     }
 }
 
