@@ -187,6 +187,16 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_type: ChainType::Nano,
         chain_id: "nano:mainnet",
     },
+    Chain {
+        name: "tempo",
+        chain_type: ChainType::Evm,
+        chain_id: "eip155:4217",
+    },
+    Chain {
+        name: "hyperliquid",
+        chain_type: ChainType::Evm,
+        chain_id: "eip155:999",
+    },
 ];
 
 /// Parse a chain string into a `Chain`. Accepts:
@@ -589,6 +599,38 @@ mod tests {
     #[test]
     fn test_parse_chain_unknown() {
         assert!(parse_chain("unknown_chain").is_err());
+    }
+
+    #[test]
+    fn test_parse_chain_tempo_alias() {
+        let chain = parse_chain("tempo").unwrap();
+        assert_eq!(chain.name, "tempo");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+        assert_eq!(chain.chain_id, "eip155:4217");
+    }
+
+    #[test]
+    fn test_parse_chain_tempo_caip2() {
+        let chain = parse_chain("eip155:4217").unwrap();
+        assert_eq!(chain.name, "tempo");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+        assert_eq!(chain.chain_id, "eip155:4217");
+    }
+
+    #[test]
+    fn test_parse_chain_hyperliquid_alias() {
+        let chain = parse_chain("hyperliquid").unwrap();
+        assert_eq!(chain.name, "hyperliquid");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+        assert_eq!(chain.chain_id, "eip155:999");
+    }
+
+    #[test]
+    fn test_parse_chain_hyperliquid_caip2() {
+        let chain = parse_chain("eip155:999").unwrap();
+        assert_eq!(chain.name, "hyperliquid");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+        assert_eq!(chain.chain_id, "eip155:999");
     }
 
     #[test]
