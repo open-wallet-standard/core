@@ -7,7 +7,6 @@
 ### `sign(request: SignRequest): Promise<SignResult>`
 
 Signs a transaction without broadcasting it. Returns the signed transaction bytes.
-
 ```typescript
 interface SignRequest {
   walletId: WalletId;
@@ -35,7 +34,6 @@ interface SignResult {
 ### `signAndSend(request: SignAndSendRequest): Promise<SignAndSendResult>`
 
 Signs, encodes, and broadcasts a transaction.
-
 ```typescript
 interface SignAndSendRequest extends SignRequest {
   rpcUrl?: string;
@@ -57,34 +55,63 @@ An implementation that exposes `signAndSend`:
 
 ### `signMessage(request: SignMessageRequest): Promise<SignMessageResult>`
 
-Signs an arbitrary message (for authentication, attestation, or off-chain signatures like EIP-712).
-
+Signs a message using the chain's recognized off-chain message-signing convention, where one exists.
 ```typescript
 interface SignMessageRequest {
   walletId: WalletId;
   chainId: ChainId;
   message: string | Uint8Array;
   encoding?: "utf8" | "hex";
-  typedData?: TypedData;               // EIP-712 typed data (EVM only)
 }
 
 interface SignMessageResult {
   signature: string;
-  recoveryId?: number;                 // for secp256k1 recovery
+  recoveryId?: number;                 // for secp256k1 chains (EVM, Bitcoin, Tron)
 }
 ```
 
-Message signing follows chain-specific conventions:
-- **EVM**: `personal_sign` (EIP-191) or `eth_signTypedData_v4` (EIP-712)
-- **Solana**: Ed25519 signature over the raw message bytes
-- **Sui**: Intent-prefixed (scope=3) BLAKE2b-256 digest, Ed25519 signature
-- **Cosmos**: ADR-036 off-chain signing
-- **Filecoin**: Blake2b-256 hash then secp256k1 signing
+#### Design intent
+
+`signMessage` is a **user-facing, cross-chain off-chain signing primitive**. It is not a raw-byte signing escape hatch — use `sign` for that.
+
+The interface is intentionally restricted to chains that have a recognized, ecosystem-wide off-chain message signing convention. This means:
+
+- Signatures produced by `signMessage` on one chain are **not interoperable** with other chains, even if both use the same underlying curve. The chain-specific envelope (prefix, intent hash, domain tag, etc.) is what makes a signature meaningful and verifiable on that chain.
+- Adding `signMessage` support for a new chain requires a **clearly defined, widely-adopted convention** for that chain — not just the ability to sign bytes.
+- Chains without a recognized convention SHOULD return `CHAIN_NOT_SUPPORTED` rather than silently signing raw bytes, which would imply interoperability that does not exist.
+
+#### Behavior by chain
+
+| Chain | Convention | Bytes signed |
+|-------|-----------|--------------|
+| EVM | EIP-191 `personal_sign` | `\x19Ethereum Signed Message:\n` + length + message |
+| Bitcoin | Bitcoin Signed Message | `\x18Bitcoin Signed Message:\n` + varint(len) + message |
+| Tron | TRON personal-message prefix | `\x19TRON Signed Message:\n` + length + message |
+| Sui | Personal message intent | Intent prefix (scope=3) + BCS-encoded message, BLAKE2b-256 hashed |
+| Cosmos | ADR-036 | Amino-encoded `MsgSignData` with `chain_id: ""` |
+| Filecoin | — | Blake2b-256 hash of message bytes, secp256k1 signed |
+| Solana | — | Raw message bytes, Ed25519 signed |
+| TON | — | Raw message bytes, Ed25519 signed |
+| XRPL | unsupported | No recognized canonical convention yet |
+
+> **Note on Filecoin, Solana, and TON:** These chains currently sign raw or hashed bytes without a recognized off-chain message envelope. This behavior is preserved for compatibility but callers should be aware that the resulting signatures are not verifiable through any standard wallet verification flow on those chains. Future versions may introduce chain-specific conventions as they emerge.
+
+#### Adding support for new chains
+
+When adding `signMessage` for a new chain (e.g. Nano, Stellar, Aptos):
+
+1. Identify the chain's **canonical off-chain message signing specification** — a finalized EIP, BIP, or equivalent standards document.
+2. If no specification exists, return `CHAIN_NOT_SUPPORTED` and document why in the chain plugin.
+3. Do not sign raw bytes under `signMessage` — use `sign` for arbitrary byte signing.
+4. Document the exact bytes signed in the chain plugin and in the table above.
+
+#### EIP-712 typed data
+
+For EIP-712 structured data on EVM chains, use `signTypedData` instead. The `signMessage` interface does not accept typed data — this separation keeps the API surface clean and avoids overloading a single method with two distinct signing semantics.
 
 ### `signTypedData(request: SignTypedDataRequest): Promise<SignMessageResult>`
 
 Signs EIP-712 typed structured data. This is a dedicated operation separate from `signMessage` to provide a clean SDK interface for typed data signing without overloading the message signing API.
-
 ```typescript
 interface SignTypedDataRequest {
   walletId: WalletId;
@@ -94,7 +121,6 @@ interface SignTypedDataRequest {
 ```
 
 The `typedDataJson` field must be a JSON string containing the standard EIP-712 fields: `types`, `primaryType`, `domain`, and `message`.
-
 ```json
 {
   "types": {
@@ -140,3 +166,5 @@ Current implementations do not provide a per-wallet nonce manager or explicit sa
 
 - [EIP-191: Signed Data Standard](https://eips.ethereum.org/EIPS/eip-191)
 - [EIP-712: Typed Structured Data](https://eips.ethereum.org/EIPS/eip-712)
+- [ADR-036: Arbitrary Message Signing](https://docs.cosmos.network/main/build/architecture/adr-036-arbitrary-signature)
+- [Bitcoin Signed Message](https://en.bitcoin.it/wiki/Message_signing)
