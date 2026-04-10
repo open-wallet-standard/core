@@ -183,7 +183,6 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_id: "nano:mainnet",
     },
     Chain {
-<<<<<<< HEAD
         name: "tempo",
         chain_type: ChainType::Evm,
         chain_id: "eip155:4217",
@@ -192,11 +191,11 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         name: "hyperliquid",
         chain_type: ChainType::Evm,
         chain_id: "eip155:999",
-=======
+    },
+    Chain {
         name: "algorand",
         chain_type: ChainType::Avm,
         chain_id: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k",
->>>>>>> 9659d24 (feat: add Algorand chain support)
     },
 ];
 
