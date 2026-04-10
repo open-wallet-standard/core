@@ -162,7 +162,7 @@ keys = json.loads(export_wallet("pk-wallet"))
 
 #### `import_wallet_mnemonic(name, mnemonic, passphrase=None, index=None, vault_path=None)`
 
-Import a wallet from a BIP-39 mnemonic. Derives all 9chain accounts via HD paths.
+Import a wallet from a BIP-39 mnemonic. Derives all 8 chain accounts via HD paths.
 
 ```python
 wallet = import_wallet_mnemonic("imported", "goose puzzle decorate ...")
@@ -170,7 +170,7 @@ wallet = import_wallet_mnemonic("imported", "goose puzzle decorate ...")
 
 #### `import_wallet_private_key(name, private_key_hex, chain=None, passphrase=None, vault_path=None, secp256k1_key=None, ed25519_key=None)`
 
-Import a wallet from a hex-encoded private key. All 9 chains are supported: the provided key is used for its curve's chains, and a random key is generated for the other curve.
+Import a wallet from a hex-encoded private key. All 8 chains are supported: the provided key is used for its curve's chains, and a random key is generated for the other curve.
 
 The optional `chain` parameter specifies which chain the key originates from to determine the curve. Defaults to `"evm"` (secp256k1).
 

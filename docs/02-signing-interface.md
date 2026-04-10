@@ -80,7 +80,7 @@ Message signing follows chain-specific conventions:
 - **Sui**: Intent-prefixed (scope=3) BLAKE2b-256 digest, Ed25519 signature
 - **Cosmos**: ADR-036 off-chain signing
 - **Filecoin**: Blake2b-256 hash then secp256k1 signing
-- **Algorand (AVM)**: `"MX"` domain separator prefix then Ed25519 (BIP32-Ed25519) signing; transactions use `"TX"` prefix
+- **Algorand (AVM)**: "MX" domain separator prefix then Ed25519 (BIP32-Ed25519) signing; transactions use "TX" prefix
 
 ### `signTypedData(request: SignTypedDataRequest): Promise<SignMessageResult>`
 

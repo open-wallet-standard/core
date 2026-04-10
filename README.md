@@ -10,7 +10,7 @@ Local, policy-gated signing and wallet management for every chain.
 ## Why OWS
 
 - **Local key custody.** Private keys stay encrypted at rest and are decrypted only inside the OWS signing path after the relevant checks pass. Current implementations harden in-process memory handling and wipe key material after use.
-- **Every chain, one interface.** EVM, Solana, Sui, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin, Algorand (AVM) — all first-class. CAIP-2/CAIP-10 addressing abstracts away chain-specific details.
+- **Every chain, one interface.** EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin, Algorand (AVM) — all first-class. CAIP-2/CAIP-10 addressing abstracts away chain-specific details.
 - **Policy before signing.** A pre-signing policy engine gates agent (API key) operations before decryption — chain allowlists, expiry, and optional custom executables.
 - **Built for agents.** Native SDK and CLI today. A wallet created by one tool works in every other.
 
@@ -38,18 +38,24 @@ The language bindings are **fully self-contained** — they embed the Rust core 
 # Create a wallet (derives addresses for the current auto-derived chain set)
 ows wallet create --name "agent-treasury"
 
-# Sign a message
-ows sign message --wallet agent-treasury --chain evm --message "hello"
+# Sign a message (EVM)
+ows sign message --wallet agent-treasury --chain ethereum --message "hello"
 
-# Sign a transaction
-ows sign tx --wallet agent-treasury --chain evm --tx "deadbeef..."
+# Sign on Solana
+ows sign message --wallet agent-treasury --chain solana --message "hello"
+
+# Sign a Bitcoin transaction
+ows sign tx --wallet agent-treasury --chain bitcoin --tx "0200000001..."
+
+# Use a bare EVM chain ID for Base
+ows sign tx --wallet agent-treasury --chain 8453 --tx "02f8..."
 ```
 
 ```javascript
 import { createWallet, signMessage } from "@open-wallet-standard/core";
 
 const wallet = createWallet("agent-treasury");
-// => accounts for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, Sui, and Algorand
+// => accounts for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, Sui, XRPL, and Algorand
 
 const sig = signMessage("agent-treasury", "evm", "hello");
 console.log(sig.signature);
@@ -59,7 +65,7 @@ console.log(sig.signature);
 from ows import create_wallet, sign_message
 
 wallet = create_wallet("agent-treasury")
-# => accounts for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, Sui, and Algorand
+# => accounts for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, Sui, XRPL, and Algorand
 
 sig = sign_message("agent-treasury", "evm", "hello")
 print(sig["signature"])
@@ -102,6 +108,7 @@ Agent / CLI / App
 | Sui | Ed25519 | 0x + BLAKE2b-256 hex | `m/44'/784'/0'/0'/0'` |
 | Spark (Bitcoin L2) | secp256k1 | spark: prefixed | `m/84'/0'/0'/0/0` |
 | Filecoin | secp256k1 | f1 base32 | `m/44'/461'/0'/0/0` |
+| XRPL | secp256k1 | base58check | `m/44'/144'/0'/0/0`|
 | Algorand (AVM) | Ed25519 (BIP32-Ed25519) | base32 58-char | `m/44'/283'/0'/0/0` |
 
 ## CLI Reference
@@ -147,7 +154,7 @@ Reference implementation documentation:
 - [CLI Reference](docs/sdk-cli.md)
 - [Node.js SDK](docs/sdk-node.md)
 - [Python SDK](docs/sdk-python.md)
-- [Policy Engine Implementation Guide](docs/policy-engine-implementation.md)
+- [Policy Engine Implementation Guide](docs/03-policy-engine.md)
 
 ## License
 

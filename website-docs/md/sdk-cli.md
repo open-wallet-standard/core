@@ -77,7 +77,7 @@ OWS_ED25519_KEY="9d61b19d..." \
 | `OWS_SECP256K1_KEY` | Explicit secp256k1 private key via environment variable |
 | `OWS_ED25519_KEY` | Explicit Ed25519 private key via environment variable |
 
-Private key imports generate all 9 chain accounts: the provided key is used for its curve's chains, and a random key is generated for the other curve. Use `OWS_SECP256K1_KEY` and `OWS_ED25519_KEY` together to supply both keys explicitly.
+Private key imports generate all 8 chain accounts: the provided key is used for its curve's chains, and a random key is generated for the other curve. Use `OWS_SECP256K1_KEY` and `OWS_ED25519_KEY` together to supply both keys explicitly.
 
 ### `ows wallet export`
 

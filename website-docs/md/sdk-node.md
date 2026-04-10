@@ -188,7 +188,7 @@ const keys = JSON.parse(keysJson);
 
 #### `importWalletMnemonic(name, mnemonic, passphrase?, index?, vaultPath?)`
 
-Import a wallet from a BIP-39 mnemonic. Derives all 9 chain accounts via HD paths.
+Import a wallet from a BIP-39 mnemonic. Derives all 8 chain accounts via HD paths.
 
 ```javascript
 const wallet = importWalletMnemonic("imported", "goose puzzle decorate ...");
@@ -198,7 +198,7 @@ const wallet = importWalletMnemonic("imported", "goose puzzle decorate ...");
 
 #### `importWalletPrivateKey(name, privateKeyHex, passphrase?, vaultPath?, chain?, secp256k1Key?, ed25519Key?)`
 
-Import a wallet from a hex-encoded private key. All 9 chains are supported: the provided key is used for its curve's chains, and a random key is generated for the other curve.
+Import a wallet from a hex-encoded private key. All 8 chains are supported: the provided key is used for its curve's chains, and a random key is generated for the other curve.
 
 The optional `chain` parameter specifies which chain the key originates from to determine the curve. Defaults to `"evm"` (secp256k1).
 

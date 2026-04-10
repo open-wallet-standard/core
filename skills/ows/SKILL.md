@@ -33,7 +33,7 @@ Use this skill when the user asks to:
 
 - Create, import, list, delete, or manage crypto wallets
 - Derive blockchain addresses from a mnemonic
-- Sign messages or transactions for EVM, Solana, Sui, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin, or Algorand (AVM)
+- Sign messages or transactions for EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin, or Algorand (AVM)
 - Broadcast signed transactions to a chain
 - Generate BIP-39 mnemonic phrases
 - Fund a wallet with USDC (MoonPay) or check token balances
@@ -54,6 +54,7 @@ Use this skill when the user asks to:
 | TON | `ton` | Ed25519 | raw/bounceable |
 | Sui | `sui` | Ed25519 | 0x + BLAKE2b-256 hex |
 | Spark (Bitcoin L2) | `spark` | secp256k1 | spark: prefixed |
+| XRPL | `xrpl` | secp256k1 | Base58Check (`r...`) |
 | Filecoin | `filecoin` | secp256k1 | f1 secp256k1 |
 | Algorand (AVM) | `algorand` or `avm` | Ed25519 (BIP32-Ed25519 Peikert) | base32 58-char |
 
