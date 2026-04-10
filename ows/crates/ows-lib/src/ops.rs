@@ -7,7 +7,7 @@ use ows_core::{
 };
 use ows_signer::{
     decrypt, encrypt, signer_for_chain, CryptoEnvelope, HdDeriver, Mnemonic, MnemonicStrength,
-    SecretBytes,
+    SecretBytes, ChainSigner,
 };
 
 use crate::error::OwsLibError;
@@ -2996,4 +2996,295 @@ mod tests {
             }
         }
     }
+}
+
+/// Sign an EIP-2612 permit for an ERC-20 token.
+///
+/// Fetches the token nonce and domain fields on-chain, constructs the
+/// EIP-712 typed data, and signs it using the wallet's EVM key.
+///
+/// # Example
+/// ```no_run
+/// let sig = sign_permit("my-wallet", "eip155:8453", PermitParams {
+///     token:   "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+///     spender: "0xYourProtocol".into(),
+///     value:   "1000000".into(),
+///     deadline: 1_800_000_000,
+///     nonce:   None,
+///     rpc_url: None,
+/// }, None, None, None).unwrap();
+/// ```
+pub fn sign_permit(
+    wallet: &str,
+    chain: &str,
+    params: crate::types::PermitParams,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    vault_path: Option<&std::path::Path>,
+) -> Result<crate::types::PermitSignResult, OwsLibError> {
+    // Build the EIP-712 typed data via the JS helper (Node binding path)
+    // or inline for the Rust CLI path. Here we construct it inline so the
+    // Rust CLI has zero external dependencies.
+
+    let rpc_url = params.rpc_url.clone().unwrap_or_else(|| {
+        let chain_id = chain.split(':').nth(1).unwrap_or("1");
+        match chain_id {
+            "1"     => "https://eth.llamarpc.com".into(),
+            "8453"  => "https://mainnet.base.org".into(),
+            "137"   => "https://polygon-rpc.com".into(),
+            "42161" => "https://arb1.arbitrum.io/rpc".into(),
+            "10"    => "https://mainnet.optimism.io".into(),
+            other   => format!("https://rpc.ankr.com/eth_{}_{}", other, other),
+        }
+    });
+
+    let numeric_chain_id: u64 = chain
+        .split(':')
+        .nth(1)
+        .unwrap_or("1")
+        .parse()
+        .map_err(|_| OwsLibError::InvalidInput(format!("invalid CAIP-2 chain: {chain}")))?;
+
+    // Resolve owner address from wallet.
+    let chain_parsed = parse_chain(chain)?;
+    let key = decrypt_signing_key(
+        wallet,
+        chain_parsed.chain_type,
+        passphrase.unwrap_or(""),
+        index,
+        vault_path,
+    )?;
+    let evm_signer = ows_signer::chains::EvmSigner;
+    let owner = evm_signer
+        .derive_address(key.expose())
+        .map_err(|e| OwsLibError::Signer(e))?;
+
+    // Fetch nonce on-chain if not supplied.
+    let nonce = if let Some(n) = params.nonce {
+        n
+    } else {
+        fetch_permit_nonce(&rpc_url, &params.token, &owner)
+            .map_err(|e| OwsLibError::InvalidInput(e))?
+    };
+
+    // Resolve EIP-712 domain.
+    let domain = resolve_permit_domain(&rpc_url, &params.token, numeric_chain_id)
+        .map_err(|e| OwsLibError::InvalidInput(e))?;
+
+    // Build typed data JSON.
+    let typed_data_json = build_permit_typed_data(
+        &domain,
+        &owner,
+        &params.spender,
+        &params.value,
+        nonce,
+        params.deadline,
+        numeric_chain_id,
+        &params.token,
+    );
+
+    // Sign via existing sign_typed_data path.
+    let result = sign_typed_data(wallet, chain, &typed_data_json, passphrase, index, vault_path)?;
+
+    // Split signature into v / r / s.
+    let sig_bytes = hex::decode(&result.signature)
+        .map_err(|e| OwsLibError::InvalidInput(format!("invalid signature hex: {e}")))?;
+    if sig_bytes.len() != 65 {
+        return Err(OwsLibError::InvalidInput(
+            format!("expected 65-byte signature, got {}", sig_bytes.len())
+        ));
+    }
+    let r = format!("0x{}", hex::encode(&sig_bytes[0..32]));
+    let s = format!("0x{}", hex::encode(&sig_bytes[32..64]));
+    let v = sig_bytes[64];
+
+    Ok(crate::types::PermitSignResult {
+        signature: format!("0x{}", result.signature),
+        v,
+        r,
+        s,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// EIP-2612 domain resolution helpers (synchronous, uses ureq for HTTP)
+// ---------------------------------------------------------------------------
+
+/// Well-known token domain version overrides keyed by lowercase address.
+fn permit_domain_version(token: &str) -> Option<&'static str> {
+    match token.to_lowercase().as_str() {
+        // USDC on all chains
+        "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" => Some("2"),
+        "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" => Some("2"),
+        "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359" => Some("2"),
+        "0xaf88d065e77c8cc2239327c5edb3a432268e5831" => Some("2"),
+        "0x0b2c639c533813f4aa9d7837caf62653d097ff85" => Some("2"),
+        // DAI
+        "0x6b175474e89094c44da98b954eedeac495271d0f" => Some("1"),
+        // USDT on Base
+        "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2" => Some("1"),
+        _ => None,
+    }
+}
+
+struct PermitDomain {
+    name: String,
+    version: Option<String>,
+}
+
+fn eth_call(rpc_url: &str, to: &str, data: &str) -> Result<String, String> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_call",
+        "params": [{ "to": to, "data": data }, "latest"]
+    });
+    let response = ureq::post(rpc_url)
+        .set("Content-Type", "application/json")
+        .send_string(&body.to_string())
+        .map_err(|e| format!("RPC request failed: {e}"))?;
+    let json: serde_json::Value = response
+        .into_json()
+        .map_err(|e| format!("RPC response parse error: {e}"))?;
+    if let Some(err) = json.get("error") {
+        return Err(format!("eth_call error: {err}"));
+    }
+    Ok(json["result"].as_str().unwrap_or("0x").to_string())
+}
+
+fn decode_abi_string(hex: &str) -> String {
+    let raw = hex.trim_start_matches("0x");
+    if raw.len() < 128 { return String::new(); }
+    let length = usize::from_str_radix(&raw[64..128], 16).unwrap_or(0);
+    let data_hex = &raw[128..128 + length * 2];
+    hex::decode(data_hex)
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+        .unwrap_or_default()
+}
+
+fn decode_abi_uint256(hex: &str) -> u64 {
+    let raw = hex.trim_start_matches("0x");
+    u64::from_str_radix(raw.trim_start_matches('0'), 16).unwrap_or(0)
+}
+
+fn encode_address_arg(address: &str) -> String {
+    format!("{:0>64}", address.trim_start_matches("0x").to_lowercase())
+}
+
+fn fetch_permit_nonce(rpc_url: &str, token: &str, owner: &str) -> Result<u64, String> {
+    let data = format!("0x7ecebe00{}", encode_address_arg(owner));
+    let result = eth_call(rpc_url, token, &data)?;
+    Ok(decode_abi_uint256(&result))
+}
+
+fn resolve_permit_domain(rpc_url: &str, token: &str, _chain_id: u64) -> Result<PermitDomain, String> {
+    // 1. Try eip712Domain() — EIP-5267
+    if let Ok(raw) = eth_call(rpc_url, token, "0x84b0196e") {
+        let stripped = raw.trim_start_matches("0x");
+        if stripped.len() > 64 {
+            let words: Vec<&str> = (0..stripped.len())
+                .step_by(64)
+                .map(|i| &stripped[i..std::cmp::min(i + 64, stripped.len())])
+                .collect();
+            if words.len() > 3 {
+                let name_offset  = usize::from_str_radix(words[1], 16).unwrap_or(0) / 32;
+                let version_offset = usize::from_str_radix(words[2], 16).unwrap_or(0) / 32;
+                if name_offset < words.len() {
+                    let name_len = usize::from_str_radix(words[name_offset], 16).unwrap_or(0);
+                    let name_data: String = words[name_offset + 1..].join("").chars().take(name_len * 2).collect();
+                    let name = hex::decode(&name_data).ok()
+                        .and_then(|b| String::from_utf8(b).ok())
+                        .unwrap_or_default();
+                    if !name.is_empty() {
+                        let version = if version_offset < words.len() {
+                            let ver_len = usize::from_str_radix(words[version_offset], 16).unwrap_or(0);
+                            let ver_data: String = words[version_offset + 1..].join("").chars().take(ver_len * 2).collect();
+                            hex::decode(&ver_data).ok()
+                                .and_then(|b| String::from_utf8(b).ok())
+                                .filter(|s| !s.is_empty())
+                        } else { None };
+                        return Ok(PermitDomain { name, version });
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Well-known override table + name()
+    let name_hex = eth_call(rpc_url, token, "0x06fdde03")?;
+    let name = decode_abi_string(&name_hex);
+    if name.is_empty() {
+        return Err(format!(
+            "Could not resolve EIP-712 domain for token {token}. \
+             Ensure the token implements name() or eip712Domain()."
+        ));
+    }
+    let version = permit_domain_version(token).map(|s| s.to_string()).or(Some("1".into()));
+    Ok(PermitDomain { name, version })
+}
+
+fn build_permit_typed_data(
+    domain: &PermitDomain,
+    owner: &str,
+    spender: &str,
+    value: &str,
+    nonce: u64,
+    deadline: u64,
+    chain_id: u64,
+    verifying_contract: &str,
+) -> String {
+    let domain_fields = if domain.version.is_some() {
+        serde_json::json!([
+            { "name": "name", "type": "string" },
+            { "name": "version", "type": "string" },
+            { "name": "chainId", "type": "uint256" },
+            { "name": "verifyingContract", "type": "address" }
+        ])
+    } else {
+        serde_json::json!([
+            { "name": "name", "type": "string" },
+            { "name": "chainId", "type": "uint256" },
+            { "name": "verifyingContract", "type": "address" }
+        ])
+    };
+
+    let domain_obj = if let Some(ref ver) = domain.version {
+        serde_json::json!({
+            "name": domain.name,
+            "version": ver,
+            "chainId": chain_id,
+            "verifyingContract": verifying_contract
+        })
+    } else {
+        serde_json::json!({
+            "name": domain.name,
+            "chainId": chain_id,
+            "verifyingContract": verifying_contract
+        })
+    };
+
+    let typed_data = serde_json::json!({
+        "types": {
+            "EIP712Domain": domain_fields,
+            "Permit": [
+                { "name": "owner",    "type": "address" },
+                { "name": "spender",  "type": "address" },
+                { "name": "value",    "type": "uint256" },
+                { "name": "nonce",    "type": "uint256" },
+                { "name": "deadline", "type": "uint256" }
+            ]
+        },
+        "primaryType": "Permit",
+        "domain": domain_obj,
+        "message": {
+            "owner":    owner,
+            "spender":  spender,
+            "value":    value,
+            "nonce":    nonce,
+            "deadline": deadline
+        }
+    });
+
+    serde_json::to_string(&typed_data).unwrap_or_default()
 }

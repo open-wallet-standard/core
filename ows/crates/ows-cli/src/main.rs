@@ -199,6 +199,39 @@ enum SignCommands {
         #[arg(long)]
         rpc_url: Option<String>,
     },
+    /// Sign an EIP-2612 permit for gasless ERC-20 approvals
+    Permit {
+        /// Chain name or CAIP-2 ID (e.g. "base", "eip155:8453", "ethereum")
+        #[arg(long)]
+        chain: String,
+        /// Wallet name or ID
+        #[arg(long, env = "OWS_WALLET")]
+        wallet: String,
+        /// ERC-20 token contract address
+        #[arg(long)]
+        token: String,
+        /// Address to approve
+        #[arg(long)]
+        spender: String,
+        /// Amount in token base units (e.g. 1000000 for 1 USDC)
+        #[arg(long)]
+        value: String,
+        /// Unix timestamp after which the permit is invalid
+        #[arg(long)]
+        deadline: u64,
+        /// Permit nonce (auto-fetched from chain if omitted)
+        #[arg(long)]
+        nonce: Option<u64>,
+        /// JSON-RPC endpoint (uses chain default if omitted)
+        #[arg(long)]
+        rpc_url: Option<String>,
+        /// Account index
+        #[arg(long, default_value = "0")]
+        index: u32,
+        /// Output structured JSON with v, r, s components
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -459,6 +492,29 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 index,
                 json,
                 rpc_url.as_deref(),
+            ),
+            SignCommands::Permit {
+                chain,
+                wallet,
+                token,
+                spender,
+                value,
+                deadline,
+                nonce,
+                rpc_url,
+                index,
+                json,
+            } => commands::sign_permit::run(
+                &chain,
+                &wallet,
+                &token,
+                &spender,
+                &value,
+                deadline,
+                nonce,
+                rpc_url.as_deref(),
+                index,
+                json,
             ),
         },
         Commands::Fund { subcommand } => match subcommand {
