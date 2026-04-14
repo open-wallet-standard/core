@@ -21,7 +21,7 @@ type AssetId = `${ChainId}:${string}`;
 // e.g. "eip155:8453:native" (ETH on Base)
 ```
 
-The `native` token refers to the chain's native currency (ETH, SOL, SUI, BTC, ATOM, TRX, TON, etc.).
+The `native` token refers to the chain's native currency (ETH, SOL, SUI, BTC, ATOM, TRX, TON, ZEC, etc.).
 
 ## Chain Families
 
@@ -38,6 +38,7 @@ OWS groups chains into families that share a cryptographic curve and address der
 | Sui | ed25519 | 784 | `m/44'/784'/{index}'/0'/0'` | `0x` + BLAKE2b-256 hex (32 bytes) | `sui` |
 | Spark | secp256k1 | 8797555 | `m/84'/0'/0'/0/{index}` | `spark:` + compressed pubkey hex | `spark` |
 | Filecoin | secp256k1 | 461 | `m/44'/461'/0'/0/{index}` | `f1` + base32(blake2b-160) | `fil` |
+| Zcash | secp256k1 / ZIP-32 | 133 | ZIP-32 (from raw seed) | Unified address (`u1...`) | `zcash` |
 
 ## Known Networks
 
@@ -67,6 +68,7 @@ Each network has a canonical chain identifier. Endpoint discovery and transport 
 | Sui | `sui:mainnet` |
 | Spark | `spark:mainnet` |
 | Filecoin | `fil:mainnet` |
+| Zcash | `zcash:mainnet` |
 
 Implementations MAY ship convenience endpoint defaults, but those defaults are deployment choices rather than OWS interoperability requirements.
 
@@ -90,6 +92,7 @@ ton       → ton:mainnet
 sui       → sui:mainnet
 spark     → spark:mainnet
 filecoin  → fil:mainnet
+zcash     → zcash:mainnet
 ```
 
 Aliases MUST be resolved to full CAIP-2 identifiers before any processing. They MUST NOT appear in wallet files, policy files, or audit logs.
@@ -112,10 +115,13 @@ Master Seed (512 bits via PBKDF2)
     ├── m/44'/607'/0'       → TON Account 0
     ├── m/44'/784'/0'/0'/0' → Sui Account 0
     ├── m/84'/0'/0'/0/0     → Spark Account 0
-    └── m/44'/461'/0'/0/0   → Filecoin Account 0
+    ├── m/44'/461'/0'/0/0   → Filecoin Account 0
+    └── ZIP-32(seed, 0)     → Zcash Account 0 (unified address)
 ```
 
 A single mnemonic derives accounts across all supported chains. The wallet file stores the encrypted mnemonic; the signer derives the appropriate private key using each chain's coin type and derivation path.
+
+> **Note on Zcash:** Zcash unified addresses use ZIP-32 derivation, which operates on the raw BIP-39 seed rather than a BIP-32 derived key. The signer signals this via `needs_raw_seed() → true`, and the wallet layer passes the full 64-byte seed instead of a 32-byte derived key. See [Zcash Integration Guide](zcash-guide.md) for details.
 
 ## Adding a New Chain
 

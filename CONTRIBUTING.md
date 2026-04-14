@@ -30,12 +30,34 @@ cd bindings/python && maturin develop --release
 ### Running Tests
 
 ```bash
-# Rust tests
+# Rust tests (all features, including Zcash shielded support)
+cd ows && cargo test --workspace --features zcash-shielded
+
+# Rust tests (without Zcash shielded — faster, smaller dependency tree)
 cd ows && cargo test --workspace
 
 # Node tests
 cd bindings/node && npm test
 ```
+
+### Zcash Development
+
+Zcash shielded support (`zcash-shielded` feature) is enabled by default in the CLI but optional in the library crates. When developing Zcash-specific code:
+
+```bash
+# Build with Zcash shielded support
+cd ows && cargo build --workspace --features zcash-shielded
+
+# Run only Zcash tests
+cd ows && cargo test --features zcash-shielded -- zcash
+
+# Clippy with Zcash features
+cd ows && cargo clippy --workspace --features zcash-shielded -- -D warnings
+```
+
+The `zcash-shielded` feature adds dependencies on `zcash_keys`, `pczt`, `orchard`, and `sapling-crypto` from the [librustzcash](https://github.com/zcash/librustzcash) ecosystem. These are heavier than the base OWS dependencies — expect longer initial compile times.
+
+See [docs/zcash-guide.md](docs/zcash-guide.md) for architecture and usage details.
 
 ### Code Formatting
 

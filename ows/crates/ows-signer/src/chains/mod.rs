@@ -7,6 +7,7 @@ pub mod spark;
 pub mod sui;
 pub mod ton;
 pub mod tron;
+pub mod zcash;
 
 pub use self::bitcoin::BitcoinSigner;
 pub use self::cosmos::CosmosSigner;
@@ -17,6 +18,7 @@ pub use self::spark::SparkSigner;
 pub use self::sui::SuiSigner;
 pub use self::ton::TonSigner;
 pub use self::tron::TronSigner;
+pub use self::zcash::ZcashSigner;
 
 use crate::traits::ChainSigner;
 use ows_core::ChainType;
@@ -33,5 +35,6 @@ pub fn signer_for_chain(chain: ChainType) -> Box<dyn ChainSigner> {
         ChainType::Spark => Box::new(SparkSigner),
         ChainType::Filecoin => Box::new(FilecoinSigner),
         ChainType::Sui => Box::new(SuiSigner),
+        ChainType::Zcash => Box::new(ZcashSigner::mainnet()),
     }
 }

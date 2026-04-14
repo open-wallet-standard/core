@@ -42,10 +42,19 @@ fn derive_all_accounts(mnemonic: &Mnemonic, index: u32) -> Result<Vec<WalletAcco
     for ct in &ALL_CHAIN_TYPES {
         let chain = default_chain_for_type(*ct);
         let signer = signer_for_chain(*ct);
-        let path = signer.default_derivation_path(index);
-        let curve = signer.curve();
-        let key = HdDeriver::derive_from_mnemonic(mnemonic, "", &path, curve)?;
-        let address = signer.derive_address(key.expose())?;
+
+        let (address, path) = if signer.needs_raw_seed() {
+            let seed = mnemonic.to_seed("");
+            let addr = signer.derive_address_from_seed(seed.expose(), index)?;
+            (addr, format!("zip32/{}", index))
+        } else {
+            let path = signer.default_derivation_path(index);
+            let curve = signer.curve();
+            let key = HdDeriver::derive_from_mnemonic(mnemonic, "", &path, curve)?;
+            let addr = signer.derive_address(key.expose())?;
+            (addr, path)
+        };
+
         let account_id = format!("{}:{}", chain.chain_id, address);
         accounts.push(WalletAccount {
             account_id,
@@ -151,9 +160,16 @@ pub fn derive_address(
     let chain = parse_chain(chain)?;
     let mnemonic = Mnemonic::from_phrase(mnemonic_phrase)?;
     let signer = signer_for_chain(chain.chain_type);
-    let path = signer.default_derivation_path(index.unwrap_or(0));
-    let curve = signer.curve();
+    let idx = index.unwrap_or(0);
 
+    if signer.needs_raw_seed() {
+        let seed = mnemonic.to_seed("");
+        let address = signer.derive_address_from_seed(seed.expose(), idx)?;
+        return Ok(address);
+    }
+
+    let path = signer.default_derivation_path(idx);
+    let curve = signer.curve();
     let key = HdDeriver::derive_from_mnemonic(&mnemonic, "", &path, curve)?;
     let address = signer.derive_address(key.expose())?;
     Ok(address)
@@ -416,6 +432,22 @@ pub fn sign_transaction(
     // Agent mode: token-based signing with policy enforcement
     if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
         let chain = parse_chain(chain)?;
+
+        #[cfg(feature = "zcash-shielded")]
+        if chain.chain_type == ows_core::ChainType::Zcash {
+            let (key, _) = crate::key_ops::enforce_policy_and_decrypt_key(
+                credential, wallet, &chain, &tx_bytes, index, vault_path,
+            )?;
+            let zcash_signer = ows_signer::chains::ZcashSigner::from_chain_id(chain.chain_id);
+            let signed_pczt = zcash_signer.sign_pczt(
+                key.expose(), &tx_bytes, index.unwrap_or(0),
+            )?;
+            return Ok(SignResult {
+                signature: hex::encode(&signed_pczt),
+                recovery_id: None,
+            });
+        }
+
         return crate::key_ops::sign_with_api_key(
             credential, wallet, &chain, &tx_bytes, index, vault_path,
         );
@@ -424,6 +456,23 @@ pub fn sign_transaction(
     // Owner mode: existing passphrase-based signing (unchanged)
     let chain = parse_chain(chain)?;
     let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
+
+    // Zcash PCZT: the seed is returned (64 bytes) and tx_bytes is a serialized PCZT.
+    // Route through ZcashSigner::sign_pczt which returns the signed PCZT bytes.
+    #[cfg(feature = "zcash-shielded")]
+    if chain.chain_type == ows_core::ChainType::Zcash {
+        let zcash_signer = ows_signer::chains::ZcashSigner::from_chain_id(chain.chain_id);
+        let signed_pczt = zcash_signer.sign_pczt(
+            key.expose(),
+            &tx_bytes,
+            index.unwrap_or(0),
+        )?;
+        return Ok(SignResult {
+            signature: hex::encode(&signed_pczt),
+            recovery_id: None,
+        });
+    }
+
     let signer = signer_for_chain(chain.chain_type);
     let output = signer.sign_transaction(key.expose(), &tx_bytes)?;
 
@@ -470,6 +519,14 @@ pub fn sign_message(
 
     // Owner mode
     let chain = parse_chain(chain)?;
+
+    #[cfg(feature = "zcash-shielded")]
+    if chain.chain_type == ows_core::ChainType::Zcash {
+        return Err(OwsLibError::InvalidInput(
+            "message signing is not supported for Zcash shielded wallets".into(),
+        ));
+    }
+
     let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
     let signer = signer_for_chain(chain.chain_type);
     let output = signer.sign_message(key.expose(), &msg_bytes)?;
@@ -550,6 +607,12 @@ pub fn sign_and_send(
             index,
             vault_path,
         )?;
+
+        #[cfg(feature = "zcash-shielded")]
+        if chain_info.chain_type == ows_core::ChainType::Zcash {
+            return sign_and_broadcast_zcash(key.expose(), &tx_bytes, index, rpc_url, chain);
+        }
+
         return sign_encode_and_broadcast(key.expose(), chain, &tx_bytes, rpc_url);
     }
 
@@ -557,7 +620,53 @@ pub fn sign_and_send(
     let chain_info = parse_chain(chain)?;
     let key = decrypt_signing_key(wallet, chain_info.chain_type, credential, index, vault_path)?;
 
+    // Zcash PCZT: sign the PCZT and broadcast the finalized transaction.
+    // The key is the raw seed (64 bytes) when zcash-shielded is enabled.
+    #[cfg(feature = "zcash-shielded")]
+    if chain_info.chain_type == ows_core::ChainType::Zcash {
+        return sign_and_broadcast_zcash(key.expose(), &tx_bytes, index, rpc_url, chain);
+    }
+
     sign_encode_and_broadcast(key.expose(), chain, &tx_bytes, rpc_url)
+}
+
+/// Sign a Zcash PCZT, finalize it, and broadcast via lightwalletd.
+///
+/// `seed` is the raw BIP-39 seed (64 bytes).
+/// `pczt_bytes` is the serialized PCZT (already through Creator + Prover stages).
+///
+/// The pipeline: sign PCZT → extract finalized tx bytes → broadcast via gRPC.
+#[cfg(feature = "zcash-shielded")]
+fn sign_and_broadcast_zcash(
+    seed: &[u8],
+    pczt_bytes: &[u8],
+    index: Option<u32>,
+    rpc_url: Option<&str>,
+    chain_str: &str,
+) -> Result<SendResult, OwsLibError> {
+    let zcash_signer = ows_signer::chains::ZcashSigner::from_chain_id(chain_str);
+    let signed_pczt_bytes = zcash_signer.sign_pczt(seed, pczt_bytes, index.unwrap_or(0))?;
+
+    let signed_pczt = pczt::Pczt::parse(&signed_pczt_bytes).map_err(|e| {
+        OwsLibError::InvalidInput(format!("failed to parse signed PCZT: {e:?}"))
+    })?;
+
+    let tx = pczt::roles::tx_extractor::TransactionExtractor::new(signed_pczt)
+        .extract()
+        .map_err(|e| {
+            OwsLibError::InvalidInput(format!("PCZT finalization failed: {e:?}"))
+        })?;
+
+    let mut tx_bytes = Vec::new();
+    tx.write(&mut tx_bytes).map_err(|e| {
+        OwsLibError::InvalidInput(format!("failed to serialize Zcash transaction: {e}"))
+    })?;
+
+    let chain = parse_chain(chain_str)?;
+    let rpc = resolve_rpc_url(chain.chain_id, chain.chain_type, rpc_url)?;
+    let tx_hash = broadcast(chain.chain_type, &rpc, &tx_bytes)?;
+
+    Ok(SendResult { tx_hash })
 }
 
 /// Sign, encode, and broadcast a transaction using an already-resolved private key.
@@ -612,17 +721,22 @@ pub fn decrypt_signing_key(
 
     match wallet.key_type {
         KeyType::Mnemonic => {
-            // Use the SecretBytes directly as a &str to avoid un-zeroized String copies.
             let phrase = std::str::from_utf8(secret.expose()).map_err(|_| {
                 OwsLibError::InvalidInput("wallet contains invalid UTF-8 mnemonic".into())
             })?;
             let mnemonic = Mnemonic::from_phrase(phrase)?;
             let signer = signer_for_chain(chain_type);
-            let path = signer.default_derivation_path(index.unwrap_or(0));
-            let curve = signer.curve();
-            Ok(HdDeriver::derive_from_mnemonic_cached(
-                &mnemonic, "", &path, curve,
-            )?)
+
+            if signer.needs_raw_seed() {
+                let seed = mnemonic.to_seed("");
+                Ok(seed)
+            } else {
+                let path = signer.default_derivation_path(index.unwrap_or(0));
+                let curve = signer.curve();
+                Ok(HdDeriver::derive_from_mnemonic_cached(
+                    &mnemonic, "", &path, curve,
+                )?)
+            }
         }
         KeyType::PrivateKey => {
             // JSON key pair — extract the right key for this chain's curve
@@ -688,6 +802,12 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
             "broadcast not yet supported for Filecoin".into(),
         )),
         ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
+        #[cfg(feature = "zcash-shielded")]
+        ChainType::Zcash => broadcast_zcash(rpc_url, signed_bytes),
+        #[cfg(not(feature = "zcash-shielded"))]
+        ChainType::Zcash => Err(OwsLibError::InvalidInput(
+            "Zcash broadcast requires the zcash-shielded feature".into(),
+        )),
     }
 }
 
@@ -800,6 +920,11 @@ fn broadcast_sui(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibErr
     let sig_part = &signed_bytes[split..];
 
     crate::sui_grpc::execute_transaction(rpc_url, tx_part, sig_part)
+}
+
+#[cfg(feature = "zcash-shielded")]
+fn broadcast_zcash(rpc_url: &str, tx_bytes: &[u8]) -> Result<String, OwsLibError> {
+    crate::lwd_grpc::send_transaction(rpc_url, tx_bytes)
 }
 
 fn curl_post_json(url: &str, body: &str) -> Result<String, OwsLibError> {
@@ -2605,6 +2730,238 @@ mod tests {
             api_result.signature,
             hex::encode(&direct.signature),
             "sign_message owner path must match direct signer"
+        );
+    }
+
+    // ================================================================
+    // ZCASH INTEGRATION TESTS
+    // ================================================================
+
+    #[test]
+    fn zcash_wallet_create_includes_zcash_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        let info = create_wallet("zec-create", None, None, Some(vault)).unwrap();
+
+        let zcash_account = info
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "zcash:mainnet");
+        assert!(
+            zcash_account.is_some(),
+            "wallet must include a zcash:mainnet account"
+        );
+    }
+
+    #[cfg(feature = "zcash-shielded")]
+    #[test]
+    fn zcash_wallet_create_derives_unified_address() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        let info = create_wallet("zec-ua", None, None, Some(vault)).unwrap();
+
+        let zcash_account = info
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "zcash:mainnet")
+            .expect("wallet must include a zcash:mainnet account");
+
+        assert!(
+            zcash_account.address.starts_with("u1"),
+            "Zcash address should be a unified address (u1...), got: {}",
+            zcash_account.address
+        );
+        assert!(
+            zcash_account.address.len() > 50,
+            "unified address should be long (multiple receivers), got len: {}",
+            zcash_account.address.len()
+        );
+    }
+
+    #[cfg(feature = "zcash-shielded")]
+    #[test]
+    fn zcash_derive_address_produces_unified_address() {
+        let phrase = generate_mnemonic(12).unwrap();
+        let addr = derive_address(&phrase, "zcash", None).unwrap();
+        assert!(
+            addr.starts_with("u1"),
+            "derived Zcash address should be unified (u1...), got: {}",
+            addr
+        );
+    }
+
+    #[cfg(feature = "zcash-shielded")]
+    #[test]
+    fn zcash_derive_address_deterministic() {
+        let phrase = generate_mnemonic(12).unwrap();
+        let a = derive_address(&phrase, "zcash", None).unwrap();
+        let b = derive_address(&phrase, "zcash", None).unwrap();
+        assert_eq!(a, b, "same mnemonic must produce same Zcash unified address");
+    }
+
+    #[cfg(feature = "zcash-shielded")]
+    #[test]
+    fn zcash_derive_address_different_accounts() {
+        let phrase = generate_mnemonic(12).unwrap();
+        let a = derive_address(&phrase, "zcash", Some(0)).unwrap();
+        let b = derive_address(&phrase, "zcash", Some(1)).unwrap();
+        assert_ne!(a, b, "different account indices must produce different addresses");
+    }
+
+    #[cfg(feature = "zcash-shielded")]
+    #[test]
+    fn zcash_import_wallet_address_matches_derivation() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        let info =
+            import_wallet_mnemonic("zec-import", phrase, None, None, Some(vault)).unwrap();
+        let zcash_account = info
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "zcash:mainnet")
+            .expect("imported wallet must include Zcash account");
+
+        let derived = derive_address(phrase, "zcash", None).unwrap();
+        assert_eq!(
+            zcash_account.address, derived,
+            "wallet import and direct derivation must produce the same Zcash address"
+        );
+    }
+
+    #[cfg(feature = "zcash-shielded")]
+    #[test]
+    fn zcash_wallet_export_reimport_address_stable() {
+        let v1 = tempfile::tempdir().unwrap();
+        let v2 = tempfile::tempdir().unwrap();
+
+        let w1 = create_wallet("zec-export", None, None, Some(v1.path())).unwrap();
+        let phrase = export_wallet("zec-export", None, Some(v1.path())).unwrap();
+
+        let w2 =
+            import_wallet_mnemonic("zec-reimport", &phrase, None, None, Some(v2.path())).unwrap();
+
+        let addr1 = w1
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "zcash:mainnet")
+            .unwrap()
+            .address
+            .clone();
+        let addr2 = w2
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "zcash:mainnet")
+            .unwrap()
+            .address
+            .clone();
+
+        assert_eq!(
+            addr1, addr2,
+            "Zcash address must be stable across export → reimport"
+        );
+    }
+
+    #[cfg(feature = "zcash-shielded")]
+    #[test]
+    fn zcash_decrypt_signing_key_returns_seed() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        create_wallet("zec-key", None, None, Some(vault)).unwrap();
+
+        let key = decrypt_signing_key("zec-key", ChainType::Zcash, "", None, Some(vault)).unwrap();
+        assert_eq!(
+            key.expose().len(),
+            64,
+            "Zcash signing key should be the raw 64-byte BIP-39 seed"
+        );
+    }
+
+    #[cfg(feature = "zcash-shielded")]
+    #[test]
+    fn zcash_sign_transaction_accepts_pczt_bytes() {
+        use pczt::roles::creator::Creator;
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        create_wallet("zec-sign", None, None, Some(vault)).unwrap();
+
+        // Build a minimal empty PCZT via the Creator role.
+        // No inputs = no signatures needed, but this verifies the full
+        // PCZT routing through the library (hex decode → seed decrypt →
+        // ZcashSigner::sign_pczt → return signed bytes).
+        let pczt = Creator::new(
+            0xc2d6_d0b4, // NU5 consensus branch ID
+            0,            // expiry height
+            133,          // coin type (Zcash)
+            [0u8; 32],   // sapling anchor
+            [0u8; 32],   // orchard anchor
+        )
+        .build();
+        let pczt_hex = hex::encode(pczt.serialize());
+
+        let result = sign_transaction("zec-sign", "zcash", &pczt_hex, None, None, Some(vault));
+        assert!(
+            result.is_ok(),
+            "signing an empty PCZT should succeed (no inputs to sign): {:?}",
+            result.err()
+        );
+    }
+
+    #[cfg(feature = "zcash-shielded")]
+    #[test]
+    fn zcash_sign_transaction_rejects_garbage() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        create_wallet("zec-garbage", None, None, Some(vault)).unwrap();
+
+        let garbage_hex = "deadbeefcafebabe";
+        let result =
+            sign_transaction("zec-garbage", "zcash", garbage_hex, None, None, Some(vault));
+        assert!(
+            result.is_err(),
+            "signing garbage bytes should fail with a PCZT parse error"
+        );
+    }
+
+    #[cfg(feature = "zcash-shielded")]
+    #[test]
+    fn zcash_24_word_mnemonic_derives_valid_address() {
+        let phrase = generate_mnemonic(24).unwrap();
+        let addr = derive_address(&phrase, "zcash", None).unwrap();
+        assert!(
+            addr.starts_with("u1"),
+            "24-word mnemonic should produce unified address, got: {}",
+            addr
+        );
+    }
+
+    #[cfg(feature = "zcash-shielded")]
+    #[test]
+    fn zcash_wallet_create_other_chains_unaffected() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        let info = create_wallet("zec-others", None, None, Some(vault)).unwrap();
+
+        let evm = info.accounts.iter().find(|a| a.chain_id.starts_with("eip155:"));
+        let sol = info.accounts.iter().find(|a| a.chain_id.starts_with("solana:"));
+        let btc = info.accounts.iter().find(|a| a.chain_id.starts_with("bip122:"));
+        let zec = info.accounts.iter().find(|a| a.chain_id == "zcash:mainnet");
+
+        assert!(evm.is_some(), "EVM account must exist");
+        assert!(sol.is_some(), "Solana account must exist");
+        assert!(btc.is_some(), "Bitcoin account must exist");
+        assert!(zec.is_some(), "Zcash account must exist");
+
+        assert!(evm.unwrap().address.starts_with("0x"), "EVM format preserved");
+        assert!(zec.unwrap().address.starts_with("u1"), "Zcash format correct");
+
+        let evm_sig = sign_message("zec-others", "evm", "test", None, None, None, Some(vault));
+        assert!(
+            evm_sig.is_ok(),
+            "EVM signing must still work after Zcash integration: {:?}",
+            evm_sig.err()
         );
     }
 }

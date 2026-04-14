@@ -1,6 +1,8 @@
 pub mod error;
 pub mod key_ops;
 pub mod key_store;
+#[cfg(feature = "zcash-shielded")]
+pub mod lwd_grpc;
 pub mod migrate;
 pub mod ops;
 pub mod policy_engine;

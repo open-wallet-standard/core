@@ -34,6 +34,14 @@ pub fn run(
     let tx_bytes = hex::decode(tx_hex_clean)
         .map_err(|e| CliError::InvalidArgs(format!("invalid hex transaction: {e}")))?;
 
+    // Zcash PCZT: the key is the raw seed; route through sign_pczt
+    #[cfg(feature = "zcash-shielded")]
+    if chain.chain_type == ows_core::ChainType::Zcash {
+        let zcash_signer = ows_signer::chains::ZcashSigner::from_chain_id(chain_str);
+        let signed_pczt = zcash_signer.sign_pczt(key.expose(), &tx_bytes, index)?;
+        return print_result(&hex::encode(&signed_pczt), None, json_output);
+    }
+
     let signer = signer_for_chain(chain.chain_type);
     let output = signer.sign_transaction(key.expose(), &tx_bytes)?;
 

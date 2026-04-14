@@ -11,6 +11,10 @@ readme = "README.md"
 name = "ows"
 path = "src/main.rs"
 
+[features]
+default = ["zcash-shielded"]
+zcash-shielded = ["ows-lib/zcash-shielded", "ows-signer/zcash-shielded"]
+
 [dependencies]
 ows-core = { path = "../ows-core", version = "=1.0.0" }
 ows-signer = { path = "../ows-signer", version = "=1.0.0" }

@@ -35,8 +35,16 @@ pub fn run(
         return print_result(&result.signature, result.recovery_id, json_output);
     }
 
-    // Owner mode: resolve key directly (existing behavior)
+    // Owner mode
     let chain = parse_chain(chain_str)?;
+
+    #[cfg(feature = "zcash-shielded")]
+    if chain.chain_type == ows_core::ChainType::Zcash {
+        return Err(CliError::InvalidArgs(
+            "message signing is not supported for Zcash shielded wallets".into(),
+        ));
+    }
+
     let key = super::resolve_signing_key(wallet_name, chain.chain_type, index)?;
 
     let signer = signer_for_chain(chain.chain_type);

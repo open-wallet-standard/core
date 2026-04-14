@@ -38,8 +38,41 @@ pub fn run(
         return Ok(());
     }
 
-    // Owner mode: resolve key directly (existing behavior)
+    // Owner mode
     let chain = parse_chain(chain_str)?;
+
+    // Zcash PCZT: route through sign_and_send which handles seed-based key resolution.
+    // Must be checked before resolve_signing_key so passphrase handling is consistent.
+    #[cfg(feature = "zcash-shielded")]
+    if chain.chain_type == ows_core::ChainType::Zcash {
+        let result = match ows_lib::sign_and_send(
+            wallet_name, chain_str, tx_hex, Some(""), Some(index), rpc_url_override, None,
+        ) {
+            Ok(r) => r,
+            Err(ows_lib::OwsLibError::Crypto(_)) => {
+                let passphrase = super::read_passphrase();
+                ows_lib::sign_and_send(
+                    wallet_name, chain_str, tx_hex,
+                    Some(&passphrase), Some(index), rpc_url_override, None,
+                )?
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        if json_output {
+            let obj = serde_json::json!({
+                "tx_hash": result.tx_hash,
+                "chain": chain_str,
+            });
+            println!("{}", serde_json::to_string_pretty(&obj)?);
+        } else {
+            println!("{}", result.tx_hash);
+        }
+
+        audit::log_broadcast(wallet_name, chain_str, &result.tx_hash);
+        return Ok(());
+    }
+
     let key = super::resolve_signing_key(wallet_name, chain.chain_type, index)?;
 
     let tx_hex_clean = tx_hex.strip_prefix("0x").unwrap_or(tx_hex);

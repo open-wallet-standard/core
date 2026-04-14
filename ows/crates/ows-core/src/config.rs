@@ -63,6 +63,14 @@ impl Config {
             "sui:mainnet".into(),
             "https://fullnode.mainnet.sui.io:443".into(),
         );
+        rpc.insert(
+            "zcash:mainnet".into(),
+            "https://zec.rocks:443".into(),
+        );
+        rpc.insert(
+            "zcash:testnet".into(),
+            "https://testnet.zec.rocks:443".into(),
+        );
         rpc
     }
 }
@@ -242,7 +250,7 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 14);
+        assert_eq!(config.rpc.len(), 16);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
     }
 

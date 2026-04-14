@@ -79,6 +79,32 @@ pub trait ChainSigner: Send + Sync {
 
     /// Returns the default BIP-44 derivation path template for this chain.
     fn default_derivation_path(&self, index: u32) -> String;
+
+    /// Whether this chain requires the raw BIP-39 seed for address derivation
+    /// instead of a BIP-32/SLIP-10 derived key.
+    ///
+    /// Chains using non-standard HD derivation (e.g. Zcash's ZIP-32) override
+    /// this to return `true`, causing the wallet layer to pass the raw 64-byte
+    /// seed to [`derive_address_from_seed`] instead of a 32-byte derived key
+    /// to [`derive_address`].
+    fn needs_raw_seed(&self) -> bool {
+        false
+    }
+
+    /// Derive an on-chain address directly from a raw BIP-39 seed (64 bytes).
+    ///
+    /// Only called when [`needs_raw_seed`] returns `true`. Chains that use
+    /// non-BIP-44 derivation (e.g. ZIP-32 for Zcash unified addresses)
+    /// override this method.
+    fn derive_address_from_seed(
+        &self,
+        _seed: &[u8],
+        _account_index: u32,
+    ) -> Result<String, SignerError> {
+        Err(SignerError::AddressDerivationFailed(
+            "raw seed derivation not supported for this chain".into(),
+        ))
+    }
 }
 
 /// Errors that can occur during signing operations.

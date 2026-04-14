@@ -10,6 +10,7 @@ readme = "README.md"
 [features]
 default = []
 fast-kdf = []
+zcash-shielded = ["zcash_keys", "zcash_protocol", "zip32", "pczt", "sapling-crypto", "orchard", "zcash_transparent"]
 
 [dependencies]
 ows-core = { path = "../ows-core", version = "=1.0.0" }
@@ -37,5 +38,14 @@ blake2 = "0.10"
 digest = "0.10"
 libc = "0.2"
 signal-hook = "0.4"
+
+# Zcash shielded support (unified addresses, PCZT signing) — heavy deps, feature-gated
+zcash_keys = { version = "0.12", features = ["orchard", "sapling", "transparent-inputs"], optional = true }
+zcash_protocol = { version = "0.7", optional = true }
+zip32 = { version = "0.2", optional = true }
+pczt = { version = "0.5", features = ["signer"], optional = true }
+sapling-crypto = { version = "0.5", optional = true }
+orchard = { version = "0.11", optional = true }
+zcash_transparent = { version = "0.6", optional = true }
 
 [dev-dependencies]
