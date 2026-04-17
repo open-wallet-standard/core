@@ -291,6 +291,36 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --ignore-scripts
 
+  publish-npm-adapters:
+    needs: publish-npm
+    runs-on: ubuntu-latest
+    environment: release
+
+    defaults:
+      run:
+        working-directory: bindings/node-adapters
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Set version from tag
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          "$GITHUB_WORKSPACE/scripts/set-version.sh" "$V" --node
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Publish adapters package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --ignore-scripts
+
   publish-crates:
     runs-on: ubuntu-latest
     environment: release
