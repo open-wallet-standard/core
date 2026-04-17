@@ -1,5 +1,6 @@
 use crate::curve::Curve;
 use crate::traits::{ChainSigner, SignOutput, SignerError};
+use bitcoin::base64::Engine;
 use bitcoin::psbt::Psbt;
 use bitcoin::sighash::{EcdsaSighashType, SighashCache};
 use bitcoin::{Network, PrivateKey, PublicKey, ScriptBuf};
@@ -7,7 +8,6 @@ use k256::ecdsa::SigningKey;
 use ows_core::ChainType;
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
-use bitcoin::base64::Engine;
 use std::str::FromStr;
 
 /// PSBT magic bytes: "psbt\xff"
@@ -114,8 +114,7 @@ impl BitcoinSigner {
     /// Sign a PSBT, adding partial signatures for inputs owned by this key.
     /// Returns the serialized signed PSBT.
     fn sign_psbt(private_key: &[u8], psbt_bytes: &[u8]) -> Result<Vec<u8>, SignerError> {
-        let psbt_base64 =
-            bitcoin::base64::engine::general_purpose::STANDARD.encode(psbt_bytes);
+        let psbt_base64 = bitcoin::base64::engine::general_purpose::STANDARD.encode(psbt_bytes);
         let mut psbt = Psbt::from_str(&psbt_base64)
             .map_err(|e| SignerError::InvalidTransaction(format!("invalid PSBT: {e}")))?;
 
@@ -142,20 +141,15 @@ impl BitcoinSigner {
                 .unwrap_or(EcdsaSighashType::All);
 
             let sighash = SighashCache::new(&psbt.unsigned_tx)
-                .p2wpkh_signature_hash(
-                    index,
-                    &prevout.script_pubkey,
-                    prevout.value,
-                    sighash_type,
-                )
+                .p2wpkh_signature_hash(index, &prevout.script_pubkey, prevout.value, sighash_type)
                 .map_err(|e| {
                     SignerError::SigningFailed(format!(
                         "failed to compute sighash for input {index}: {e}"
                     ))
                 })?;
 
-            let msg = bitcoin::secp256k1::Message::from_digest_slice(sighash.as_ref())
-                .map_err(|e| {
+            let msg =
+                bitcoin::secp256k1::Message::from_digest_slice(sighash.as_ref()).map_err(|e| {
                     SignerError::SigningFailed(format!(
                         "invalid sighash digest for input {index}: {e}"
                     ))
