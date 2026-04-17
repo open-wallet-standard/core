@@ -115,6 +115,35 @@ The `typedDataJson` field must be a JSON string containing the standard EIP-712 
 
 Returns a `SignMessageResult` with the signature and recovery ID. Only supported for EVM chains.
 
+### `signHash(request: SignHashRequest): Promise<SignMessageResult>`
+
+Signs a raw 32-byte hash without applying any prefix, domain separator, or other transformation.
+
+```typescript
+interface SignHashRequest {
+  walletId: WalletId;
+  chainId: ChainId;
+  hashHex: string;                      // 32-byte hex string
+}
+```
+
+This operation is only defined for secp256k1-backed chains. For EVM, the returned `recoveryId` is the raw `y_parity` value (`0` or `1`), not the EIP-191 / EIP-712 `27` or `28` form.
+
+### `signAuthorization(request: SignAuthorizationRequest): Promise<SignMessageResult>`
+
+Convenience wrapper for EIP-7702 authorization signing.
+
+```typescript
+interface SignAuthorizationRequest {
+  walletId: WalletId;
+  chainId: ChainId;                     // Must resolve to an EVM chain
+  address: string;                      // 20-byte delegate target
+  nonce: string;                        // Decimal or 0x-prefixed hex
+}
+```
+
+This operation signs `keccak256(0x05 || rlp([eip155_chain_id(chainId), address, nonce]))`. The selected EVM `chainId` chooses the wallet account, policy context, and the EIP-155 chain ID encoded into the EIP-7702 tuple itself. If a caller needs a nonstandard tuple, such as wildcard chain ID `0`, it should precompute the digest and call `signHash` directly.
+
 ## Serialized Transaction Format
 
 Current OWS implementations accept **already-serialized transaction bytes encoded as hex**. OWS signs those bytes, and `signAndSend` implementations submit the signed payload using the transport required by the target chain.
@@ -140,3 +169,4 @@ Current implementations do not provide a per-wallet nonce manager or explicit sa
 
 - [EIP-191: Signed Data Standard](https://eips.ethereum.org/EIPS/eip-191)
 - [EIP-712: Typed Structured Data](https://eips.ethereum.org/EIPS/eip-712)
+- [EIP-7702: Set Code for EOAs](https://eips.ethereum.org/EIPS/eip-7702)

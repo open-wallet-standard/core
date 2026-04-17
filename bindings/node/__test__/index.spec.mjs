@@ -17,6 +17,8 @@ import {
   importWalletPrivateKey,
   signTransaction,
   signMessage,
+  signHash,
+  signAuthorization,
   signTypedData,
   createPolicy,
   listPolicies,
@@ -242,6 +244,29 @@ describe('@open-wallet-standard/core', () => {
     }
 
     deleteWallet('tx-signer', vaultDir);
+  });
+
+  it('signs raw hashes and EIP-7702 authorizations in owner mode', () => {
+    const privkey = '4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318';
+    const wallet = importWalletPrivateKey('hash-owner', privkey, undefined, vaultDir, 'evm');
+
+    const hashSig = signHash(wallet.id, 'base', '11'.repeat(32), undefined, undefined, vaultDir);
+    assert.ok(hashSig.signature.length > 0);
+    assert.ok(hashSig.recoveryId === 0 || hashSig.recoveryId === 1);
+
+    const authSig = signAuthorization(
+      wallet.id,
+      'base',
+      '0x1111111111111111111111111111111111111111',
+      '7',
+      undefined,
+      undefined,
+      vaultDir,
+    );
+    assert.ok(authSig.signature.length > 0);
+    assert.ok(authSig.recoveryId === 0 || authSig.recoveryId === 1);
+
+    deleteWallet(wallet.id, vaultDir);
   });
 
   // ---- Determinism ----
@@ -539,6 +564,54 @@ describe('@open-wallet-standard/core', () => {
 
     revokeApiKey(key.id, vaultDir);
     deletePolicy('test-exe-deny', vaultDir);
+    deleteWallet(wallet.id, vaultDir);
+  });
+
+  it('signs raw hashes and authorizations through the API-key path', () => {
+    const wallet = createWallet('hash-policy-test', undefined, 12, vaultDir);
+
+    createPolicy(JSON.stringify({
+      id: 'test-hash-base-only',
+      name: 'Base Only Hash',
+      version: 1,
+      created_at: '2026-03-22T00:00:00Z',
+      rules: [
+        { type: 'allowed_chains', chain_ids: ['eip155:8453'] },
+      ],
+      action: 'deny',
+    }), vaultDir);
+
+    const key = createApiKey('hash-agent', [wallet.id], ['test-hash-base-only'], '', null, vaultDir);
+
+    const hashSig = signHash(wallet.id, 'base', '22'.repeat(32), key.token, null, vaultDir);
+    assert.ok(hashSig.signature.length > 0);
+
+    const authSig = signAuthorization(
+      wallet.id,
+      'base',
+      '0x1111111111111111111111111111111111111111',
+      '7',
+      key.token,
+      null,
+      vaultDir,
+    );
+    assert.ok(authSig.signature.length > 0);
+
+    assert.throws(
+      () => signAuthorization(
+        wallet.id,
+        'ethereum',
+        '0x1111111111111111111111111111111111111111',
+        '7',
+        key.token,
+        null,
+        vaultDir,
+      ),
+      (err) => err.message.includes('not in allowlist'),
+    );
+
+    revokeApiKey(key.id, vaultDir);
+    deletePolicy('test-hash-base-only', vaultDir);
     deleteWallet(wallet.id, vaultDir);
   });
 });

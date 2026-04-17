@@ -136,6 +136,77 @@ def test_sign_message(vault_dir):
     assert len(result["signature"]) > 0
 
 
+def test_sign_hash_and_authorization_owner_mode(vault_dir):
+    wallet = ows.create_wallet("hash-owner", vault_path_opt=vault_dir)
+
+    hash_result = ows.sign_hash(
+        wallet["id"], "base", "11" * 32, vault_path_opt=vault_dir
+    )
+    assert len(hash_result["signature"]) > 0
+    assert hash_result["recovery_id"] in (0, 1)
+
+    auth_result = ows.sign_authorization(
+        wallet["id"],
+        "base",
+        "0x1111111111111111111111111111111111111111",
+        "7",
+        vault_path_opt=vault_dir,
+    )
+    assert len(auth_result["signature"]) > 0
+    assert auth_result["recovery_id"] in (0, 1)
+
+
+def test_sign_hash_and_authorization_api_key_mode(vault_dir):
+    wallet = ows.create_wallet("hash-agent", vault_path_opt=vault_dir)
+
+    ows.create_policy(
+        """{
+          "id": "base-only-hash",
+          "name": "Base Only Hash",
+          "version": 1,
+          "created_at": "2026-03-22T00:00:00Z",
+          "rules": [
+            {"type": "allowed_chains", "chain_ids": ["eip155:8453"]}
+          ],
+          "action": "deny"
+        }""",
+        vault_path_opt=vault_dir,
+    )
+
+    key = ows.create_api_key(
+        "hash-agent-key",
+        [wallet["id"]],
+        ["base-only-hash"],
+        "",
+        vault_path_opt=vault_dir,
+    )
+
+    hash_result = ows.sign_hash(
+        wallet["id"], "base", "22" * 32, key["token"], vault_path_opt=vault_dir
+    )
+    assert len(hash_result["signature"]) > 0
+
+    auth_result = ows.sign_authorization(
+        wallet["id"],
+        "base",
+        "0x1111111111111111111111111111111111111111",
+        "7",
+        key["token"],
+        vault_path_opt=vault_dir,
+    )
+    assert len(auth_result["signature"]) > 0
+
+    with pytest.raises(RuntimeError, match="not in allowlist"):
+        ows.sign_authorization(
+            wallet["id"],
+            "ethereum",
+            "0x1111111111111111111111111111111111111111",
+            "7",
+            key["token"],
+            vault_path_opt=vault_dir,
+        )
+
+
 def test_sign_typed_data_with_api_key(vault_dir):
     wallet = ows.create_wallet("td-api-test", vault_path_opt=vault_dir)
 

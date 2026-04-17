@@ -6,8 +6,8 @@ use ows_core::{
     ALL_CHAIN_TYPES,
 };
 use ows_signer::{
-    decrypt, encrypt, signer_for_chain, CryptoEnvelope, HdDeriver, Mnemonic, MnemonicStrength,
-    SecretBytes,
+    decrypt, encrypt, signer_for_chain, CryptoEnvelope, Curve, HdDeriver, Mnemonic,
+    MnemonicStrength, SecretBytes,
 };
 
 use crate::error::OwsLibError;
@@ -423,6 +423,65 @@ pub fn rename_wallet(
     Ok(())
 }
 
+fn decode_hash_hex(hash_hex: &str) -> Result<Vec<u8>, OwsLibError> {
+    let hash_hex = hash_hex.strip_prefix("0x").unwrap_or(hash_hex);
+    let hash = hex::decode(hash_hex)
+        .map_err(|e| OwsLibError::InvalidInput(format!("invalid hex hash: {e}")))?;
+
+    if hash.len() != 32 {
+        return Err(OwsLibError::InvalidInput(format!(
+            "raw hash signing requires exactly 32 bytes, got {}",
+            hash.len()
+        )));
+    }
+
+    Ok(hash)
+}
+
+fn sign_hash_with_credential(
+    wallet: &str,
+    chain: &ows_core::Chain,
+    policy_bytes: &[u8],
+    hash_bytes: &[u8],
+    credential: &str,
+    index: Option<u32>,
+    vault_path: Option<&Path>,
+) -> Result<SignResult, OwsLibError> {
+    let signer = signer_for_chain(chain.chain_type);
+    if signer.curve() != Curve::Secp256k1 {
+        return Err(OwsLibError::InvalidInput(
+            "raw hash signing is only supported for secp256k1-backed chains".into(),
+        ));
+    }
+
+    if hash_bytes.len() != 32 {
+        return Err(OwsLibError::InvalidInput(format!(
+            "raw hash signing requires exactly 32 bytes, got {}",
+            hash_bytes.len()
+        )));
+    }
+
+    if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
+        return crate::key_ops::sign_hash_with_api_key(
+            credential,
+            wallet,
+            chain,
+            policy_bytes,
+            hash_bytes,
+            index,
+            vault_path,
+        );
+    }
+
+    let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
+    let output = signer.sign(key.expose(), hash_bytes)?;
+
+    Ok(SignResult {
+        signature: hex::encode(&output.signature),
+        recovery_id: output.recovery_id,
+    })
+}
+
 /// Sign a transaction. Returns hex-encoded signature.
 ///
 /// The `passphrase` parameter accepts either the owner's passphrase or an
@@ -461,6 +520,63 @@ pub fn sign_transaction(
         signature: hex::encode(&output.signature),
         recovery_id: output.recovery_id,
     })
+}
+
+/// Sign a raw 32-byte hash using the secp256k1 key for the selected chain.
+///
+/// The `passphrase` parameter accepts either the owner's passphrase or an
+/// API token (`ows_key_...`). Raw hash signing is only supported on
+/// secp256k1-backed chains.
+pub fn sign_hash(
+    wallet: &str,
+    chain: &str,
+    hash_hex: &str,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    vault_path: Option<&Path>,
+) -> Result<SignResult, OwsLibError> {
+    let credential = passphrase.unwrap_or("");
+    let chain = parse_chain(chain)?;
+    let hash = decode_hash_hex(hash_hex)?;
+
+    sign_hash_with_credential(wallet, &chain, &hash, &hash, credential, index, vault_path)
+}
+
+/// Sign an EIP-7702 authorization tuple.
+///
+/// This computes `keccak256(0x05 || rlp([eip155_chain_id(chain), address, nonce]))`
+/// and signs the resulting digest via [`sign_hash`].
+pub fn sign_authorization(
+    wallet: &str,
+    chain: &str,
+    address: &str,
+    nonce: &str,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    vault_path: Option<&Path>,
+) -> Result<SignResult, OwsLibError> {
+    let credential = passphrase.unwrap_or("");
+    let chain = parse_chain(chain)?;
+    if chain.chain_type != ChainType::Evm {
+        return Err(OwsLibError::InvalidInput(
+            "EIP-7702 authorization signing is only supported for EVM chains".into(),
+        ));
+    }
+
+    let authorization_chain_id = chain.chain_id.strip_prefix("eip155:").ok_or_else(|| {
+        OwsLibError::InvalidInput(format!(
+            "EVM chain '{}' is missing an eip155 reference",
+            chain.chain_id
+        ))
+    })?;
+
+    let evm_signer = ows_signer::chains::EvmSigner;
+    let payload = evm_signer.authorization_payload(authorization_chain_id, address, nonce)?;
+    let hash = evm_signer.authorization_hash(authorization_chain_id, address, nonce)?;
+
+    sign_hash_with_credential(
+        wallet, &chain, &payload, &hash, credential, index, vault_path,
+    )
 }
 
 /// Sign a message. Returns hex-encoded signature.
@@ -973,6 +1089,7 @@ fn extract_json_field(json_str: &str, field: &str) -> Result<String, OwsLibError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ows_core::OwsError;
 
     // ---- helpers ----
 
@@ -1010,6 +1127,21 @@ mod tests {
     }
 
     const TEST_PRIVKEY: &str = "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318";
+
+    fn save_allowed_chains_policy(vault: &Path, id: &str, chain_ids: Vec<String>) {
+        let policy = ows_core::Policy {
+            id: id.to_string(),
+            name: format!("{id} policy"),
+            version: 1,
+            created_at: "2026-03-22T00:00:00Z".to_string(),
+            rules: vec![ows_core::PolicyRule::AllowedChains { chain_ids }],
+            executable: None,
+            config: None,
+            action: ows_core::PolicyAction::Deny,
+        };
+
+        crate::policy_store::save_policy(&policy, Some(vault)).unwrap();
+    }
 
     // ================================================================
     // 1. MNEMONIC GENERATION
@@ -2633,6 +2765,296 @@ mod tests {
             sign_result.recovery_id.is_some(),
             "recovery_id should be present for EVM"
         );
+    }
+
+    // ================================================================
+    // RAW HASH + EIP-7702 AUTHORIZATION SIGNING
+    // ================================================================
+
+    #[test]
+    fn sign_hash_owner_path_matches_direct_signer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = save_privkey_wallet("hash-owner", TEST_PRIVKEY, "pass", vault);
+        let hash_hex = "11".repeat(32);
+
+        let api_result = sign_hash(
+            &wallet.id,
+            "base",
+            &hash_hex,
+            Some("pass"),
+            None,
+            Some(vault),
+        )
+        .unwrap();
+
+        let key =
+            decrypt_signing_key(&wallet.id, ChainType::Evm, "pass", None, Some(vault)).unwrap();
+        let signer = signer_for_chain(ChainType::Evm);
+        let direct = signer
+            .sign(key.expose(), &hex::decode(&hash_hex).unwrap())
+            .unwrap();
+
+        assert_eq!(api_result.signature, hex::encode(&direct.signature));
+        assert_eq!(api_result.recovery_id, direct.recovery_id);
+    }
+
+    #[test]
+    fn sign_authorization_owner_path_matches_sign_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = save_privkey_wallet("auth-owner", TEST_PRIVKEY, "pass", vault);
+
+        let auth_result = sign_authorization(
+            &wallet.id,
+            "base",
+            "0x1111111111111111111111111111111111111111",
+            "7",
+            Some("pass"),
+            None,
+            Some(vault),
+        )
+        .unwrap();
+
+        let hash = ows_signer::chains::EvmSigner
+            .authorization_hash("8453", "0x1111111111111111111111111111111111111111", "7")
+            .unwrap();
+
+        let hash_result = sign_hash(
+            &wallet.id,
+            "base",
+            &hex::encode(hash),
+            Some("pass"),
+            None,
+            Some(vault),
+        )
+        .unwrap();
+
+        assert_eq!(auth_result.signature, hash_result.signature);
+        assert_eq!(auth_result.recovery_id, hash_result.recovery_id);
+    }
+
+    #[test]
+    fn sign_hash_rejects_non_secp256k1_chains() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = create_wallet("hash-solana", None, None, Some(vault)).unwrap();
+
+        let err = sign_hash(
+            &wallet.id,
+            "solana",
+            &"11".repeat(32),
+            Some(""),
+            None,
+            Some(vault),
+        )
+        .unwrap_err();
+
+        match err {
+            OwsLibError::InvalidInput(msg) => {
+                assert!(msg.contains("secp256k1-backed chains"));
+            }
+            other => panic!("expected InvalidInput, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn sign_authorization_rejects_non_evm_chains() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = create_wallet("auth-tron", None, None, Some(vault)).unwrap();
+
+        let err = sign_authorization(
+            &wallet.id,
+            "tron",
+            "0x1111111111111111111111111111111111111111",
+            "7",
+            Some(""),
+            None,
+            Some(vault),
+        )
+        .unwrap_err();
+
+        match err {
+            OwsLibError::InvalidInput(msg) => {
+                assert!(msg.contains("only supported for EVM chains"));
+            }
+            other => panic!("expected InvalidInput, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn sign_hash_api_key_path_obeys_policy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = create_wallet("hash-agent", None, None, Some(vault)).unwrap();
+        save_allowed_chains_policy(vault, "base-only-hash", vec!["eip155:8453".to_string()]);
+
+        let (token, _) = crate::key_ops::create_api_key(
+            "hash-agent-key",
+            std::slice::from_ref(&wallet.id),
+            &["base-only-hash".to_string()],
+            "",
+            None,
+            Some(vault),
+        )
+        .unwrap();
+
+        let allowed = sign_hash(
+            &wallet.id,
+            "base",
+            &"22".repeat(32),
+            Some(&token),
+            None,
+            Some(vault),
+        );
+        assert!(
+            allowed.is_ok(),
+            "allowed sign_hash failed: {:?}",
+            allowed.err()
+        );
+
+        let denied = sign_hash(
+            &wallet.id,
+            "ethereum",
+            &"22".repeat(32),
+            Some(&token),
+            None,
+            Some(vault),
+        );
+        match denied.unwrap_err() {
+            OwsLibError::Core(OwsError::PolicyDenied { reason, .. }) => {
+                assert!(reason.contains("not in allowlist"));
+            }
+            other => panic!("expected PolicyDenied, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn sign_authorization_api_key_path_matches_allowed_sign_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = create_wallet("auth-agent", None, None, Some(vault)).unwrap();
+        save_allowed_chains_policy(vault, "base-only-auth", vec!["eip155:8453".to_string()]);
+
+        let (token, _) = crate::key_ops::create_api_key(
+            "auth-agent-key",
+            std::slice::from_ref(&wallet.id),
+            &["base-only-auth".to_string()],
+            "",
+            None,
+            Some(vault),
+        )
+        .unwrap();
+
+        let auth_result = sign_authorization(
+            &wallet.id,
+            "base",
+            "0x1111111111111111111111111111111111111111",
+            "7",
+            Some(&token),
+            None,
+            Some(vault),
+        )
+        .unwrap();
+
+        let hash = ows_signer::chains::EvmSigner
+            .authorization_hash("8453", "0x1111111111111111111111111111111111111111", "7")
+            .unwrap();
+
+        let hash_result = sign_hash(
+            &wallet.id,
+            "base",
+            &hex::encode(hash),
+            Some(&token),
+            None,
+            Some(vault),
+        )
+        .unwrap();
+
+        assert_eq!(auth_result.signature, hash_result.signature);
+        assert_eq!(auth_result.recovery_id, hash_result.recovery_id);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sign_authorization_api_key_policy_receives_authorization_payload() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = create_wallet("auth-raw-hex", None, None, Some(vault)).unwrap();
+        let address = "0x1111111111111111111111111111111111111111";
+        let nonce = "7";
+        let payload = hex::encode(
+            ows_signer::chains::EvmSigner
+                .authorization_payload("8453", address, nonce)
+                .unwrap(),
+        );
+
+        let script = vault.join("check-auth-payload.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nif grep -q '\"raw_hex\":\"{payload}\"'; then\n  echo '{{\"allow\": true}}'\nelse\n  echo '{{\"allow\": false, \"reason\": \"unexpected raw_hex\"}}'\nfi\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let policy = ows_core::Policy {
+            id: "auth-payload-only".to_string(),
+            name: "auth payload only".to_string(),
+            version: 1,
+            created_at: "2026-03-22T00:00:00Z".to_string(),
+            rules: vec![],
+            executable: Some(script.display().to_string()),
+            config: None,
+            action: ows_core::PolicyAction::Deny,
+        };
+        crate::policy_store::save_policy(&policy, Some(vault)).unwrap();
+
+        let (token, _) = crate::key_ops::create_api_key(
+            "auth-payload-agent",
+            std::slice::from_ref(&wallet.id),
+            &["auth-payload-only".to_string()],
+            "",
+            None,
+            Some(vault),
+        )
+        .unwrap();
+
+        let auth_result = sign_authorization(
+            &wallet.id,
+            "base",
+            address,
+            nonce,
+            Some(&token),
+            None,
+            Some(vault),
+        )
+        .unwrap();
+        assert!(!auth_result.signature.is_empty());
+
+        let hash = ows_signer::chains::EvmSigner
+            .authorization_hash("8453", address, nonce)
+            .unwrap();
+        let err = sign_hash(
+            &wallet.id,
+            "base",
+            &hex::encode(hash),
+            Some(&token),
+            None,
+            Some(vault),
+        )
+        .unwrap_err();
+
+        match err {
+            OwsLibError::Core(OwsError::PolicyDenied { reason, .. }) => {
+                assert!(reason.contains("unexpected raw_hex"));
+            }
+            other => panic!("expected PolicyDenied, got: {other}"),
+        }
     }
 
     // ================================================================

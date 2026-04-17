@@ -53,6 +53,8 @@ An implementation MUST NOT claim general "OWS compliant" status if it only imple
 The following features are optional unless a calling profile requires them:
 
 - `signAndSend`
+- `signHash`
+- `signAuthorization`
 - `signTypedData`
 - executable policies
 - subprocess or enclave-style isolation
