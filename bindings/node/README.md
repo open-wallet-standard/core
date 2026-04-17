@@ -23,6 +23,8 @@ npm install -g @open-wallet-standard/core # Node.js SDK + CLI (provides `ows` co
 
 The package is **fully self-contained** — it embeds the Rust core via native FFI. Installing globally with `-g` also provides the `ows` CLI.
 
+Using viem, `@solana/web3.js`, or the Tether WDK? Install [`@open-wallet-standard/adapters`](https://www.npmjs.com/package/@open-wallet-standard/adapters) alongside this package to drop an OWS wallet into those frameworks without ever exposing a private key.
+
 ## Quick Start
 
 ```javascript

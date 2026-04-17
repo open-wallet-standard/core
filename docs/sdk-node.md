@@ -14,6 +14,8 @@ npm install @open-wallet-standard/core
 
 The package includes prebuilt native binaries for macOS (arm64, x64) and Linux (x64, arm64). No Rust toolchain required.
 
+For viem, `@solana/web3.js`, or Tether WDK integrations, install [`@open-wallet-standard/adapters`](https://www.npmjs.com/package/@open-wallet-standard/adapters) alongside this package — it wraps an OWS wallet as a framework-native signer without exposing private keys.
+
 ## Quick Start
 
 ```javascript
