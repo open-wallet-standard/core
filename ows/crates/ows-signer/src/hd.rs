@@ -2,7 +2,7 @@ use crate::curve::Curve;
 use crate::mnemonic::Mnemonic;
 use crate::zeroizing::SecretBytes;
 use hmac::{Hmac, Mac};
-use sha2::Sha512;
+use sha2::{Digest, Sha256, Sha512};
 
 /// Errors from HD key derivation.
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +36,7 @@ impl HdDeriver {
         match curve {
             Curve::Secp256k1 => Self::derive_secp256k1(seed, path),
             Curve::Ed25519 => Self::derive_ed25519(seed, path),
+            Curve::Ed25519Bip32 => Self::derive_bip32_ed25519(seed, path),
         }
     }
 
@@ -72,6 +73,7 @@ impl HdDeriver {
         hasher.update(match curve {
             Curve::Secp256k1 => b"secp256k1" as &[u8],
             Curve::Ed25519 => b"ed25519",
+            Curve::Ed25519Bip32 => b"ed25519-bip32",
         });
         let cache_key = hex::encode(hasher.finalize());
 
@@ -190,8 +192,284 @@ impl HdDeriver {
         chain_code.zeroize();
         Ok(SecretBytes::new(key))
     }
+
+    /// BIP32-Ed25519 derivation with Peikert's amendment.
+    ///
+    /// Reference: "BIP32-Ed25519: Hierarchical Deterministic Keys over a Non-linear Keyspace"
+    /// Uses g=9 (Peikert mode) which zeros only 9 bits from each derived zL,
+    /// allowing up to D=2^3=8 derivation levels (BIP-44 needs 5).
+    ///
+    /// Unlike SLIP-10, this supports both hardened and non-hardened child derivation.
+    /// Returns the full 96-byte extended key [kL(32) || kR(32) || chainCode(32)].
+    /// kL is the private scalar for Ed25519 signing.
+    /// kR is the nonce source required for RFC 8032 EdDSA signing per the AF's
+    /// xHD-Wallet-API reference implementation.
+    fn derive_bip32_ed25519(seed: &[u8], path: &str) -> Result<SecretBytes, HdError> {
+        // Peikert's g parameter: number of trailing bits to zero in zL
+        const G: usize = 9;
+
+        // A) Root key generation from seed
+        let root = bip32_ed25519_from_seed(seed)?;
+
+        // Parse path components
+        let components = if path == "m" {
+            vec![]
+        } else {
+            path[2..]
+                .split('/')
+                .map(|c| {
+                    let hardened = c.ends_with('\'');
+                    let index_str = c.trim_end_matches('\'');
+                    let index: u32 = index_str
+                        .parse()
+                        .map_err(|_| HdError::InvalidPath(format!("invalid index: {}", c)))?;
+                    if hardened {
+                        Ok(index + 0x80000000)
+                    } else {
+                        Ok(index)
+                    }
+                })
+                .collect::<Result<Vec<_>, HdError>>()?
+        };
+
+        // Derive each child node
+        let mut extended_key = root; // 96 bytes: [kL(32) | kR(32) | chainCode(32)]
+        for index in components {
+            extended_key = bip32_ed25519_derive_child(&extended_key, index, G)?;
+        }
+
+        // Return the full 96-byte extended key [kL || kR || chainCode]
+        // kR is needed by AvmSigner for RFC 8032 EdDSA signing (nonce source),
+        // matching the AF's rawSign() which uses kR directly.
+        Ok(SecretBytes::new(extended_key))
+    }
 }
 
+// =============================================================================
+// BIP32-Ed25519 helper functions (Peikert's amendment)
+// =============================================================================
+
+/// Generate the root extended key (kL, kR, c) from a BIP-39 seed.
+///
+/// Reference: Section V.A "Root keys" of the BIP32-Ed25519 paper.
+pub fn bip32_ed25519_from_seed(seed: &[u8]) -> Result<Vec<u8>, HdError> {
+    type HmacSha512 = Hmac<Sha512>;
+
+    // k = H512(seed)
+    let mut k = Sha512::digest(seed).to_vec();
+    let mut kl = k[..32].to_vec();
+    let mut kr = k[32..64].to_vec();
+
+    // While the third highest bit of the last byte of kL is not zero
+    while (kl[31] & 0b0010_0000) != 0 {
+        let mut mac = HmacSha512::new_from_slice(&kl).expect("HMAC can take key of any size");
+        mac.update(&kr);
+        k = mac.finalize().into_bytes().to_vec();
+        kl = k[..32].to_vec();
+        kr = k[32..64].to_vec();
+    }
+
+    // Clamp kL:
+    kl[0] &= 0b1111_1000; // clear lowest 3 bits
+    kl[31] &= 0b0111_1111; // clear highest bit
+    kl[31] |= 0b0100_0000; // set second highest bit
+
+    // Chain code: SHA-256(0x01 || seed)
+    let mut hasher = Sha256::new();
+    hasher.update([0x01]);
+    hasher.update(seed);
+    let chain_code = hasher.finalize().to_vec();
+
+    // Return 96 bytes: kL(32) || kR(32) || chainCode(32)
+    let mut result = Vec::with_capacity(96);
+    result.extend_from_slice(&kl);
+    result.extend_from_slice(&kr);
+    result.extend_from_slice(&chain_code);
+    Ok(result)
+}
+
+/// Truncate an array by zeroing the last `g` trailing bits (big-endian bit order,
+/// little-endian byte order — i.e. the highest bits of the last bytes).
+pub fn trunc_256_minus_g_bits(array: &[u8], g: usize) -> Vec<u8> {
+    let mut truncated = array.to_vec();
+    let mut remaining = g;
+
+    // Start from the last byte and move backward
+    for i in (0..truncated.len()).rev() {
+        if remaining == 0 {
+            break;
+        }
+        if remaining >= 8 {
+            truncated[i] = 0;
+            remaining -= 8;
+        } else {
+            truncated[i] &= 0xFF >> remaining;
+            break;
+        }
+    }
+    truncated
+}
+
+/// Scalar multiplication with the Ed25519 base point (no clamping).
+/// Returns the 32-byte compressed point.
+pub fn ed25519_scalar_mult_base_noclamp(scalar: &[u8; 32]) -> [u8; 32] {
+    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    use curve25519_dalek::scalar::Scalar;
+
+    // Convert little-endian bytes to scalar.
+    // Clear the top bit to ensure it fits in the field, matching
+    // the noclamp behavior from the TypeScript reference.
+    let mut scalar_bytes = *scalar;
+    scalar_bytes[31] &= 0x7F; // clear bit 255
+    let s = Scalar::from_bytes_mod_order(scalar_bytes);
+    let point = ED25519_BASEPOINT_TABLE * &s;
+    point.compress().to_bytes()
+}
+
+/// Derive a child node from an extended key using BIP32-Ed25519.
+///
+/// Reference: Section V.B "Child Keys" and V.C "Private Child Key Derivation".
+///
+/// `extended_key`: 96 bytes [kL(32) | kR(32) | chainCode(32)]
+/// `index`: child index (>= 0x80000000 for hardened)
+/// `g`: Peikert parameter — number of trailing bits to zero in zL
+pub fn bip32_ed25519_derive_child(
+    extended_key: &[u8],
+    index: u32,
+    g: usize,
+) -> Result<Vec<u8>, HdError> {
+    type HmacSha512 = Hmac<Sha512>;
+
+    let kl = &extended_key[0..32];
+    let kr = &extended_key[32..64];
+    let cc = &extended_key[64..96];
+
+    let (z, child_chain_code) = if index < 0x80000000 {
+        // Non-hardened derivation
+        let pk = ed25519_scalar_mult_base_noclamp(kl.try_into().unwrap());
+
+        let mut data = Vec::with_capacity(1 + 32 + 4);
+        data.push(0x02);
+        data.extend_from_slice(&pk);
+        data.extend_from_slice(&index.to_le_bytes());
+
+        let z = {
+            let mut mac = HmacSha512::new_from_slice(cc).expect("HMAC can take key of any size");
+            mac.update(&data);
+            mac.finalize().into_bytes().to_vec()
+        };
+
+        data[0] = 0x03;
+        let full_cc = {
+            let mut mac = HmacSha512::new_from_slice(cc).expect("HMAC can take key of any size");
+            mac.update(&data);
+            mac.finalize().into_bytes().to_vec()
+        };
+        let child_cc = full_cc[32..64].to_vec();
+
+        (z, child_cc)
+    } else {
+        // Hardened derivation
+        let mut data = Vec::with_capacity(1 + 64 + 4);
+        data.push(0x00);
+        data.extend_from_slice(kl);
+        data.extend_from_slice(kr);
+        data.extend_from_slice(&index.to_le_bytes());
+
+        let z = {
+            let mut mac = HmacSha512::new_from_slice(cc).expect("HMAC can take key of any size");
+            mac.update(&data);
+            mac.finalize().into_bytes().to_vec()
+        };
+
+        data[0] = 0x01;
+        let full_cc = {
+            let mut mac = HmacSha512::new_from_slice(cc).expect("HMAC can take key of any size");
+            mac.update(&data);
+            mac.finalize().into_bytes().to_vec()
+        };
+        let child_cc = full_cc[32..64].to_vec();
+
+        (z, child_cc)
+    };
+
+    // Compute child private key using Peikert's amendment:
+    // zL = trunc_256_minus_g_bits(z[0..32], g)
+    // childKL = kL + 8 * zL  (as little-endian 256-bit integers)
+    // childKR = kR + z[32..64]  (as little-endian 256-bit integers, truncated to 32 bytes)
+    let z_left = trunc_256_minus_g_bits(&z[0..32], g);
+    let z_right = &z[32..64];
+
+    // kL + 8 * zL using 512-bit arithmetic to avoid overflow
+    let child_kl = {
+        let mut result = [0u8; 64]; // 512-bit accumulator
+
+        // Load kL into accumulator (little-endian)
+        result[..32].copy_from_slice(kl);
+
+        // Add 8 * zL
+        let mut carry: u16 = 0;
+        for i in 0..32 {
+            let zl_times_8 = (z_left[i] as u16) << 3
+                | if i > 0 {
+                    (z_left[i - 1] as u16) >> 5
+                } else {
+                    0
+                };
+            let sum = result[i] as u16 + (zl_times_8 & 0xFF) + carry;
+            result[i] = sum as u8;
+            carry = sum >> 8;
+        }
+        // Handle the final bits of the shift for byte index 32
+        let final_shift = (z_left[31] as u16) >> 5;
+        let sum = result[32] as u16 + final_shift + carry;
+        result[32] = sum as u8;
+        // Propagate any remaining carry
+        let mut c = sum >> 8;
+        for byte in &mut result[33..64] {
+            if c == 0 {
+                break;
+            }
+            let s = *byte as u16 + c;
+            *byte = s as u8;
+            c = s >> 8;
+        }
+
+        // Safety check: result should fit in 256 bits for valid keys
+        let mut fits = true;
+        for b in &result[32..] {
+            if *b != 0 {
+                fits = false;
+                break;
+            }
+        }
+        if !fits {
+            return Err(HdError::DerivationFailed(
+                "child key overflow: kL + 8*zL exceeds 2^256".into(),
+            ));
+        }
+
+        result[..32].to_vec()
+    };
+
+    // childKR = (kR + zRight) mod 2^256, keep lower 32 bytes
+    let child_kr = {
+        let mut result = [0u8; 32];
+        let mut carry: u16 = 0;
+        for i in 0..32 {
+            let sum = kr[i] as u16 + z_right[i] as u16 + carry;
+            result[i] = sum as u8;
+            carry = sum >> 8;
+        }
+        result.to_vec()
+    };
+
+    let mut out = Vec::with_capacity(96);
+    out.extend_from_slice(&child_kl);
+    out.extend_from_slice(&child_kr);
+    out.extend_from_slice(&child_chain_code);
+    Ok(out)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,6 +859,127 @@ mod tests {
         let seed = test_seed();
         let key0 = HdDeriver::derive(seed.expose(), "m/44'/60'/0'/0/0", Curve::Secp256k1).unwrap();
         let key1 = HdDeriver::derive(seed.expose(), "m/44'/60'/0'/0/1", Curve::Secp256k1).unwrap();
+        assert_ne!(key0.expose(), key1.expose());
+    }
+
+    // === BIP32-Ed25519 tests ===
+
+    const ALGORAND_MNEMONIC: &str = "salon zoo engage submit smile frost later decide wing sight chaos renew lizard rely canal coral scene hobby scare step bus leaf tobacco slice";
+
+    fn algorand_test_seed() -> SecretBytes {
+        let mnemonic = Mnemonic::from_phrase(ALGORAND_MNEMONIC).unwrap();
+        mnemonic.to_seed("")
+    }
+
+    #[test]
+    fn test_bip32_ed25519_root_key() {
+        let seed = algorand_test_seed();
+        let root = bip32_ed25519_from_seed(seed.expose()).unwrap();
+        assert_eq!(root.len(), 96);
+        let expected = hex::decode(
+            "a8ba80028922d9fcfa055c78aede55b5c575bcd8d5a53168edf45f36d9ec8f46\
+             94592b4bc892907583e22669ecdf1b0409a9f3bd5549f2dd751b51360909cd05\
+             796b9206ec30e142e94b790a98805bf999042b55046963174ee6cee2d0375946",
+        )
+        .unwrap();
+        assert_eq!(root, expected);
+    }
+
+    #[test]
+    fn test_bip32_ed25519_derive_algorand_address_0_0() {
+        // m'/44'/283'/0'/0/0 with Peikert (g=9) — public key
+        let seed = algorand_test_seed();
+        let key =
+            HdDeriver::derive(seed.expose(), "m/44'/283'/0'/0/0", Curve::Ed25519Bip32).unwrap();
+        // key is the full extended key [kL(32) || kR(32) || cc(32)]; extract kL for pubkey
+        let scalar: [u8; 32] = key.expose()[..32].try_into().unwrap();
+        let pubkey = ed25519_scalar_mult_base_noclamp(&scalar);
+        let expected =
+            hex::decode("7bda7ac12627b2c259f1df6875d30c10b35f55b33ad2cc8ea2736eaa3ebcfab9")
+                .unwrap();
+        assert_eq!(pubkey.to_vec(), expected);
+    }
+
+    #[test]
+    fn test_bip32_ed25519_derive_algorand_address_0_1() {
+        // m'/44'/283'/0'/0/1 with Peikert (g=9)
+        let seed = algorand_test_seed();
+        let key =
+            HdDeriver::derive(seed.expose(), "m/44'/283'/0'/0/1", Curve::Ed25519Bip32).unwrap();
+        let scalar: [u8; 32] = key.expose()[..32].try_into().unwrap();
+        let pubkey = ed25519_scalar_mult_base_noclamp(&scalar);
+        let expected =
+            hex::decode("5bae8828f111064637ac5061bd63bc4fcfe4a833252305f25eeab9c64ecdf519")
+                .unwrap();
+        assert_eq!(pubkey.to_vec(), expected);
+    }
+
+    #[test]
+    fn test_bip32_ed25519_derive_algorand_address_0_2() {
+        // m'/44'/283'/0'/0/2 with Peikert (g=9)
+        let seed = algorand_test_seed();
+        let key =
+            HdDeriver::derive(seed.expose(), "m/44'/283'/0'/0/2", Curve::Ed25519Bip32).unwrap();
+        let scalar: [u8; 32] = key.expose()[..32].try_into().unwrap();
+        let pubkey = ed25519_scalar_mult_base_noclamp(&scalar);
+        let expected =
+            hex::decode("00a72635e97cba966529e9bfb4baf4a32d7b8cd2fcd8e2476ce5be1177848cb3")
+                .unwrap();
+        assert_eq!(pubkey.to_vec(), expected);
+    }
+
+    #[test]
+    fn test_bip32_ed25519_derive_hard_account_1() {
+        // m'/44'/283'/1'/0/0 with Peikert (g=9)
+        let seed = algorand_test_seed();
+        let key =
+            HdDeriver::derive(seed.expose(), "m/44'/283'/1'/0/0", Curve::Ed25519Bip32).unwrap();
+        let scalar: [u8; 32] = key.expose()[..32].try_into().unwrap();
+        let pubkey = ed25519_scalar_mult_base_noclamp(&scalar);
+        let expected =
+            hex::decode("358d8c4382992849a764438e02b1c45c2ca4e86bbcfe10fd5b963f3610012bc9")
+                .unwrap();
+        assert_eq!(pubkey.to_vec(), expected);
+    }
+
+    #[test]
+    fn test_bip32_ed25519_derive_identity_0_0() {
+        // m'/44'/0'/0'/0/0 with Peikert (g=9) — identity key context
+        let seed = algorand_test_seed();
+        let key = HdDeriver::derive(seed.expose(), "m/44'/0'/0'/0/0", Curve::Ed25519Bip32).unwrap();
+        let scalar: [u8; 32] = key.expose()[..32].try_into().unwrap();
+        let pubkey = ed25519_scalar_mult_base_noclamp(&scalar);
+        let expected =
+            hex::decode("ff8b1863ef5e40d0a48c245f26a6dbdf5da94dc75a1851f51d8a04e547bd5f5a")
+                .unwrap();
+        assert_eq!(pubkey.to_vec(), expected);
+    }
+
+    #[test]
+    fn test_bip32_ed25519_allows_non_hardened() {
+        // BIP32-Ed25519 allows non-hardened derivation (unlike SLIP-10)
+        let seed = algorand_test_seed();
+        let key = HdDeriver::derive(seed.expose(), "m/44'/283'/0'/0/0", Curve::Ed25519Bip32);
+        assert!(key.is_ok());
+    }
+
+    #[test]
+    fn test_bip32_ed25519_deterministic() {
+        let seed = algorand_test_seed();
+        let key1 =
+            HdDeriver::derive(seed.expose(), "m/44'/283'/0'/0/0", Curve::Ed25519Bip32).unwrap();
+        let key2 =
+            HdDeriver::derive(seed.expose(), "m/44'/283'/0'/0/0", Curve::Ed25519Bip32).unwrap();
+        assert_eq!(key1.expose(), key2.expose());
+    }
+
+    #[test]
+    fn test_bip32_ed25519_different_indices() {
+        let seed = algorand_test_seed();
+        let key0 =
+            HdDeriver::derive(seed.expose(), "m/44'/283'/0'/0/0", Curve::Ed25519Bip32).unwrap();
+        let key1 =
+            HdDeriver::derive(seed.expose(), "m/44'/283'/0'/0/1", Curve::Ed25519Bip32).unwrap();
         assert_ne!(key0.expose(), key1.expose());
     }
 }

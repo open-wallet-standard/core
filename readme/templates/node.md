@@ -26,7 +26,7 @@ Using viem, `@solana/web3.js`, or the Tether WDK? Install [`@open-wallet-standar
 import { createWallet, signMessage } from "@open-wallet-standard/core";
 
 const wallet = createWallet("agent-treasury");
-// => accounts for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, Sui, and XRPL
+// => accounts for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, Sui, XRPL, and Algorand
 
 const sig = signMessage("agent-treasury", "evm", "hello");
 console.log(sig.signature);

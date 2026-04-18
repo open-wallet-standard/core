@@ -94,7 +94,7 @@ sol_addr = derive_address(mnemonic, "solana")
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `mnemonic` | `str` | &mdash; | BIP-39 mnemonic phrase |
-| `chain` | `str` | &mdash; | `"evm"`, `"solana"`, `"xrpl"`, `"sui"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"ton"`, `"spark"`, `"filecoin"` |
+| `chain` | `str` | &mdash; | `"evm"`, `"solana"`, `"xrpl"`, `"sui"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"ton"`, `"spark"`, `"filecoin"`, `"algorand"` |
 | `index` | `int` | `0` | Account index in derivation path |
 
 ### Wallet Management
@@ -164,7 +164,7 @@ keys = json.loads(export_wallet("pk-wallet"))
 
 #### `import_wallet_mnemonic(name, mnemonic, passphrase=None, index=None, vault_path=None)`
 
-Import a wallet from a BIP-39 mnemonic. Derives all 9 chain accounts via HD paths.
+Import a wallet from a BIP-39 mnemonic. Derives all 11 chain accounts via HD paths.
 
 ```python
 wallet = import_wallet_mnemonic("imported", "goose puzzle decorate ...")
@@ -172,7 +172,7 @@ wallet = import_wallet_mnemonic("imported", "goose puzzle decorate ...")
 
 #### `import_wallet_private_key(name, private_key_hex, chain=None, passphrase=None, vault_path=None, secp256k1_key=None, ed25519_key=None)`
 
-Import a wallet from a hex-encoded private key. All 9 chains are supported: the provided key is used for its curve's chains, and a random key is generated for the other curve.
+Import a wallet from a hex-encoded private key. All 11 chains are supported: the provided key is used for its curve's chains, and a random key is generated for the other curve.
 
 The optional `chain` parameter specifies which chain the key originates from to determine the curve. Defaults to `"evm"` (secp256k1).
 
@@ -202,7 +202,7 @@ print(len(wallet["accounts"]))  # => 9
 |-------|------|---------|-------------|
 | `name` | `str` | &mdash; | Wallet name |
 | `private_key_hex` | `str` | &mdash; | Hex-encoded private key. Ignored when both curve keys are provided. |
-| `chain` | `str` | `"evm"` | Source chain: `"evm"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"` (secp256k1) or `"solana"`, `"sui"`, `"ton"` (Ed25519) |
+| `chain` | `str` | `"evm"` | Source chain: `"evm"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"` (secp256k1) or `"solana"`, `"sui"`, `"ton"` (Ed25519) or `"algorand"` (BIP32-Ed25519) |
 | `passphrase` | `str` | `None` | Encryption passphrase |
 | `vault_path` | `str` | `None` | Custom vault directory |
 | `secp256k1_key` | `str` | `None` | Explicit secp256k1 private key (hex) |

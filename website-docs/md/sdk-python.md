@@ -92,7 +92,7 @@ sol_addr = derive_address(mnemonic, "solana")
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `mnemonic` | `str` | &mdash; | BIP-39 mnemonic phrase |
-| `chain` | `str` | &mdash; | `"evm"`, `"solana"`, `"sui"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"ton"`, `"spark"`, `"filecoin"` |
+| `chain` | `str` | &mdash; | `"evm"`, `"solana"`, `"sui"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"ton"`, `"spark"`, `"filecoin"`, `"algorand"` |
 | `index` | `int` | `0` | Account index in derivation path |
 
 ### Wallet Management
@@ -200,7 +200,7 @@ print(len(wallet["accounts"]))  # => 8
 |-------|------|---------|-------------|
 | `name` | `str` | &mdash; | Wallet name |
 | `private_key_hex` | `str` | &mdash; | Hex-encoded private key. Ignored when both curve keys are provided. |
-| `chain` | `str` | `"evm"` | Source chain: `"evm"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"` (secp256k1) or `"solana"`, `"sui"`, `"ton"` (Ed25519) |
+| `chain` | `str` | `"evm"` | Source chain: `"evm"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"` (secp256k1) or `"solana"`, `"sui"`, `"ton"` (Ed25519) or `"algorand"` (BIP32-Ed25519) |
 | `passphrase` | `str` | `None` | Encryption passphrase |
 | `vault_path` | `str` | `None` | Custom vault directory |
 | `secp256k1_key` | `str` | `None` | Explicit secp256k1 private key (hex) |

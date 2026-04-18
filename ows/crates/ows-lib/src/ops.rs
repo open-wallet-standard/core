@@ -77,7 +77,7 @@ impl KeyPair {
     fn key_for_curve(&self, curve: ows_signer::Curve) -> &[u8] {
         match curve {
             ows_signer::Curve::Secp256k1 => &self.secp256k1,
-            ows_signer::Curve::Ed25519 => &self.ed25519,
+            ows_signer::Curve::Ed25519 | ows_signer::Curve::Ed25519Bip32 => &self.ed25519,
         }
     }
 
@@ -328,7 +328,7 @@ pub fn import_wallet_private_key(
                         .transpose()?
                         .unwrap_or(other_key),
                 },
-                ows_signer::Curve::Ed25519 => KeyPair {
+                ows_signer::Curve::Ed25519 | ows_signer::Curve::Ed25519Bip32 => KeyPair {
                     secp256k1: secp256k1_key_hex
                         .map(decode_hex_key)
                         .transpose()?
@@ -819,6 +819,10 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
         ChainType::Xrpl => broadcast_xrpl(rpc_url, signed_bytes),
         ChainType::Nano => broadcast_nano(rpc_url, signed_bytes),
+        ChainType::Avm => Err(OwsLibError::InvalidInput(
+            "broadcast not yet supported for AVM chains — use Algorand SDK or algod REST API"
+                .into(),
+        )),
     }
 }
 

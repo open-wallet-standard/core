@@ -1,3 +1,4 @@
+pub mod avm;
 pub mod bitcoin;
 pub mod cosmos;
 pub mod evm;
@@ -10,6 +11,7 @@ pub mod ton;
 pub mod tron;
 pub mod xrpl;
 
+pub use self::avm::AvmSigner;
 pub use self::bitcoin::BitcoinSigner;
 pub use self::cosmos::CosmosSigner;
 pub use self::evm::EvmSigner;
@@ -39,5 +41,6 @@ pub fn signer_for_chain(chain: ChainType) -> Box<dyn ChainSigner> {
         ChainType::Sui => Box::new(SuiSigner),
         ChainType::Xrpl => Box::new(XrplSigner),
         ChainType::Nano => Box::new(NanoSigner),
+        ChainType::Avm => Box::new(AvmSigner),
     }
 }

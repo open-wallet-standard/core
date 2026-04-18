@@ -16,6 +16,7 @@ ows-core = { path = "../ows-core", version = "=1.3.1" }
 xrpl-rust = { version = "1.1.0", default-features = false, features = ["core"] }
 k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
 ed25519-dalek = { version = "2", features = ["hazmat"] }
+curve25519-dalek = { version = "4", features = ["alloc"] }
 coins-bip32 = "0.11"
 coins-bip39 = "0.11"
 sha2 = "0.10"
@@ -35,6 +36,7 @@ serde_json = "1"
 aes-gcm = "0.10"
 scrypt = "0.11"
 blake2 = "0.10"
+data-encoding = "2"
 digest = "0.10"
 libc = "0.2"
 signal-hook = "0.4"

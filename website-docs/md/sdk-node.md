@@ -92,7 +92,7 @@ const solAddr = deriveAddress(mnemonic, "solana");
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `mnemonic` | `string` | &mdash; | BIP-39 mnemonic phrase |
-| `chain` | `string` | &mdash; | `"evm"`, `"solana"`, `"sui"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"` |
+| `chain` | `string` | &mdash; | `"evm"`, `"solana"`, `"sui"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"`, `"algorand"` |
 | `index` | `number` | `0` | Account index in derivation path |
 
 **Returns:** `string`
@@ -230,7 +230,7 @@ console.log(wallet3.accounts.length); // => 8
 | `privateKeyHex` | `string` | &mdash; | Hex-encoded private key (with or without `0x` prefix). Ignored when both curve keys are provided. |
 | `passphrase` | `string` | `undefined` | Encryption passphrase |
 | `vaultPath` | `string` | `~/.ows` | Custom vault directory root |
-| `chain` | `string` | `"evm"` | Source chain: `"evm"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"` (secp256k1) or `"solana"`, `"sui"`, `"ton"` (Ed25519) |
+| `chain` | `string` | `"evm"` | Source chain: `"evm"`, `"bitcoin"`, `"cosmos"`, `"tron"`, `"filecoin"` (secp256k1) or `"solana"`, `"sui"`, `"ton"` (Ed25519) or `"algorand"` (BIP32-Ed25519) |
 | `secp256k1Key` | `string` | `undefined` | Explicit secp256k1 private key (hex). Overrides random generation for secp256k1 chains. |
 | `ed25519Key` | `string` | `undefined` | Explicit Ed25519 private key (hex). Overrides random generation for Ed25519 chains. |
 

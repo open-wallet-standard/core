@@ -79,6 +79,10 @@ impl Config {
             "eip155:999".into(),
             "https://rpc.hyperliquid.xyz/evm".into(),
         );
+        rpc.insert(
+            "avm:mainnet".into(),
+            "https://mainnet-api.algonode.cloud".into(),
+        );
         rpc
     }
 }
@@ -264,7 +268,7 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 21);
+        assert_eq!(config.rpc.len(), 22);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
     }
 

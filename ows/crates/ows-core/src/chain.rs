@@ -17,10 +17,11 @@ pub enum ChainType {
     Sui,
     Xrpl,
     Nano,
+    Avm,
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 10] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 11] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
@@ -31,6 +32,7 @@ pub const ALL_CHAIN_TYPES: [ChainType; 10] = [
     ChainType::Sui,
     ChainType::Xrpl,
     ChainType::Nano,
+    ChainType::Avm,
 ];
 
 /// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
@@ -190,6 +192,11 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_type: ChainType::Evm,
         chain_id: "eip155:999",
     },
+    Chain {
+        name: "algorand",
+        chain_type: ChainType::Avm,
+        chain_id: "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73k",
+    },
 ];
 
 /// Parse a chain string into a `Chain`. Accepts:
@@ -254,7 +261,7 @@ pub fn parse_chain(s: &str) -> Result<Chain, String> {
            EVM:     ethereum, base, arbitrum, optimism, polygon, bsc, avalanche, plasma, etherlink\n  \
            Solana:  solana\n  \
            Bitcoin: bitcoin\n  \
-           Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl, nano\n\n\
+           Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl, nano, algorand\n\n\
          Or use a CAIP-2 ID (eip155:8453) or bare EVM chain ID (8453)"
     ))
 }
@@ -279,6 +286,7 @@ impl ChainType {
             ChainType::Sui => "sui",
             ChainType::Xrpl => "xrpl",
             ChainType::Nano => "nano",
+            ChainType::Avm => "algorand",
         }
     }
 
@@ -296,6 +304,7 @@ impl ChainType {
             ChainType::Sui => 784,
             ChainType::Xrpl => 144,
             ChainType::Nano => 165,
+            ChainType::Avm => 283,
         }
     }
 
@@ -313,6 +322,7 @@ impl ChainType {
             "sui" => Some(ChainType::Sui),
             "xrpl" => Some(ChainType::Xrpl),
             "nano" => Some(ChainType::Nano),
+            "algorand" => Some(ChainType::Avm),
             _ => None,
         }
     }
@@ -332,6 +342,7 @@ impl fmt::Display for ChainType {
             ChainType::Sui => "sui",
             ChainType::Xrpl => "xrpl",
             ChainType::Nano => "nano",
+            ChainType::Avm => "avm",
         };
         write!(f, "{}", s)
     }
@@ -353,6 +364,7 @@ impl FromStr for ChainType {
             "sui" => Ok(ChainType::Sui),
             "xrpl" => Ok(ChainType::Xrpl),
             "nano" => Ok(ChainType::Nano),
+            "avm" | "algorand" => Ok(ChainType::Avm),
             _ => Err(format!("unknown chain type: {}", s)),
         }
     }
@@ -385,6 +397,7 @@ mod tests {
             (ChainType::Sui, "\"sui\""),
             (ChainType::Xrpl, "\"xrpl\""),
             (ChainType::Nano, "\"nano\""),
+            (ChainType::Avm, "\"avm\""),
         ] {
             let json = serde_json::to_string(&chain).unwrap();
             assert_eq!(json, expected);
@@ -406,6 +419,7 @@ mod tests {
         assert_eq!(ChainType::Sui.namespace(), "sui");
         assert_eq!(ChainType::Xrpl.namespace(), "xrpl");
         assert_eq!(ChainType::Nano.namespace(), "nano");
+        assert_eq!(ChainType::Avm.namespace(), "algorand");
     }
 
     #[test]
@@ -421,6 +435,7 @@ mod tests {
         assert_eq!(ChainType::Sui.default_coin_type(), 784);
         assert_eq!(ChainType::Xrpl.default_coin_type(), 144);
         assert_eq!(ChainType::Nano.default_coin_type(), 165);
+        assert_eq!(ChainType::Avm.default_coin_type(), 283);
     }
 
     #[test]
@@ -439,6 +454,7 @@ mod tests {
         assert_eq!(ChainType::from_namespace("sui"), Some(ChainType::Sui));
         assert_eq!(ChainType::from_namespace("xrpl"), Some(ChainType::Xrpl));
         assert_eq!(ChainType::from_namespace("nano"), Some(ChainType::Nano));
+        assert_eq!(ChainType::from_namespace("algorand"), Some(ChainType::Avm));
         assert_eq!(ChainType::from_namespace("unknown"), None);
     }
 
@@ -619,7 +635,7 @@ mod tests {
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 10);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 11);
     }
 
     #[test]
