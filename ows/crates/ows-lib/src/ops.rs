@@ -817,6 +817,7 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
             "broadcast not yet supported for Filecoin".into(),
         )),
         ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
+        ChainType::Stacks => broadcast_stacks(rpc_url, signed_bytes),
         ChainType::Xrpl => broadcast_xrpl(rpc_url, signed_bytes),
         ChainType::Nano => broadcast_nano(rpc_url, signed_bytes),
     }
@@ -963,6 +964,62 @@ fn broadcast_sui(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibErr
     let sig_part = &signed_bytes[split..];
 
     crate::sui_grpc::execute_transaction(rpc_url, tx_part, sig_part)
+}
+
+fn broadcast_stacks(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
+    // Hiro API: POST /v2/transactions with raw binary body.
+    // curl needs a file for --data-binary with raw bytes.
+    let url = format!("{}/v2/transactions", rpc_url.trim_end_matches('/'));
+
+    let random_suffix: u64 = rand::random();
+    let tmp = std::env::temp_dir().join(format!("ows_stacks_tx_{random_suffix}.bin"));
+    std::fs::write(&tmp, signed_bytes)
+        .map_err(|e| OwsLibError::BroadcastFailed(format!("failed to write temp file: {e}")))?;
+
+    let file_arg = format!("@{}", tmp.display());
+    let result = Command::new("curl")
+        .args([
+            "-sSL",
+            "-X",
+            "POST",
+            "-H",
+            "Content-Type: application/octet-stream",
+            "--data-binary",
+            &file_arg,
+            &url,
+        ])
+        .output();
+
+    // Always clean up the temp file, even if curl failed to launch.
+    let _ = std::fs::remove_file(&tmp);
+
+    let output =
+        result.map_err(|e| OwsLibError::BroadcastFailed(format!("failed to run curl: {e}")))?;
+
+    let resp = String::from_utf8_lossy(&output.stdout).to_string();
+
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&resp) {
+        if let Some(err) = parsed.get("error") {
+            let reason = parsed
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            return Err(OwsLibError::BroadcastFailed(format!(
+                "stacks broadcast error: {err} — {reason}"
+            )));
+        }
+        if let Some(txid) = parsed.as_str() {
+            return Ok(txid.to_string());
+        }
+    }
+
+    if !output.status.success() {
+        return Err(OwsLibError::BroadcastFailed(format!(
+            "stacks broadcast failed: {resp}"
+        )));
+    }
+
+    Ok(resp.trim().trim_matches('"').to_string())
 }
 
 fn broadcast_nano(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {

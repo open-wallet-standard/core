@@ -140,6 +140,17 @@ mod integration_tests {
     }
 
     #[test]
+    fn test_full_pipeline_stacks() {
+        let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
+        let address = derive_address_for_chain(&mnemonic, ChainType::Stacks);
+        assert!(
+            address.starts_with("SP"),
+            "Stacks address should start with SP, got: {}",
+            address
+        );
+    }
+
+    #[test]
     fn test_spark_uses_bitcoin_derivation_path() {
         let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
         let btc_signer = signer_for_chain(ChainType::Bitcoin);
@@ -181,6 +192,7 @@ mod integration_tests {
         let ton_addr = derive_address_for_chain(&mnemonic, ChainType::Ton);
         let spark_addr = derive_address_for_chain(&mnemonic, ChainType::Spark);
         let fil_addr = derive_address_for_chain(&mnemonic, ChainType::Filecoin);
+        let stx_addr = derive_address_for_chain(&mnemonic, ChainType::Stacks);
         let xrpl_addr = derive_address_for_chain(&mnemonic, ChainType::Xrpl);
 
         // All addresses should be different
@@ -193,6 +205,7 @@ mod integration_tests {
             &ton_addr,
             &spark_addr,
             &fil_addr,
+            &stx_addr,
             &xrpl_addr,
         ];
         for i in 0..addrs.len() {
@@ -221,6 +234,7 @@ mod integration_tests {
             ChainType::Tron,
             ChainType::Spark,
             ChainType::Filecoin,
+            ChainType::Stacks,
         ] {
             let signer = signer_for_chain(chain);
             let path = signer.default_derivation_path(0);
@@ -263,6 +277,7 @@ mod integration_tests {
             ChainType::Ton,
             ChainType::Spark,
             ChainType::Filecoin,
+            ChainType::Stacks,
             ChainType::Xrpl,
         ] {
             let signer = signer_for_chain(chain);

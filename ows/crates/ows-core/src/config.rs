@@ -64,6 +64,10 @@ impl Config {
             "sui:mainnet".into(),
             "https://fullnode.mainnet.sui.io:443".into(),
         );
+        rpc.insert(
+            "stacks:1".into(),
+            "https://api.hiro.so".into(),
+        );
         rpc.insert("xrpl:mainnet".into(), "https://s1.ripple.com:51234".into());
         rpc.insert(
             "xrpl:testnet".into(),
@@ -264,7 +268,7 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 21);
+        assert_eq!(config.rpc.len(), 22);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
     }
 
