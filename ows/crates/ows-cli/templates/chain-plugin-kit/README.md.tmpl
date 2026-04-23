@@ -1,0 +1,48 @@
+# {{display_name}} Chain Plugin Kit
+
+This contributor kit is a dry-run scaffold for adding support for
+`{{display_name}}` (`{{slug}}`) using `{{family}}` as the closest existing OWS
+family baseline.
+
+It does not modify OWS runtime integration files automatically. Instead, it
+gives you a focused working area with the minimum artifacts needed to prepare a
+small upstream PR.
+
+Start here: read `CONTRIBUTOR_GUIDE.md`, then fill in the TOML files and vector
+placeholders before touching runtime code.
+
+## Included Files
+
+- `chain-profile.toml` - chain identity, family, curve, address format, and implementation notes
+- `caip-mapping.toml` - CAIP-2 and CAIP-10 placeholders with examples
+- `derivation-rules.toml` - BIP purpose, coin type, and path examples
+- `sign.stub.rs` - `sign_message` and `sign_transaction` TODOs
+- `serialize.stub.rs` - signable-byte extraction and canonical encoding TODOs
+- `CONTRIBUTOR_GUIDE.md` - step-by-step guide plus follow-up OWS touchpoints
+- `docs/supported-chain-entry.md` - supported-chain write-up skeleton
+- `docs/implementation-checklist.md` - implementation checklist
+- `docs/security-checklist.md` - security checklist
+- `test-vectors/README.md` - vector structure notes
+- `test-vectors/derivation.json` - derivation sample case
+- `test-vectors/sign-message.json` - message-signing sample case
+- `test-vectors/tx-serialization.json` - transaction serialization sample case
+
+## Generated Defaults
+
+- Display name: `{{display_name}}`
+- Closest existing OWS family baseline: `{{family}}`
+- Namespace: `{{namespace}}`
+- Curve: `{{curve}}`
+- Coin type: `{{coin_type}}`
+- Default derivation path example: `{{default_derivation_path}}`
+- Address format placeholder: `{{address_format}}`
+
+If `{{family}}` is only the closest current OWS fit, record the mismatch in
+`chain-profile.toml` so the follow-up PR makes that tradeoff explicit.
+
+## Suggested Follow-Up Steps
+
+1. Fill in the profile, CAIP mapping, derivation rules, and stubs.
+2. Read `CONTRIBUTOR_GUIDE.md` and answer every open `TODO`.
+3. Add machine-readable vectors in `test-vectors/`.
+4. Convert the placeholders into real OWS integration changes in a follow-up PR.

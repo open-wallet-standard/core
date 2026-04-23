@@ -2,6 +2,7 @@
 **/target/
 .claude
 bugs/
+.ows-dev/
 
 gtm
 

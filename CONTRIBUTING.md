@@ -51,6 +51,33 @@ cd ows && cargo clippy --workspace -- -D warnings  # Lint
 3. **Test.** Ensure `cargo test --workspace` passes and `cargo clippy` is clean.
 4. **Open a PR** against `main` with a clear description of what changed and why.
 
+### Chain Contributor Kit
+
+If you are adding support for a new chain, start from the repository root with:
+
+```bash
+cd ows
+cargo run -p ows-cli -- dev scaffold-chain --slug my-chain --family evm
+```
+
+That command performs a dry run and shows the files it would create under:
+
+```text
+.ows-dev/chain-plugin-kit/<slug>/
+```
+
+To create the scaffold on disk, re-run with `--write`.
+
+Choose `--family` as the closest existing OWS family baseline for derivation
+and signing defaults.
+
+If you use `--output`, it must stay under `.ows-dev/chain-plugin-kit/`. This
+keeps `--force` restricted to a dedicated safe scaffold area.
+
+The first scaffold PR is intentionally conservative: it produces a self-contained
+contributor kit and checklist without modifying runtime chain integration files
+for you.
+
 ## Pull Request Guidelines
 
 - Keep PRs small and focused — one logical change per PR.

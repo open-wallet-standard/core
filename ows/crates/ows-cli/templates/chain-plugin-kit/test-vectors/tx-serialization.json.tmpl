@@ -1,0 +1,20 @@
+{
+  "chain_id": "{{namespace_string}}:{{reference_hint_string}}",
+  "family": "{{family_string}}",
+  "kind": "tx_serialization",
+  "notes": "Capture signable bytes, hashing rules, canonical encoding, and final wire bytes.",
+  "cases": [
+    {
+      "name": "unsigned-to-signed",
+      "private_key": "TODO_PRIVATE_KEY_HEX",
+      "unsigned_tx_hex": "TODO_UNSIGNED_TX",
+      "signable_bytes_hex": "TODO_SIGNABLE_BYTES",
+      "canonical_encoding": "TODO",
+      "hashing": "TODO",
+      "expected": {
+        "signature_hex": "TODO_SIGNATURE",
+        "signed_tx_hex": "TODO_SIGNED_TX"
+      }
+    }
+  ]
+}

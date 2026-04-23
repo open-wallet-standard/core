@@ -1,0 +1,29 @@
+# {{slug}} Test Vectors
+
+Add machine-readable vectors here before wiring real integration files.
+
+Included starter files:
+
+- `derivation.json` - mnemonic/path to address expectations
+- `sign-message.json` - message signing inputs and expected signature shape
+- `tx-serialization.json` - signable payload, hashing, and final wire bytes
+
+Keep the JSON deterministic and chain-specific. Prefer real bytes over prose once
+the actual implementation is known.
+
+Example JSON shape:
+
+```json
+{
+  "chain": "{{namespace_string}}:{{reference_hint_string}}",
+  "family": "{{family_string}}",
+  "display_name": "{{display_name_string}}",
+  "cases": [
+    {
+      "name": "todo",
+      "input": {},
+      "expected": {}
+    }
+  ]
+}
+```

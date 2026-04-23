@@ -1,0 +1,48 @@
+# Fill in this file before touching OWS runtime files.
+# Keep the profile concise: identity, family, curve, address format, and the
+# chain-specific notes that contributors should confirm before coding.
+
+# Internal OWS slug used throughout the scaffold and future integration work.
+slug = "{{slug_string}}"
+# Human-readable display name for docs and examples.
+display_name = "{{display_name_string}}"
+# Closest existing OWS chain family used as the scaffold baseline.
+# If the chain may need a new family later, record that gap below.
+family = "{{family_string}}"
+# CAIP-2 namespace used for canonical chain identifiers.
+namespace = "{{namespace_string}}"
+# Signing curve used by the chain family or chain-specific implementation.
+curve = "{{curve_string}}"
+# Canonical account-address encoding or presentation format.
+address_format = "{{address_format_string}}"
+# Default contributor placeholder for the first account derivation path.
+default_derivation_path = "{{default_derivation_path_string}}"
+
+[caip]
+# CAIP-2 chain identifier = namespace:reference
+reference = "{{reference_hint_string}}"
+canonical_chain_id = "{{namespace_string}}:{{reference_hint_string}}"
+friendly_aliases = ["{{slug_string}}"]
+
+[signing]
+# Keep these short and concrete. Describe what is signed, not the full implementation.
+message_strategy = "TODO"
+transaction_strategy = "TODO"
+sign_stub = "sign.stub.rs"
+serialize_stub = "serialize.stub.rs"
+
+[implementation_notes]
+# TODO: note any address checksum, HRP, or encoding quirks here.
+address_notes = "TODO"
+# TODO: note whether derivation follows a standard path or a chain-specific variant.
+derivation_notes = "TODO"
+# TODO: note any signing prefixes, intent bytes, or domain separation rules here.
+signing_notes = "TODO"
+# TODO: capture any serializer or canonical wire-format constraints here.
+serialization_notes = "TODO"
+# TODO: if {{family}} is only an approximate family match, explain why here.
+family_gap_notes = "TODO"
+
+[status]
+profile_only = true
+integration_complete = false

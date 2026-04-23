@@ -1,0 +1,20 @@
+{
+  "chain_id": "{{namespace_string}}:{{reference_hint_string}}",
+  "family": "{{family_string}}",
+  "kind": "sign_message",
+  "notes": "Document message bytes, domain separation, and expected signature shape.",
+  "cases": [
+    {
+      "name": "personal-message",
+      "private_key": "TODO_PRIVATE_KEY_HEX",
+      "message": "TODO_MESSAGE",
+      "encoding": "utf8",
+      "domain_separation": "TODO",
+      "expected": {
+        "hashing": "TODO",
+        "signature_hex": "TODO_SIGNATURE",
+        "recovery_id": "TODO_OR_NULL"
+      }
+    }
+  ]
+}

@@ -413,17 +413,26 @@ mod tests {
     fn executable_with_script() {
         // Create a temp script that outputs {"allow": true}
         let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
         let script = dir.path().join("allow.sh");
-        std::fs::write(
-            &script,
-            "#!/bin/sh\ncat > /dev/null\necho '{\"allow\": true}'\n",
-        )
-        .unwrap();
+        #[cfg(windows)]
+        let script = dir.path().join("allow.cmd");
 
         #[cfg(unix)]
         {
+            std::fs::write(
+                &script,
+                "#!/bin/sh\ncat > /dev/null\necho '{\"allow\": true}'\n",
+            )
+            .unwrap();
+
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        #[cfg(windows)]
+        {
+            std::fs::write(&script, "@echo off\r\necho {\"allow\": true}\r\n").unwrap();
         }
 
         let ctx = base_context();
@@ -434,17 +443,30 @@ mod tests {
     #[test]
     fn executable_deny_script() {
         let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
         let script = dir.path().join("deny.sh");
-        std::fs::write(
-            &script,
-            "#!/bin/sh\ncat > /dev/null\necho '{\"allow\": false, \"reason\": \"nope\"}'\n",
-        )
-        .unwrap();
+        #[cfg(windows)]
+        let script = dir.path().join("deny.cmd");
 
         #[cfg(unix)]
         {
+            std::fs::write(
+                &script,
+                "#!/bin/sh\ncat > /dev/null\necho '{\"allow\": false, \"reason\": \"nope\"}'\n",
+            )
+            .unwrap();
+
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        #[cfg(windows)]
+        {
+            std::fs::write(
+                &script,
+                "@echo off\r\necho {\"allow\": false, \"reason\": \"nope\"}\r\n",
+            )
+            .unwrap();
         }
 
         let ctx = base_context();
