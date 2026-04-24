@@ -21,6 +21,9 @@ bindings/node/index.d.ts
 bindings/node/npm/*/*.node
 bindings/node/artifacts/
 
+# Web bindings
+bindings/web/pkg/
+
 # Website
 website/docs/md/
 website-docs/md/
