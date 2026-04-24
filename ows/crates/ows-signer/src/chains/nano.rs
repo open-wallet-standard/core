@@ -221,6 +221,9 @@ pub fn build_state_block(
 // NanoSigner
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// NOMS (Nano Off-chain Message Standard) magic header.
+const NOMS_MAGIC_HEADER: &[u8; 25] = b"\x18Nano Off-chain Message:\n";
+
 /// Nano chain signer (Ed25519 with blake2b-512).
 pub struct NanoSigner;
 
@@ -290,14 +293,23 @@ impl ChainSigner for NanoSigner {
 
     fn sign_message(
         &self,
-        _private_key: &[u8],
-        _message: &[u8],
+        private_key: &[u8],
+        message: &[u8],
     ) -> Result<SignOutput, SignerError> {
-        Err(SignerError::SigningFailed(
-            "Nano off-chain message signing is not supported: no canonical standard exists. \
-             Define an ecosystem convention before enabling this."
-                .into(),
-        ))
+        let msg_len = u32::try_from(message.len())
+            .map_err(|_| SignerError::InvalidMessage("message too large for NOMS".into()))?;
+
+        let mut payload = Vec::with_capacity(NOMS_MAGIC_HEADER.len() + 4 + message.len());
+        payload.extend_from_slice(NOMS_MAGIC_HEADER);
+        payload.extend_from_slice(&msg_len.to_be_bytes());
+        payload.extend_from_slice(message);
+
+        let mut hasher = Blake2b::<U32>::new();
+        hasher.update(&payload);
+        let mut message_hash = [0u8; 32];
+        message_hash.copy_from_slice(&hasher.finalize());
+
+        self.sign(private_key, &message_hash)
     }
 
     fn encode_signed_transaction(
@@ -485,16 +497,32 @@ mod tests {
     }
 
     #[test]
-    fn test_sign_message_unsupported() {
+    fn test_sign_message_noms() {
         let key = derive_key(MNEMONIC_12, "", "m/44'/165'/0'");
         let signer = NanoSigner;
         let message = b"hello nano";
-        let result = signer.sign_message(&key, message);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Nano off-chain message signing is not supported"));
+        let result = signer.sign_message(&key, message).unwrap();
+
+        // Assert output format
+        assert_eq!(result.signature.len(), 64);
+        assert!(result.recovery_id.is_none());
+        assert!(result.public_key.is_some());
+
+        let vk = NanoSigner::verifying_key(&key).unwrap();
+
+        // Verify that the signed hash matches NOMS spec manually
+        let mut expected_payload = Vec::new();
+        expected_payload.extend_from_slice(b"\x18Nano Off-chain Message:\n");
+        expected_payload.extend_from_slice(&(message.len() as u32).to_be_bytes());
+        expected_payload.extend_from_slice(message);
+
+        let mut hasher = Blake2b::<U32>::new();
+        hasher.update(&expected_payload);
+        let mut expected_hash = [0u8; 32];
+        expected_hash.copy_from_slice(&hasher.finalize());
+
+        let sig = ed25519_dalek::Signature::from_bytes(&result.signature.try_into().unwrap());
+        raw_verify::<Blake2b512>(&vk, &expected_hash, &sig).expect("should verify against NOMS payload hash");
     }
 
     #[test]
