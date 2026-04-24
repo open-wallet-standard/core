@@ -27,11 +27,14 @@ Or install only what you need:
 npm install @open-wallet-standard/core     # Node.js SDK
 npm install -g @open-wallet-standard/core  # Node.js SDK + CLI (provides `ows` command)
 npm install @open-wallet-standard/adapters # Framework adapters (viem, Solana, WDK)
+npm install @open-wallet-standard/web      # Browser WASM SDK
 pip install open-wallet-standard           # Python
 cd ows && cargo build --workspace --release # From source
 ```
 
 The language bindings are **fully self-contained** — they embed the Rust core via native FFI. Installing globally with `-g` also provides the `ows` CLI. The [`@open-wallet-standard/adapters`](https://www.npmjs.com/package/@open-wallet-standard/adapters) package plugs an OWS wallet into viem, `@solana/web3.js`, and the Tether WDK.
+
+For websites, [`@open-wallet-standard/web`](bindings/web) provides a WASM SDK with browser storage adapters for OWS wallet, API-key, and policy artifacts.
 
 ## Quick Start
 
@@ -153,6 +156,7 @@ Reference implementation documentation:
 - [Quickstart](docs/quickstart.md)
 - [CLI Reference](docs/sdk-cli.md)
 - [Node.js SDK](docs/sdk-node.md)
+- [Browser WASM SDK](docs/sdk-web.md)
 - [Python SDK](docs/sdk-python.md)
 - [Policy Engine Implementation Guide](docs/03-policy-engine.md)
 

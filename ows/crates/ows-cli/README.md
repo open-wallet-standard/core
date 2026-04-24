@@ -52,6 +52,7 @@ The bindings are **standalone** — they embed the Rust core via native FFI. No 
 | Node.js | [`@open-wallet-standard/core`](https://www.npmjs.com/package/@open-wallet-standard/core) | `npm install @open-wallet-standard/core` |
 | Node.js adapters (viem, Solana, WDK) | [`@open-wallet-standard/adapters`](https://www.npmjs.com/package/@open-wallet-standard/adapters) | `npm install @open-wallet-standard/adapters` |
 | Python | [`open-wallet-standard`](https://pypi.org/project/open-wallet-standard/) | `pip install open-wallet-standard` |
+| Browser | [`@open-wallet-standard/web`](https://www.npmjs.com/package/@open-wallet-standard/web) | `npm install @open-wallet-standard/web` |
 
 ```javascript
 import { createWallet, signMessage } from "@open-wallet-standard/core";
