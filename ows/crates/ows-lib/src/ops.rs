@@ -62,6 +62,8 @@ fn derive_all_accounts(mnemonic: &Mnemonic, index: u32) -> Result<Vec<WalletAcco
 struct KeyPair {
     secp256k1: Vec<u8>,
     ed25519: Vec<u8>,
+    /// Ed25519-BIP32 extended key (64 bytes) for Cardano / CIP-1852.
+    ed25519_bip32: Vec<u8>,
 }
 
 impl Drop for KeyPair {
@@ -69,6 +71,7 @@ impl Drop for KeyPair {
         use zeroize::Zeroize;
         self.secp256k1.zeroize();
         self.ed25519.zeroize();
+        self.ed25519_bip32.zeroize();
     }
 }
 
@@ -78,6 +81,7 @@ impl KeyPair {
         match curve {
             ows_signer::Curve::Secp256k1 => &self.secp256k1,
             ows_signer::Curve::Ed25519 => &self.ed25519,
+            ows_signer::Curve::Ed25519Bip32 => &self.ed25519_bip32,
         }
     }
 
@@ -86,11 +90,15 @@ impl KeyPair {
         let obj = serde_json::json!({
             "secp256k1": hex::encode(&self.secp256k1),
             "ed25519": hex::encode(&self.ed25519),
+            "ed25519_bip32": hex::encode(&self.ed25519_bip32),
         });
         obj.to_string().into_bytes()
     }
 
     /// Deserialize from JSON bytes after decryption.
+    ///
+    /// The `ed25519_bip32` field is optional for backwards compatibility with
+    /// wallets created before Cardano support was added.
     fn from_json_bytes(bytes: &[u8]) -> Result<Self, OwsLibError> {
         let s = String::from_utf8(bytes.to_vec())
             .map_err(|_| OwsLibError::InvalidInput("invalid key pair data".into()))?;
@@ -101,11 +109,19 @@ impl KeyPair {
         let ed = obj["ed25519"]
             .as_str()
             .ok_or_else(|| OwsLibError::InvalidInput("missing ed25519 key".into()))?;
+        // Optional — absent in wallets created before Cardano support.
+        let ed25519_bip32 = if let Some(hex_str) = obj["ed25519_bip32"].as_str() {
+            hex::decode(hex_str)
+                .map_err(|e| OwsLibError::InvalidInput(format!("invalid ed25519_bip32 hex: {e}")))?
+        } else {
+            vec![0u8; 64]
+        };
         Ok(KeyPair {
             secp256k1: hex::decode(secp)
                 .map_err(|e| OwsLibError::InvalidInput(format!("invalid secp256k1 hex: {e}")))?,
             ed25519: hex::decode(ed)
                 .map_err(|e| OwsLibError::InvalidInput(format!("invalid ed25519 hex: {e}")))?,
+            ed25519_bip32,
         })
     }
 }
@@ -297,10 +313,17 @@ pub fn import_wallet_private_key(
 
     let keys = match (secp256k1_key_hex, ed25519_key_hex) {
         // Both curve keys explicitly provided — use them directly
-        (Some(secp_hex), Some(ed_hex)) => KeyPair {
-            secp256k1: decode_hex_key(secp_hex)?,
-            ed25519: decode_hex_key(ed_hex)?,
-        },
+        (Some(secp_hex), Some(ed_hex)) => {
+            let mut random_bip32 = vec![0u8; 64];
+            getrandom::getrandom(&mut random_bip32).map_err(|e| {
+                OwsLibError::InvalidInput(format!("failed to generate random key: {e}"))
+            })?;
+            KeyPair {
+                secp256k1: decode_hex_key(secp_hex)?,
+                ed25519: decode_hex_key(ed_hex)?,
+                ed25519_bip32: random_bip32,
+            }
+        }
         // Existing single-key behavior
         _ => {
             let key_bytes = decode_hex_key(private_key_hex)?;
@@ -314,9 +337,13 @@ pub fn import_wallet_private_key(
                 None => ows_signer::Curve::Secp256k1,
             };
 
-            // Build key pair: provided key for its curve, random 32 bytes for the other
-            let mut other_key = vec![0u8; 32];
-            getrandom::getrandom(&mut other_key).map_err(|e| {
+            // Build key pair: provided key for its curve, random bytes for the others.
+            let mut other_key_32 = vec![0u8; 32];
+            getrandom::getrandom(&mut other_key_32).map_err(|e| {
+                OwsLibError::InvalidInput(format!("failed to generate random key: {e}"))
+            })?;
+            let mut random_bip32 = vec![0u8; 64];
+            getrandom::getrandom(&mut random_bip32).map_err(|e| {
                 OwsLibError::InvalidInput(format!("failed to generate random key: {e}"))
             })?;
 
@@ -326,14 +353,31 @@ pub fn import_wallet_private_key(
                     ed25519: ed25519_key_hex
                         .map(decode_hex_key)
                         .transpose()?
-                        .unwrap_or(other_key),
+                        .unwrap_or(other_key_32),
+                    ed25519_bip32: random_bip32,
                 },
                 ows_signer::Curve::Ed25519 => KeyPair {
                     secp256k1: secp256k1_key_hex
                         .map(decode_hex_key)
                         .transpose()?
-                        .unwrap_or(other_key),
+                        .unwrap_or(other_key_32),
                     ed25519: key_bytes,
+                    ed25519_bip32: random_bip32,
+                },
+                ows_signer::Curve::Ed25519Bip32 => KeyPair {
+                    secp256k1: secp256k1_key_hex
+                        .map(decode_hex_key)
+                        .transpose()?
+                        .unwrap_or(other_key_32),
+                    ed25519: ed25519_key_hex
+                        .map(decode_hex_key)
+                        .transpose()?
+                        .unwrap_or_else(|| {
+                            let mut k = vec![0u8; 32];
+                            let _ = getrandom::getrandom(&mut k);
+                            k
+                        }),
+                    ed25519_bip32: key_bytes,
                 },
             }
         }
@@ -819,6 +863,7 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
         ChainType::Xrpl => broadcast_xrpl(rpc_url, signed_bytes),
         ChainType::Nano => broadcast_nano(rpc_url, signed_bytes),
+        ChainType::Cardano => broadcast_cardano(rpc_url, signed_bytes),
     }
 }
 
@@ -947,6 +992,66 @@ fn broadcast_ton(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibErr
         .as_str()
         .map(|s| s.to_string())
         .ok_or_else(|| OwsLibError::BroadcastFailed(format!("no hash in response: {resp}")))
+}
+
+/// Submit a signed Cardano transaction to a Koios-compatible node.
+///
+/// Sends raw CBOR bytes with `Content-Type: application/cbor` to `{rpc_url}/submittx`.
+/// On success Koios returns the transaction hash as a JSON-quoted string.
+fn broadcast_cardano(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let url = format!("{}/submittx", rpc_url.trim_end_matches('/'));
+
+    // Pipe raw CBOR bytes into curl via stdin so binary content is preserved exactly.
+    let mut child = Command::new("curl")
+        .args([
+            "-fsSL",
+            "-X",
+            "POST",
+            "-H",
+            "Content-Type: application/cbor",
+            "-H",
+            "Accept: application/json",
+            "--data-binary",
+            "@-",
+            &url,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| OwsLibError::BroadcastFailed(format!("failed to spawn curl: {e}")))?;
+
+    child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(signed_bytes)
+        .map_err(|e| OwsLibError::BroadcastFailed(format!("failed to write CBOR to curl: {e}")))?;
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| OwsLibError::BroadcastFailed(format!("curl wait failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(OwsLibError::BroadcastFailed(format!(
+            "Cardano broadcast failed: {stderr}{stdout}"
+        )));
+    }
+
+    // Koios returns the tx hash as a quoted JSON string, e.g. "\"abc123...\""
+    let response = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let tx_hash = response.trim_matches('"').to_string();
+    if tx_hash.is_empty() {
+        return Err(OwsLibError::BroadcastFailed(
+            "empty tx hash in Cardano node response".into(),
+        ));
+    }
+    Ok(tx_hash)
 }
 
 fn broadcast_sui(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
@@ -1110,6 +1215,7 @@ mod tests {
         let keys = KeyPair {
             secp256k1: key_bytes,
             ed25519: ed_key,
+            ed25519_bip32: vec![0u8; 64],
         };
         let accounts = derive_all_accounts_from_keys(&keys).unwrap();
         let payload = keys.to_json_bytes();

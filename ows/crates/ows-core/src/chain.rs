@@ -17,10 +17,11 @@ pub enum ChainType {
     Sui,
     Xrpl,
     Nano,
+    Cardano,
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 10] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 11] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
@@ -31,6 +32,7 @@ pub const ALL_CHAIN_TYPES: [ChainType; 10] = [
     ChainType::Sui,
     ChainType::Xrpl,
     ChainType::Nano,
+    ChainType::Cardano,
 ];
 
 /// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
@@ -190,6 +192,21 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_type: ChainType::Evm,
         chain_id: "eip155:999",
     },
+    Chain {
+        name: "cardano",
+        chain_type: ChainType::Cardano,
+        chain_id: "cardano:mainnet",
+    },
+    Chain {
+        name: "cardano-preprod",
+        chain_type: ChainType::Cardano,
+        chain_id: "cardano:preprod",
+    },
+    Chain {
+        name: "cardano-preview",
+        chain_type: ChainType::Cardano,
+        chain_id: "cardano:preview",
+    },
 ];
 
 /// Parse a chain string into a `Chain`. Accepts:
@@ -254,6 +271,7 @@ pub fn parse_chain(s: &str) -> Result<Chain, String> {
            EVM:     ethereum, base, arbitrum, optimism, polygon, bsc, avalanche, plasma, etherlink\n  \
            Solana:  solana\n  \
            Bitcoin: bitcoin\n  \
+           Cardano: cardano, cardano-preprod, cardano-preview\n  \
            Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl, nano\n\n\
          Or use a CAIP-2 ID (eip155:8453) or bare EVM chain ID (8453)"
     ))
@@ -279,6 +297,7 @@ impl ChainType {
             ChainType::Sui => "sui",
             ChainType::Xrpl => "xrpl",
             ChainType::Nano => "nano",
+            ChainType::Cardano => "cardano",
         }
     }
 
@@ -296,6 +315,7 @@ impl ChainType {
             ChainType::Sui => 784,
             ChainType::Xrpl => 144,
             ChainType::Nano => 165,
+            ChainType::Cardano => 1815,
         }
     }
 
@@ -313,6 +333,7 @@ impl ChainType {
             "sui" => Some(ChainType::Sui),
             "xrpl" => Some(ChainType::Xrpl),
             "nano" => Some(ChainType::Nano),
+            "cardano" => Some(ChainType::Cardano),
             _ => None,
         }
     }
@@ -332,6 +353,7 @@ impl fmt::Display for ChainType {
             ChainType::Sui => "sui",
             ChainType::Xrpl => "xrpl",
             ChainType::Nano => "nano",
+            ChainType::Cardano => "cardano",
         };
         write!(f, "{}", s)
     }
@@ -353,6 +375,7 @@ impl FromStr for ChainType {
             "sui" => Ok(ChainType::Sui),
             "xrpl" => Ok(ChainType::Xrpl),
             "nano" => Ok(ChainType::Nano),
+            "cardano" => Ok(ChainType::Cardano),
             _ => Err(format!("unknown chain type: {}", s)),
         }
     }
@@ -385,6 +408,7 @@ mod tests {
             (ChainType::Sui, "\"sui\""),
             (ChainType::Xrpl, "\"xrpl\""),
             (ChainType::Nano, "\"nano\""),
+            (ChainType::Cardano, "\"cardano\""),
         ] {
             let json = serde_json::to_string(&chain).unwrap();
             assert_eq!(json, expected);
@@ -406,6 +430,7 @@ mod tests {
         assert_eq!(ChainType::Sui.namespace(), "sui");
         assert_eq!(ChainType::Xrpl.namespace(), "xrpl");
         assert_eq!(ChainType::Nano.namespace(), "nano");
+        assert_eq!(ChainType::Cardano.namespace(), "cardano");
     }
 
     #[test]
@@ -421,6 +446,7 @@ mod tests {
         assert_eq!(ChainType::Sui.default_coin_type(), 784);
         assert_eq!(ChainType::Xrpl.default_coin_type(), 144);
         assert_eq!(ChainType::Nano.default_coin_type(), 165);
+        assert_eq!(ChainType::Cardano.default_coin_type(), 1815);
     }
 
     #[test]
@@ -439,6 +465,10 @@ mod tests {
         assert_eq!(ChainType::from_namespace("sui"), Some(ChainType::Sui));
         assert_eq!(ChainType::from_namespace("xrpl"), Some(ChainType::Xrpl));
         assert_eq!(ChainType::from_namespace("nano"), Some(ChainType::Nano));
+        assert_eq!(
+            ChainType::from_namespace("cardano"),
+            Some(ChainType::Cardano)
+        );
         assert_eq!(ChainType::from_namespace("unknown"), None);
     }
 
@@ -581,6 +611,26 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_chain_cardano() {
+        let chain = parse_chain("cardano").unwrap();
+        assert_eq!(chain.chain_type, ChainType::Cardano);
+        assert_eq!(chain.chain_id, "cardano:mainnet");
+
+        let preprod = parse_chain("cardano-preprod").unwrap();
+        assert_eq!(preprod.chain_type, ChainType::Cardano);
+        assert_eq!(preprod.chain_id, "cardano:preprod");
+
+        let preview = parse_chain("cardano-preview").unwrap();
+        assert_eq!(preview.chain_type, ChainType::Cardano);
+        assert_eq!(preview.chain_id, "cardano:preview");
+
+        // CAIP-2 IDs also accepted directly
+        let via_caip2 = parse_chain("cardano:mainnet").unwrap();
+        assert_eq!(via_caip2.chain_type, ChainType::Cardano);
+        assert_eq!(via_caip2.chain_id, "cardano:mainnet");
+    }
+
+    #[test]
     fn test_parse_chain_unknown() {
         assert!(parse_chain("unknown_chain").is_err());
     }
@@ -619,7 +669,7 @@ mod tests {
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 10);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 11);
     }
 
     #[test]
