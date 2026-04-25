@@ -540,10 +540,10 @@ mod tests {
         let expected_pubkey = hex::decode("D2B3C9D00FFB55E84E7979D67308A515FB07CA79E40A77EB1AAFE62881781783").unwrap();
         
         // The UTF-8 string with an emoji which gets domain-separated and hashed via NOMS before being signed.
-        let message = "Hej Nano! 🥦".as_bytes();
+        let message = "Hej Nano!🥦".as_bytes();
         
         // Expected ED25519-blake2b signature over the Blake2b-256 NOMS payload digest.
-        let expected_signature = hex::decode("be9e691f3bab829b440126c3492eee518c47a6555de4c00f1017874e7324bdfc1a2451cef59c8a011e03215df92fbc12b9d25c15d2808ca4665616a8c5350506").unwrap();
+        let expected_signature = hex::decode("535c745819d0f40056f3c46402b4fae4356b3a8897bde99c955d411920e740d781e6dddcbde228e8b86c4383a1003f9f315519ff73bd356f561d19865dc90f09").unwrap();
 
         // The sign_message call expands the 32-byte key via Blake2b-512 and signs the hashed payload.
         let result = signer.sign_message(&private_key, message).unwrap();
