@@ -537,6 +537,7 @@ mod tests {
 
         assert_eq!(result.public_key.unwrap(), expected_pubkey);
         assert_eq!(result.signature, expected_signature);
+        assert_eq!(signer.derive_address(&private_key).unwrap(), "nano_3noms9a1zytox399kygpge6cc7hu1z79ms1cgzojodz8741qi7w5u3nzb8mn");
     }
 
     #[test]
