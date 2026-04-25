@@ -528,15 +528,34 @@ mod tests {
     #[test]
     fn test_sign_message_noms_known_vector() {
         let signer = NanoSigner;
+        
+        // Note: This is the final 32-byte Ed25519-blake2b private key.
+        // It is NOT a Nano Wallet "Seed". 
+        // Implementations treating this input as a Seed may erroneously perform a 
+        // derivation hash (e.g. `blake2b_256(seed || index)`) before expansion, 
+        // producing an entirely different keypair (like the 'nano_3iq5r...' address).
         let private_key = hex::decode("681FD5ED71A9F81E9D29E3450F6CD8AACB87346FD21A26003389290B9D0CB173").unwrap();
+        
+        // The exact corresponding 32-byte public key.
         let expected_pubkey = hex::decode("D2B3C9D00FFB55E84E7979D67308A515FB07CA79E40A77EB1AAFE62881781783").unwrap();
-        let message = b"Hej!";
-        let expected_signature = hex::decode("e347e2d2bc3fba0932bcf533997bdd4c4c6a217e5f5ee128470e0ced8a2450c182189322fd2eeeb354da50f14d2010e8bc9814824c490145013754cdff944806").unwrap();
+        
+        // The UTF-8 string with an emoji which gets domain-separated and hashed via NOMS before being signed.
+        let message = "Hej Nano! 🥦".as_bytes();
+        
+        // Expected ED25519-blake2b signature over the Blake2b-256 NOMS payload digest.
+        let expected_signature = hex::decode("be9e691f3bab829b440126c3492eee518c47a6555de4c00f1017874e7324bdfc1a2451cef59c8a011e03215df92fbc12b9d25c15d2808ca4665616a8c5350506").unwrap();
 
+        // The sign_message call expands the 32-byte key via Blake2b-512 and signs the hashed payload.
         let result = signer.sign_message(&private_key, message).unwrap();
 
+        // Verify the directly extracted public key matches our expected bytes.
         assert_eq!(result.public_key.unwrap(), expected_pubkey);
+        
+        // Verify the signature bytes match exactly.
         assert_eq!(result.signature, expected_signature);
+        
+        // Verify that encoding the 'nano_' address directly from this raw private key 
+        // correctly resolves to the expected address ('nano_3noms...').
         assert_eq!(signer.derive_address(&private_key).unwrap(), "nano_3noms9a1zytox399kygpge6cc7hu1z79ms1cgzojodz8741qi7w5u3nzb8mn");
     }
 
