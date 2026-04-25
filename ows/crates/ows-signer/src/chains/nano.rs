@@ -312,6 +312,13 @@ impl ChainSigner for NanoSigner {
         let mut message_hash = [0u8; 32];
         message_hash.copy_from_slice(&hasher.finalize());
 
+        // Note on double-hashing:
+        // The NOMS spec dictates creating a 32-byte Blake2b-256 digest of the payload.
+        // We then pass this 32-byte digest to `self.sign()`, which internally applies
+        // Nano's Ed25519-blake2b signature scheme. That scheme computes a Blake2b-512
+        // hash over the scalar and the message (which in this case is the 32-byte digest).
+        // This effective `Blake2b-512(scalar || Blake2b-256(payload))` double-hash is
+        // intentional and precisely matches the ORIS-001 specification.
         self.sign(private_key, &message_hash)
     }
 
