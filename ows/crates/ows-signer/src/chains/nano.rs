@@ -222,6 +222,7 @@ pub fn build_state_block(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// NOMS (Nano Off-chain Message Standard) magic header.
+/// See: https://github.com/OpenRai/Standards/blob/main/rfcs/ORIS-001.md
 const NOMS_MAGIC_HEADER: &[u8; 25] = b"\x18Nano Off-chain Message:\n";
 
 /// Nano chain signer (Ed25519 with blake2b-512).
@@ -291,6 +292,8 @@ impl ChainSigner for NanoSigner {
         self.sign(private_key, &block_hash)
     }
 
+    // Implements Nano Off-chain Message Signing (NOMS).
+    // See: https://github.com/OpenRai/Standards/blob/main/rfcs/ORIS-001.md
     fn sign_message(
         &self,
         private_key: &[u8],
