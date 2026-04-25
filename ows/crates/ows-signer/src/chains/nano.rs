@@ -570,6 +570,21 @@ mod tests {
     }
 
     #[test]
+    fn test_sign_message_noms_empty_string() {
+        let key = derive_key(MNEMONIC_12, "", "m/44'/165'/0'");
+        let signer = NanoSigner;
+
+        // Empty string should not panic on `u32::try_from` or `payload` construction.
+        let message = b"";
+        let result = signer.sign_message(&key, message);
+        assert!(result.is_ok());
+
+        // Validate signature output length manually
+        let sig_output = result.unwrap();
+        assert_eq!(sig_output.signature.len(), 64);
+    }
+
+    #[test]
     fn test_public_key_in_sign_output() {
         let key = derive_key(MNEMONIC_24, PASSPHRASE_24, "m/44'/165'/0'");
         let signer = NanoSigner;
