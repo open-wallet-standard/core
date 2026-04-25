@@ -512,8 +512,8 @@ mod tests {
 
         // Verify that the signed hash matches NOMS spec manually
         let mut expected_payload = Vec::new();
-        expected_payload.extend_from_slice(b"\x18Nano Off-chain Message:\n");
-        expected_payload.extend_from_slice(&(message.len() as u32).to_be_bytes());
+        expected_payload.extend_from_slice(super::NOMS_MAGIC_HEADER);
+        expected_payload.extend_from_slice(&(u32::try_from(message.len()).unwrap()).to_be_bytes());
         expected_payload.extend_from_slice(message);
 
         let mut hasher = Blake2b::<U32>::new();
