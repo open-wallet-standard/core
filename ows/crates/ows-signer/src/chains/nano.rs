@@ -526,6 +526,20 @@ mod tests {
     }
 
     #[test]
+    fn test_sign_message_noms_known_vector() {
+        let signer = NanoSigner;
+        let private_key = hex::decode("681FD5ED71A9F81E9D29E3450F6CD8AACB87346FD21A26003389290B9D0CB173").unwrap();
+        let expected_pubkey = hex::decode("D2B3C9D00FFB55E84E7979D67308A515FB07CA79E40A77EB1AAFE62881781783").unwrap();
+        let message = b"Hej!";
+        let expected_signature = hex::decode("e347e2d2bc3fba0932bcf533997bdd4c4c6a217e5f5ee128470e0ced8a2450c182189322fd2eeeb354da50f14d2010e8bc9814824c490145013754cdff944806").unwrap();
+
+        let result = signer.sign_message(&private_key, message).unwrap();
+
+        assert_eq!(result.public_key.unwrap(), expected_pubkey);
+        assert_eq!(result.signature, expected_signature);
+    }
+
+    #[test]
     fn test_public_key_in_sign_output() {
         let key = derive_key(MNEMONIC_24, PASSPHRASE_24, "m/44'/165'/0'");
         let signer = NanoSigner;
