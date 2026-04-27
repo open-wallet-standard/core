@@ -392,6 +392,88 @@ ows uninstall          # keep wallet data
 ows uninstall --purge  # also remove ~/.ows (all wallet data)
 ```
 
+### `ows doctor`
+
+Run diagnostic checks on the OWS installation. `ows doctor` is a read-only command that checks:
+- Vault path resolution and HOME environment variable
+- Vault and subdirectory existence
+- Config file validity (if present)
+- Wallet, key, and policy file integrity
+- File permissions (Unix only; skipped on Windows/macOS)
+
+**Exit code semantics:**
+- `0` — all checks passed, or only warnings were found (no errors)
+- non-zero — at least one check produced an error
+
+```bash
+ows doctor
+```
+
+**Example: healthy vault**
+
+```
+============================================================
+  OWS Doctor
+============================================================
+
+  Vault path: ~/.ows
+
+  Passed:
+  ----------------------------------------
+    ✓ Vault path resolved
+    ✓ Vault exists
+    ✓ Logs directory present
+    ✓ Config file valid
+
+  4 passed   0 warnings   0 errors   6 skipped
+
+  Result: OK — all checks passed
+```
+
+**Example: missing vault (first run)**
+
+```
+============================================================
+  OWS Doctor
+============================================================
+
+  Vault path: ~/.ows
+
+  Errors:
+  ----------------------------------------
+    ✗ Vault directory not found: No vault found at `~/.ows`. No wallets have been created yet.
+         → Run `ows wallet create` to create your first wallet.
+
+  Skipped:
+  ----------------------------------------
+    ○ Logs directory check skipped
+    ○ Config file not present
+    ○ No wallets directory
+    ○ No keys directory
+    ○ No policies directory
+    ○ Permissions check skipped
+
+  1 passed   0 warnings   1 errors   6 skipped
+
+  Result: FAILED — errors found
+```
+
+**Example: corrupted wallet file**
+
+```
+Errors:
+  ----------------------------------------
+    ✗ Wallet file is not valid JSON: bad.json: JSON parse error. This file is corrupted: key must be a string at line 1 column 3.
+         → Export the mnemonic (if possible) and recreate the wallet with `ows wallet create`.
+
+Warnings:
+  ----------------------------------------
+    ⚠ Some wallet files are corrupted: 1 of 2 wallet file(s) are corrupted.
+         → Export the mnemonic from any valid wallets and recreate the corrupted ones.
+```
+
+**Platform caveats:** Permission checks (`vault.permissions`) only run on Unix/Linux systems. On Windows and macOS the check is reported as skipped with the note "Permission checks are Unix-only."
+
 ## File Layout
 
 ```

@@ -87,6 +87,7 @@ ows sign tx --wallet agent-treasury --chain evm --tx "deadbeef..."
 | `ows key revoke` | Revoke an API key |
 | `ows update` | Update ows and bindings |
 | `ows uninstall` | Remove ows from the system |
+| `ows doctor` | Run diagnostic checks on the OWS installation |
 
 ## Architecture
 

@@ -70,6 +70,8 @@ enum Commands {
         #[arg(long)]
         purge: bool,
     },
+    /// Run diagnostic checks on the OWS installation
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -512,5 +514,6 @@ fn run(cli: Cli) -> Result<(), CliError> {
         },
         Commands::Update { force } => commands::update::run(force),
         Commands::Uninstall { purge } => commands::uninstall::run(purge),
+        Commands::Doctor => commands::doctor::run(),
     }
 }
