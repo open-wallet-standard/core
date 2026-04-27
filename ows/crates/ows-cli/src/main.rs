@@ -38,6 +38,11 @@ enum Commands {
         #[command(subcommand)]
         subcommand: FundCommands,
     },
+    /// Swap tokens across chains via LI.FI
+    Swap {
+        #[command(subcommand)]
+        subcommand: SwapCommands,
+    },
     /// Pay for x402-enabled API calls
     Pay {
         #[command(subcommand)]
@@ -242,6 +247,37 @@ enum FundCommands {
         /// Chain to check (default: base)
         #[arg(long, default_value = "base")]
         chain: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum SwapCommands {
+    /// Get a swap quote and show route (no signing)
+    Quote {
+        /// Wallet name or ID
+        #[arg(long, env = "OWS_WALLET")]
+        wallet: String,
+        /// Source token (e.g. ETH, USDC)
+        #[arg(long)]
+        from: String,
+        /// Destination token (e.g. USDC, ETH)
+        #[arg(long)]
+        to: String,
+        /// Amount in human-readable format (e.g. 0.1)
+        #[arg(long)]
+        amount: String,
+        /// Source chain (e.g. ethereum, base, arbitrum)
+        #[arg(long, default_value = "ethereum")]
+        from_chain: String,
+        /// Destination chain (e.g. ethereum, base, arbitrum)
+        #[arg(long)]
+        to_chain: Option<String>,
+        /// Max slippage as decimal (default: 0.005)
+        #[arg(long, default_value = "0.005")]
+        slippage: f64,
+        /// Route preference: CHEAPEST or FASTEST
+        #[arg(long, default_value = "CHEAPEST")]
+        order: String,
     },
 }
 
@@ -470,6 +506,27 @@ fn run(cli: Cli) -> Result<(), CliError> {
             FundCommands::Balance { wallet, chain } => {
                 commands::fund::balance(&wallet, Some(&chain))
             }
+        },
+        Commands::Swap { subcommand } => match subcommand {
+            SwapCommands::Quote {
+                wallet,
+                from,
+                to,
+                amount,
+                from_chain,
+                to_chain,
+                slippage,
+                order,
+            } => commands::swap::quote(commands::swap::QuoteArgs {
+                wallet_name: &wallet,
+                from_token: &from,
+                to_token: &to,
+                amount: &amount,
+                from_chain: &from_chain,
+                to_chain: to_chain.as_deref(),
+                slippage,
+                order: &order,
+            }),
         },
         Commands::Pay { subcommand } => match subcommand {
             PayCommands::Request {
