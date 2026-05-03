@@ -80,6 +80,7 @@ Message signing follows chain-specific conventions:
 - **Sui**: Intent-prefixed (scope=3) BLAKE2b-256 digest, Ed25519 signature
 - **Cosmos**: ADR-036 off-chain signing
 - **Filecoin**: Blake2b-256 hash then secp256k1 signing
+- **NEAR**: V1 Ed25519 signature over the raw message bytes (parity with Solana). [NEP-413](https://github.com/near/NEPs/blob/master/neps/nep-0413.md) prefixed message signing — `tag 2147484061 || borsh({message, nonce, recipient, callbackUrl?})` — is tracked as a follow-up so callers can opt in via a structured payload. Transaction signing is `Ed25519(SHA-256(borsh(Transaction)))`; `encode_signed_transaction` returns `borsh(Transaction) || 0x00 || sig64` (the canonical `borsh(SignedTransaction)`).
 
 ### `signTypedData(request: SignTypedDataRequest): Promise<SignMessageResult>`
 

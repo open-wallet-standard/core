@@ -74,6 +74,8 @@ impl Config {
             "https://s.devnet.rippletest.net:51234".into(),
         );
         rpc.insert("nano:mainnet".into(), "https://rpc.nano.to".into());
+        rpc.insert("near:mainnet".into(), "https://rpc.mainnet.near.org".into());
+        rpc.insert("near:testnet".into(), "https://rpc.testnet.near.org".into());
         rpc.insert("eip155:4217".into(), "https://rpc.tempo.xyz".into());
         rpc.insert(
             "eip155:999".into(),
@@ -264,8 +266,16 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 21);
+        assert_eq!(config.rpc.len(), 23);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
+        assert_eq!(
+            config.rpc_url("near:mainnet"),
+            Some("https://rpc.mainnet.near.org")
+        );
+        assert_eq!(
+            config.rpc_url("near:testnet"),
+            Some("https://rpc.testnet.near.org")
+        );
     }
 
     #[test]

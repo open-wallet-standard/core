@@ -3,6 +3,7 @@ pub mod key_ops;
 pub mod key_store;
 pub mod migrate;
 pub mod nano_rpc;
+pub mod near_rpc;
 pub mod ops;
 pub mod policy_engine;
 pub mod policy_store;

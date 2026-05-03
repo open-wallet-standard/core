@@ -1,6 +1,6 @@
 ---
 name: ows
-description: Secure, local-first multi-chain wallet management — create wallets, derive addresses, sign messages and transactions across EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, and Filecoin via CLI, Node.js, or Python.
+description: Secure, local-first multi-chain wallet management — create wallets, derive addresses, sign messages and transactions across EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin, Nano, and NEAR via CLI, Node.js, or Python.
 version: 1.3.2
 metadata:
   openclaw:
@@ -33,7 +33,7 @@ Use this skill when the user asks to:
 
 - Create, import, list, delete, or manage crypto wallets
 - Derive blockchain addresses from a mnemonic
-- Sign messages or transactions for EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, or Filecoin
+- Sign messages or transactions for EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin, Nano, or NEAR
 - Broadcast signed transactions to a chain
 - Generate BIP-39 mnemonic phrases
 - Fund a wallet with USDC (MoonPay) or check token balances
@@ -56,6 +56,7 @@ Use this skill when the user asks to:
 | Spark (Bitcoin L2) | `spark` | secp256k1 | spark: prefixed |
 | XRPL | `xrpl` | secp256k1 | Base58Check (`r...`) |
 | Filecoin | `filecoin` | secp256k1 | f1 secp256k1 |
+| NEAR | `near`, `near-testnet` | Ed25519 | implicit hex (64 chars) |
 
 ## Installation
 
