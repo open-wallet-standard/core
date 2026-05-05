@@ -819,6 +819,7 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
         ChainType::Xrpl => broadcast_xrpl(rpc_url, signed_bytes),
         ChainType::Nano => broadcast_nano(rpc_url, signed_bytes),
+        ChainType::Near => crate::near_rpc::broadcast_tx_commit(rpc_url, signed_bytes),
     }
 }
 
@@ -1181,7 +1182,7 @@ mod tests {
     fn derive_address_all_chains() {
         let phrase = generate_mnemonic(12).unwrap();
         let chains = [
-            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "sui", "xrpl",
+            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "sui", "xrpl", "nano", "near",
         ];
         for chain in &chains {
             let addr = derive_address(&phrase, chain, None).unwrap();
@@ -1262,8 +1263,11 @@ mod tests {
         let vault = dir.path();
         create_wallet("multi-sign", None, None, Some(vault)).unwrap();
 
+        // XRPL and Nano are excluded because their signers explicitly do not
+        // support generic off-chain message signing without a defined convention.
+        // NEAR's V1 sign_message is raw ed25519 (NEP-413 follow-up tracked).
         let chains = [
-            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui",
+            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "near",
         ];
         for chain in &chains {
             let result = sign_message(
@@ -1302,12 +1306,19 @@ mod tests {
         solana_tx.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // message payload
         let solana_tx_hex = hex::encode(&solana_tx);
 
+        // NEAR transactions have no envelope; the borsh-encoded Transaction
+        // bytes ARE the signable payload. Any non-empty bytes exercise the
+        // sha256 -> ed25519 pipeline.
+        let near_tx_hex = "42".repeat(80);
+
         let chains = [
-            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "xrpl",
+            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "xrpl", "near",
         ];
         for chain in &chains {
             let tx = if *chain == "solana" {
                 &solana_tx_hex
+            } else if *chain == "near" {
+                &near_tx_hex
             } else {
                 generic_tx_hex
             };

@@ -17,20 +17,23 @@ pub enum ChainType {
     Sui,
     Xrpl,
     Nano,
+    Near,
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 10] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 12] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
     ChainType::Cosmos,
     ChainType::Tron,
     ChainType::Ton,
+    ChainType::Spark,
     ChainType::Filecoin,
     ChainType::Sui,
     ChainType::Xrpl,
     ChainType::Nano,
+    ChainType::Near,
 ];
 
 /// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
@@ -181,6 +184,16 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_id: "nano:mainnet",
     },
     Chain {
+        name: "near",
+        chain_type: ChainType::Near,
+        chain_id: "near:mainnet",
+    },
+    Chain {
+        name: "near-testnet",
+        chain_type: ChainType::Near,
+        chain_id: "near:testnet",
+    },
+    Chain {
         name: "tempo",
         chain_type: ChainType::Evm,
         chain_id: "eip155:4217",
@@ -254,7 +267,7 @@ pub fn parse_chain(s: &str) -> Result<Chain, String> {
            EVM:     ethereum, base, arbitrum, optimism, polygon, bsc, avalanche, plasma, etherlink\n  \
            Solana:  solana\n  \
            Bitcoin: bitcoin\n  \
-           Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl, nano\n\n\
+           Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl, nano, near\n\n\
          Or use a CAIP-2 ID (eip155:8453) or bare EVM chain ID (8453)"
     ))
 }
@@ -279,6 +292,7 @@ impl ChainType {
             ChainType::Sui => "sui",
             ChainType::Xrpl => "xrpl",
             ChainType::Nano => "nano",
+            ChainType::Near => "near",
         }
     }
 
@@ -296,6 +310,7 @@ impl ChainType {
             ChainType::Sui => 784,
             ChainType::Xrpl => 144,
             ChainType::Nano => 165,
+            ChainType::Near => 397,
         }
     }
 
@@ -313,6 +328,7 @@ impl ChainType {
             "sui" => Some(ChainType::Sui),
             "xrpl" => Some(ChainType::Xrpl),
             "nano" => Some(ChainType::Nano),
+            "near" => Some(ChainType::Near),
             _ => None,
         }
     }
@@ -332,6 +348,7 @@ impl fmt::Display for ChainType {
             ChainType::Sui => "sui",
             ChainType::Xrpl => "xrpl",
             ChainType::Nano => "nano",
+            ChainType::Near => "near",
         };
         write!(f, "{}", s)
     }
@@ -353,6 +370,7 @@ impl FromStr for ChainType {
             "sui" => Ok(ChainType::Sui),
             "xrpl" => Ok(ChainType::Xrpl),
             "nano" => Ok(ChainType::Nano),
+            "near" => Ok(ChainType::Near),
             _ => Err(format!("unknown chain type: {}", s)),
         }
     }
@@ -385,6 +403,7 @@ mod tests {
             (ChainType::Sui, "\"sui\""),
             (ChainType::Xrpl, "\"xrpl\""),
             (ChainType::Nano, "\"nano\""),
+            (ChainType::Near, "\"near\""),
         ] {
             let json = serde_json::to_string(&chain).unwrap();
             assert_eq!(json, expected);
@@ -406,6 +425,7 @@ mod tests {
         assert_eq!(ChainType::Sui.namespace(), "sui");
         assert_eq!(ChainType::Xrpl.namespace(), "xrpl");
         assert_eq!(ChainType::Nano.namespace(), "nano");
+        assert_eq!(ChainType::Near.namespace(), "near");
     }
 
     #[test]
@@ -421,6 +441,7 @@ mod tests {
         assert_eq!(ChainType::Sui.default_coin_type(), 784);
         assert_eq!(ChainType::Xrpl.default_coin_type(), 144);
         assert_eq!(ChainType::Nano.default_coin_type(), 165);
+        assert_eq!(ChainType::Near.default_coin_type(), 397);
     }
 
     #[test]
@@ -439,6 +460,7 @@ mod tests {
         assert_eq!(ChainType::from_namespace("sui"), Some(ChainType::Sui));
         assert_eq!(ChainType::from_namespace("xrpl"), Some(ChainType::Xrpl));
         assert_eq!(ChainType::from_namespace("nano"), Some(ChainType::Nano));
+        assert_eq!(ChainType::from_namespace("near"), Some(ChainType::Near));
         assert_eq!(ChainType::from_namespace("unknown"), None);
     }
 
@@ -619,7 +641,24 @@ mod tests {
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 10);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 12);
+    }
+
+    #[test]
+    fn test_parse_chain_near() {
+        let chain = parse_chain("near").unwrap();
+        assert_eq!(chain.name, "near");
+        assert_eq!(chain.chain_type, ChainType::Near);
+        assert_eq!(chain.chain_id, "near:mainnet");
+
+        let testnet = parse_chain("near-testnet").unwrap();
+        assert_eq!(testnet.chain_type, ChainType::Near);
+        assert_eq!(testnet.chain_id, "near:testnet");
+
+        // CAIP-2 IDs accepted directly
+        let via_caip2 = parse_chain("near:testnet").unwrap();
+        assert_eq!(via_caip2.chain_type, ChainType::Near);
+        assert_eq!(via_caip2.chain_id, "near:testnet");
     }
 
     #[test]
