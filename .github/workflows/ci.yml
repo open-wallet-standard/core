@@ -86,6 +86,51 @@ jobs:
       - name: Run tests
         run: npm test
 
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/web
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "22"
+
+      - name: Install Rust toolchain
+        run: |
+          rustup show active-toolchain || rustup install
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@94a7388bec5d4c8dd93e3ebf09e0ff448f3f6f4d # v2.68.35
+        with:
+          tool: wasm-pack
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            bindings/web/target
+          key: ${{ runner.os }}-web-cargo-${{ hashFiles('bindings/web/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-web-cargo-
+
+      - name: Verify Cargo.lock is up to date
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Check Rust bindings
+        run: cargo check --features fast-kdf
+
+      - name: Build WASM package
+        run: wasm-pack build --dev --target bundler --out-dir pkg --features fast-kdf
+
+      - name: Run JS tests
+        run: npm test
+
   node-cross-compile:
     runs-on: ubuntu-latest
     defaults:
