@@ -14,6 +14,8 @@ npm install @open-wallet-standard/core
 
 The package includes prebuilt native binaries for macOS (arm64, x64) and Linux (x64, arm64). No Rust toolchain required.
 
+For viem, `@solana/web3.js`, or Tether WDK integrations, install [`@open-wallet-standard/adapters`](https://www.npmjs.com/package/@open-wallet-standard/adapters) alongside this package — it wraps an OWS wallet as a framework-native signer without exposing private keys.
+
 ## Quick Start
 
 ```javascript
@@ -22,6 +24,8 @@ import {
   createWallet,
   listWallets,
   signMessage,
+  signHash,
+  signAuthorization,
   signTypedData,
   deleteWallet,
 } from "@open-wallet-standard/core";
@@ -260,6 +264,41 @@ console.log(result.recoveryId); // 0 or 1
 | `vaultPath` | `string` | `~/.ows` | Custom vault directory root |
 
 **Returns:** `SignResult`
+
+#### `signHash(wallet, chain, hashHex, passphrase?, index?, vaultPath?)`
+
+Sign a raw 32-byte hash without adding a message prefix.
+
+This operation is only supported on secp256k1-backed chains. For EVM, the returned `recoveryId` is the raw `yParity` value (`0` or `1`).
+
+```javascript
+const result = signHash(
+  "agent-treasury",
+  "base",
+  "11".repeat(32),
+);
+console.log(result.signature);
+console.log(result.recoveryId); // 0 or 1
+```
+
+#### `signAuthorization(wallet, chain, address, nonce, passphrase?, index?, vaultPath?)`
+
+Sign an EIP-7702 authorization tuple. This is equivalent to:
+
+`signHash(wallet, chain, keccak256(0x05 || rlp([eip155_chain_id(chain), address, nonce])))`
+
+`chain` must resolve to an EVM chain. `nonce` accepts decimal or `0x`-prefixed hex. If you need a nonstandard authorization tuple, such as chain ID `0`, precompute the digest and call `signHash`.
+
+```javascript
+const result = signAuthorization(
+  "agent-treasury",
+  "base",
+  "0x1111111111111111111111111111111111111111",
+  "7",
+);
+console.log(result.signature);
+console.log(result.recoveryId); // 0 or 1
+```
 
 #### `signTypedData(wallet, chain, typedDataJson, passphrase?, index?, vaultPath?)`
 

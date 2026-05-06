@@ -29,13 +29,14 @@ The bindings are **standalone** — they embed the Rust core via native FFI. No 
 | Language | Package | Install |
 |----------|---------|---------|
 | Node.js | [`@open-wallet-standard/core`](https://www.npmjs.com/package/@open-wallet-standard/core) | `npm install @open-wallet-standard/core` |
+| Node.js adapters (viem, Solana, WDK) | [`@open-wallet-standard/adapters`](https://www.npmjs.com/package/@open-wallet-standard/adapters) | `npm install @open-wallet-standard/adapters` |
 | Python | [`open-wallet-standard`](https://pypi.org/project/open-wallet-standard/) | `pip install open-wallet-standard` |
 
 ```javascript
 import { createWallet, signMessage } from "@open-wallet-standard/core";
 
 const wallet = createWallet("my-wallet");
-console.log(wallet.accounts); // addresses for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, Sui, and XRPL
+console.log(wallet.accounts); // addresses for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin, Sui, XRPL, Nano, and NEAR
 
 const sig = signMessage("my-wallet", "evm", "hello");
 console.log(sig.signature);
@@ -46,7 +47,7 @@ console.log(sig.signature);
 | Crate | Description |
 |-------|-------------|
 | `ows-core` | Types, CAIP-2/10 parsing, errors, config. Zero crypto dependencies. |
-| `ows-signer` | ChainSigner trait, HD derivation, address derivation for EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, and Filecoin. |
+| `ows-signer` | ChainSigner trait, HD derivation, address derivation for EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin, Nano, and NEAR. |
 | `ows-lib` | Library interface used by language bindings and the CLI. |
 | `ows-pay` | x402 payment flows, service discovery, and funding helpers. |
 | `ows-cli` | The `ows` command-line tool. |
@@ -63,6 +64,7 @@ console.log(sig.signature);
 - **Spark** (Bitcoin L2) — secp256k1, spark: prefixed addresses
 - **XRPL** — secp256k1, Base58Check r-addresses
 - **Filecoin** — secp256k1, f1 base32 addresses
+- **NEAR** — Ed25519, implicit hex (64 chars), Borsh-serialized transactions
 
 ## License
 

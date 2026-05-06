@@ -10,7 +10,7 @@ Local, policy-gated signing and wallet management for every chain.
 ## Why OWS
 
 - **Local key custody.** Private keys stay encrypted at rest and are decrypted only inside the OWS signing path after the relevant checks pass. Current implementations harden in-process memory handling and wipe key material after use.
-- **Every chain, one interface.** EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin — all first-class. CAIP-2/CAIP-10 addressing abstracts away chain-specific details.
+- **Every chain, one interface.** EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin, Nano, NEAR — all first-class. CAIP-2/CAIP-10 addressing abstracts away chain-specific details.
 - **Policy before signing.** A pre-signing policy engine gates agent (API key) operations before decryption — chain allowlists, expiry, and optional custom executables.
 - **Built for agents.** Native SDK and CLI today. A wallet created by one tool works in every other.
 
@@ -28,7 +28,7 @@ The package is **fully self-contained** — it embeds the Rust core via native F
 from ows import create_wallet, sign_message
 
 wallet = create_wallet("agent-treasury")
-# => accounts for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Filecoin, Sui, and XRPL
+# => accounts for EVM, Solana, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin, Sui, XRPL, Nano, and NEAR
 
 sig = sign_message("agent-treasury", "evm", "hello")
 print(sig["signature"])
@@ -47,6 +47,8 @@ print(sig["signature"])
 | `export_wallet(name_or_id, passphrase?, vault_path?)` | Export a wallet's mnemonic or keys |
 | `rename_wallet(name_or_id, new_name, vault_path?)` | Rename a wallet |
 | `sign_message(wallet, chain, message, passphrase?, encoding?, index?, vault_path?)` | Sign a message with chain-specific formatting |
+| `sign_hash(wallet, chain, hash_hex, passphrase?, index?, vault_path?)` | Sign a raw 32-byte hash on a secp256k1-backed chain |
+| `sign_authorization(wallet, chain, address, nonce, passphrase?, index?, vault_path?)` | Sign an EIP-7702 authorization tuple |
 | `sign_typed_data(wallet, chain, typed_data_json, passphrase?, index?, vault_path?)` | Sign EIP-712 typed data (EVM only) |
 | `sign_transaction(wallet, chain, tx_hex, passphrase?, index?, vault_path?)` | Sign a raw transaction |
 | `sign_and_send(wallet, chain, tx_hex, passphrase?, index?, rpc_url?, vault_path?)` | Sign and broadcast a transaction |
@@ -74,6 +76,7 @@ print(sig["signature"])
 | XRPL | secp256k1 | Base58Check (`r...`) | `m/44'/144'/0'/0/0` |
 | Spark (Bitcoin L2) | secp256k1 | spark: prefixed | `m/84'/0'/0'/0/0` |
 | Filecoin | secp256k1 | f1 base32 | `m/44'/461'/0'/0/0` |
+| NEAR | Ed25519 | implicit hex (64 chars) | `m/44'/397'/0'` |
 
 ## Architecture
 

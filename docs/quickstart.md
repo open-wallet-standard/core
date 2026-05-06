@@ -13,7 +13,8 @@ curl -fsSL https://docs.openwallet.sh/install.sh | bash
 This installs the `ows` CLI, Node.js SDK, and Python bindings. Or install only what you need:
 
 ```bash
-npm install @open-wallet-standard/core    # Node.js
+npm install @open-wallet-standard/core     # Node.js
+npm install @open-wallet-standard/adapters # Node.js — viem, Solana, WDK adapters
 pip install open-wallet-standard           # Python
 ```
 

@@ -291,8 +291,7 @@ impl ChainSigner for StacksSigner {
 
         // Copy the unsigned tx and inject the VRS signature at the auth offset
         let mut signed = tx_bytes.to_vec();
-        signed[STACKS_SIG_OFFSET..STACKS_SIG_OFFSET + 65]
-            .copy_from_slice(&signature.signature);
+        signed[STACKS_SIG_OFFSET..STACKS_SIG_OFFSET + 65].copy_from_slice(&signature.signature);
         Ok(signed)
     }
 
@@ -445,15 +444,19 @@ mod tests {
         let mut fake_tx = vec![0u8; 180];
         fake_tx[5] = 0x04;
         let output = signer.sign_transaction(&privkey, &fake_tx).unwrap();
-        let signed = signer
-            .encode_signed_transaction(&fake_tx, &output)
-            .unwrap();
+        let signed = signer.encode_signed_transaction(&fake_tx, &output).unwrap();
         // Same length, signature injected at offset 44
         assert_eq!(signed.len(), 180);
-        assert_eq!(&signed[STACKS_SIG_OFFSET..STACKS_SIG_OFFSET + 65], &output.signature[..]);
+        assert_eq!(
+            &signed[STACKS_SIG_OFFSET..STACKS_SIG_OFFSET + 65],
+            &output.signature[..]
+        );
         // Rest of tx unchanged
         assert_eq!(&signed[..STACKS_SIG_OFFSET], &fake_tx[..STACKS_SIG_OFFSET]);
-        assert_eq!(&signed[STACKS_SIG_OFFSET + 65..], &fake_tx[STACKS_SIG_OFFSET + 65..]);
+        assert_eq!(
+            &signed[STACKS_SIG_OFFSET + 65..],
+            &fake_tx[STACKS_SIG_OFFSET + 65..]
+        );
     }
 
     #[test]
@@ -521,5 +524,4 @@ mod tests {
         let result = signer.encode_signed_transaction(&fake_tx, &fake_sig);
         assert!(result.is_err());
     }
-
 }

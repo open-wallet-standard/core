@@ -40,7 +40,7 @@ def test_derive_address_ethereum():
 
 def test_derive_address_all_supported_chains():
     phrase = ows.generate_mnemonic(12)
-    for chain in ["evm", "solana", "sui", "bitcoin", "cosmos", "tron", "ton", "filecoin", "nano"]:
+    for chain in ["evm", "solana", "sui", "bitcoin", "cosmos", "tron", "ton", "spark", "filecoin", "stacks", "xrpl", "nano", "near"]:
         address = ows.derive_address(phrase, chain)
         assert len(address) > 0
 
@@ -49,7 +49,7 @@ def test_create_and_list_wallets(vault_dir):
     wallet = ows.create_wallet("test-wallet", vault_path_opt=vault_dir)
     assert wallet["name"] == "test-wallet"
     assert isinstance(wallet["accounts"], list)
-    assert len(wallet["accounts"]) == 10
+    assert len(wallet["accounts"]) == 13
 
     # Verify each chain family is present
     chain_ids = [a["chain_id"] for a in wallet["accounts"]]
@@ -60,9 +60,12 @@ def test_create_and_list_wallets(vault_dir):
     assert any(c.startswith("cosmos:") for c in chain_ids)
     assert any(c.startswith("tron:") for c in chain_ids)
     assert any(c.startswith("ton:") for c in chain_ids)
+    assert any(c.startswith("spark:") for c in chain_ids)
     assert any(c.startswith("fil:") for c in chain_ids)
+    assert any(c.startswith("stacks:") for c in chain_ids)
     assert any(c.startswith("xrpl:") for c in chain_ids)
     assert any(c.startswith("nano:") for c in chain_ids)
+    assert any(c.startswith("near:") for c in chain_ids)
 
     wallets = ows.list_wallets(vault_path_opt=vault_dir)
     assert len(wallets) == 1
@@ -109,7 +112,7 @@ def test_import_wallet_mnemonic(vault_dir):
         "imported", phrase, vault_path_opt=vault_dir
     )
     assert wallet["name"] == "imported"
-    assert len(wallet["accounts"]) == 10
+    assert len(wallet["accounts"]) == 13
 
     # EVM account should match derived address
     evm_account = next(a for a in wallet["accounts"] if a["chain_id"].startswith("eip155:"))
@@ -134,6 +137,77 @@ def test_sign_message(vault_dir):
         "msg-signer", "evm", "hello world", vault_path_opt=vault_dir
     )
     assert len(result["signature"]) > 0
+
+
+def test_sign_hash_and_authorization_owner_mode(vault_dir):
+    wallet = ows.create_wallet("hash-owner", vault_path_opt=vault_dir)
+
+    hash_result = ows.sign_hash(
+        wallet["id"], "base", "11" * 32, vault_path_opt=vault_dir
+    )
+    assert len(hash_result["signature"]) > 0
+    assert hash_result["recovery_id"] in (0, 1)
+
+    auth_result = ows.sign_authorization(
+        wallet["id"],
+        "base",
+        "0x1111111111111111111111111111111111111111",
+        "7",
+        vault_path_opt=vault_dir,
+    )
+    assert len(auth_result["signature"]) > 0
+    assert auth_result["recovery_id"] in (0, 1)
+
+
+def test_sign_hash_and_authorization_api_key_mode(vault_dir):
+    wallet = ows.create_wallet("hash-agent", vault_path_opt=vault_dir)
+
+    ows.create_policy(
+        """{
+          "id": "base-only-hash",
+          "name": "Base Only Hash",
+          "version": 1,
+          "created_at": "2026-03-22T00:00:00Z",
+          "rules": [
+            {"type": "allowed_chains", "chain_ids": ["eip155:8453"]}
+          ],
+          "action": "deny"
+        }""",
+        vault_path_opt=vault_dir,
+    )
+
+    key = ows.create_api_key(
+        "hash-agent-key",
+        [wallet["id"]],
+        ["base-only-hash"],
+        "",
+        vault_path_opt=vault_dir,
+    )
+
+    hash_result = ows.sign_hash(
+        wallet["id"], "base", "22" * 32, key["token"], vault_path_opt=vault_dir
+    )
+    assert len(hash_result["signature"]) > 0
+
+    auth_result = ows.sign_authorization(
+        wallet["id"],
+        "base",
+        "0x1111111111111111111111111111111111111111",
+        "7",
+        key["token"],
+        vault_path_opt=vault_dir,
+    )
+    assert len(auth_result["signature"]) > 0
+
+    with pytest.raises(RuntimeError, match="not in allowlist"):
+        ows.sign_authorization(
+            wallet["id"],
+            "ethereum",
+            "0x1111111111111111111111111111111111111111",
+            "7",
+            key["token"],
+            vault_path_opt=vault_dir,
+        )
 
 
 def test_sign_typed_data_with_api_key(vault_dir):

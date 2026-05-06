@@ -46,6 +46,11 @@ set_node_version() {
   npm install
 
   cargo update --workspace
+
+  cd "$REPO_ROOT/bindings/node-adapters"
+  npm version "$VERSION" --no-git-tag-version --allow-same-version
+  jq --arg v "^$VERSION" '.dependencies["@open-wallet-standard/core"] = $v' \
+    package.json > tmp.json && mv tmp.json package.json
 }
 
 set_rust_version() {

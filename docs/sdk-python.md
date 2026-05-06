@@ -22,6 +22,8 @@ from ows import (
     create_wallet,
     list_wallets,
     sign_message,
+    sign_hash,
+    sign_authorization,
     sign_typed_data,
     delete_wallet,
 )
@@ -216,6 +218,37 @@ Sign a message with chain-specific formatting.
 result = sign_message("agent-treasury", "evm", "hello world")
 print(result["signature"])   # hex string
 print(result["recovery_id"]) # 0 or 1
+```
+
+#### `sign_hash(wallet, chain, hash_hex, passphrase=None, index=None, vault_path=None)`
+
+Sign a raw 32-byte hash without adding a message prefix.
+
+This operation is only supported on secp256k1-backed chains. For EVM, the returned `recovery_id` is the raw `y_parity` value (`0` or `1`).
+
+```python
+result = sign_hash("agent-treasury", "base", "11" * 32)
+print(result["signature"])
+print(result["recovery_id"])  # 0 or 1
+```
+
+#### `sign_authorization(wallet, chain, address, nonce, passphrase=None, index=None, vault_path=None)`
+
+Sign an EIP-7702 authorization tuple. This is equivalent to:
+
+`sign_hash(wallet, chain, keccak256(0x05 || rlp([eip155_chain_id(chain), address, nonce])))`
+
+`chain` must resolve to an EVM chain. `nonce` accepts decimal or `0x`-prefixed hex strings. If you need a nonstandard authorization tuple, such as chain ID `0`, precompute the digest and call `sign_hash`.
+
+```python
+result = sign_authorization(
+    "agent-treasury",
+    "base",
+    "0x1111111111111111111111111111111111111111",
+    "7",
+)
+print(result["signature"])
+print(result["recovery_id"])  # 0 or 1
 ```
 
 #### `sign_typed_data(wallet, chain, typed_data_json, passphrase=None, index=None, vault_path=None)`
