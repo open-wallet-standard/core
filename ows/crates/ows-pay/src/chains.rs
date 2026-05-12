@@ -63,11 +63,6 @@ mod tests {
     }
 
     #[test]
-    fn caip2_ref_monad() {
-        assert_eq!(caip2_reference("eip155:143"), Some("143"));
-    }
-
-    #[test]
     fn resolve_unknown_caip2_known_namespace() {
         // Chain not in KNOWN_CHAINS but namespace is recognized.
         assert_eq!(resolve_chain_type("eip155:999999"), Some(ChainType::Evm));

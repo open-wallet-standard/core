@@ -206,6 +206,7 @@ pub(crate) fn format_price(amount_str: &str, network: &str) -> String {
     let chain_type = crate::chains::resolve_chain_type(network);
     match chain_type {
         Some(ows_core::ChainType::Nano) => format_nano(amount_str),
+        Some(ows_core::ChainType::Near) => format_near(amount_str),
         _ => format_usdc(amount_str),
     }
 }
@@ -231,6 +232,21 @@ pub(crate) fn format_nano(amount_str: &str) -> String {
         let frac_str = format!("{frac:030}");
         let trimmed = frac_str.trim_end_matches('0');
         format!("{whole}.{trimmed} XNO")
+    }
+}
+
+/// Format a NEAR amount expressed in yoctoNEAR (10^24 yoctoNEAR per NEAR).
+pub(crate) fn format_near(amount_str: &str) -> String {
+    let amount: u128 = amount_str.parse().unwrap_or(0);
+    let divisor = 1_000_000_000_000_000_000_000_000u128; // 10^24
+    let whole = amount / divisor;
+    let frac = amount % divisor;
+    if frac == 0 {
+        format!("{whole} NEAR")
+    } else {
+        let frac_str = format!("{frac:024}");
+        let trimmed = frac_str.trim_end_matches('0');
+        format!("{whole}.{trimmed} NEAR")
     }
 }
 
@@ -325,6 +341,48 @@ mod tests {
             format_price("1000000000000000000000000000000", "nano:mainnet"),
             "1 XNO"
         );
+        assert_eq!(
+            format_price("1000000000000000000000000", "near:mainnet"),
+            "1 NEAR"
+        );
+        assert_eq!(format_price("1000000000000000000000000", "near"), "1 NEAR");
+    }
+
+    // -----------------------------------------------------------------------
+    // format_near
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn format_near_whole() {
+        // 1 NEAR = 10^24 yoctoNEAR
+        assert_eq!(format_near("1000000000000000000000000"), "1 NEAR");
+    }
+
+    #[test]
+    fn format_near_fractional() {
+        assert_eq!(format_near("1500000000000000000000000"), "1.5 NEAR");
+    }
+
+    #[test]
+    fn format_near_zero() {
+        assert_eq!(format_near("0"), "0 NEAR");
+    }
+
+    #[test]
+    fn format_near_one_yocto() {
+        // Smallest unit: 1 yoctoNEAR (10^-24 NEAR).
+        assert_eq!(format_near("1"), "0.000000000000000000000001 NEAR");
+    }
+
+    #[test]
+    fn format_near_storage_deposit() {
+        // 0.00125 NEAR (typical NEP-141 storage deposit).
+        assert_eq!(format_near("1250000000000000000000"), "0.00125 NEAR");
+    }
+
+    #[test]
+    fn format_near_non_numeric() {
+        assert_eq!(format_near("abc"), "0 NEAR");
     }
 
     // -----------------------------------------------------------------------
