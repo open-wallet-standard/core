@@ -106,23 +106,13 @@ pub fn peek_passphrase() -> Option<String> {
 
 /// Resolve a wallet into the private key bytes for a specific chain.
 ///
-/// Tries an empty passphrase first; if that fails, prompts the user.
-/// Delegates to `ows_lib::decrypt_signing_key` for the actual decryption
-/// and key derivation so the signing path is never duplicated.
+/// Reads the passphrase once, then delegates to `ows_lib::decrypt_signing_key`
+/// for the actual decryption and key derivation so the signing path is never duplicated.
 pub fn resolve_signing_key(
     wallet_name: &str,
     chain_type: ows_core::ChainType,
     index: u32,
 ) -> Result<SecretBytes, CliError> {
-    // Try empty passphrase first.
-    match ows_lib::decrypt_signing_key(wallet_name, chain_type, "", Some(index), None) {
-        Ok(key) => return Ok(key),
-        Err(ows_lib::OwsLibError::Crypto(_)) => {
-            // Empty passphrase didn't work — prompt the user.
-        }
-        Err(e) => return Err(e.into()),
-    }
-
     let passphrase = read_passphrase();
     Ok(ows_lib::decrypt_signing_key(
         wallet_name,
