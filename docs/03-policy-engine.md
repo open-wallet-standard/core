@@ -157,13 +157,13 @@ Restricts which smart contracts an API key can sign EIP-712 typed data for. The 
 }
 ```
 
-### `sign_allowlist`
+### `recipient_allowlist`
 
 Restricts which recipient addresses an API key can sign transactions for. Case-insensitive comparison. Denies transactions with no `to` field (e.g. contract creation).
 
 ```json
 {
-  "type": "sign_allowlist",
+  "type": "recipient_allowlist",
   "addresses": [
     "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C",
     "0xDEADBEEF00000000000000000000000000000000"

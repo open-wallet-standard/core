@@ -23,7 +23,7 @@ pub enum PolicyRule {
 
     /// Deny if `transaction.to` is not in the allowlist (case-insensitive).
     /// Denies transactions with no `to` field (e.g. contract creation).
-    SignAllowlist { addresses: Vec<String> },
+    RecipientAllowlist { addresses: Vec<String> },
 }
 
 /// A stored policy definition.
@@ -331,15 +331,15 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_rule_serde_sign_allowlist() {
-        let rule = PolicyRule::SignAllowlist {
+    fn test_policy_rule_serde_recipient_allowlist() {
+        let rule = PolicyRule::RecipientAllowlist {
             addresses: vec![
                 "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into(),
                 "0xDEADBEEF00000000000000000000000000000000".into(),
             ],
         };
         let json = serde_json::to_value(&rule).unwrap();
-        assert_eq!(json["type"], "sign_allowlist");
+        assert_eq!(json["type"], "recipient_allowlist");
         assert_eq!(json["addresses"][0], "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C");
         assert_eq!(json["addresses"][1], "0xDEADBEEF00000000000000000000000000000000");
 

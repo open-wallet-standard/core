@@ -44,8 +44,8 @@ fn evaluate_rule(rule: &PolicyRule, policy_id: &str, ctx: &PolicyContext) -> Pol
         PolicyRule::AllowedTypedDataContracts { contracts } => {
             eval_allowed_typed_data_contracts(policy_id, contracts, ctx)
         }
-        PolicyRule::SignAllowlist { addresses } => {
-            eval_sign_allowlist(policy_id, addresses, ctx)
+        PolicyRule::RecipientAllowlist { addresses } => {
+            eval_recipient_allowlist(policy_id, addresses, ctx)
         }
     }
 }
@@ -110,7 +110,7 @@ fn eval_allowed_typed_data_contracts(
     }
 }
 
-fn eval_sign_allowlist(
+fn eval_recipient_allowlist(
     policy_id: &str,
     addresses: &[String],
     ctx: &PolicyContext,
@@ -120,7 +120,7 @@ fn eval_sign_allowlist(
         None => {
             return PolicyResult::denied(
                 policy_id,
-                "transaction has no 'to' address but sign_allowlist requires one",
+                "transaction has no 'to' address but recipient_allowlist requires one",
             );
         }
     };
@@ -131,7 +131,7 @@ fn eval_sign_allowlist(
     } else {
         PolicyResult::denied(
             policy_id,
-            format!("recipient {to} not in sign allowlist"),
+            format!("recipient {to} not in recipient allowlist"),
         )
     }
 }
@@ -644,14 +644,14 @@ mod tests {
         assert!(result.reason.unwrap().contains("not in allowed list"));
     }
 
-    // --- SignAllowlist ---
+    // --- RecipientAllowlist ---
 
     #[test]
-    fn sign_allowlist_allows_matching_address() {
+    fn recipient_allowlist_allows_matching_address() {
         let ctx = base_context(); // to = 0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C
         let policy = policy_with_rules(
             "allowlist",
-            vec![PolicyRule::SignAllowlist {
+            vec![PolicyRule::RecipientAllowlist {
                 addresses: vec![
                     "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into(),
                     "0xDEADBEEF00000000000000000000000000000000".into(),
@@ -663,25 +663,25 @@ mod tests {
     }
 
     #[test]
-    fn sign_allowlist_denies_non_matching_address() {
+    fn recipient_allowlist_denies_non_matching_address() {
         let ctx = base_context();
         let policy = policy_with_rules(
             "allowlist",
-            vec![PolicyRule::SignAllowlist {
+            vec![PolicyRule::RecipientAllowlist {
                 addresses: vec!["0xDEADBEEF00000000000000000000000000000000".into()],
             }],
         );
         let result = evaluate_policies(&[policy], &ctx);
         assert!(!result.allow);
-        assert!(result.reason.unwrap().contains("not in sign allowlist"));
+        assert!(result.reason.unwrap().contains("not in recipient allowlist"));
     }
 
     #[test]
-    fn sign_allowlist_case_insensitive() {
+    fn recipient_allowlist_case_insensitive() {
         let ctx = base_context();
         let policy = policy_with_rules(
             "allowlist",
-            vec![PolicyRule::SignAllowlist {
+            vec![PolicyRule::RecipientAllowlist {
                 addresses: vec!["0x742D35CC6634C0532925A3B844BC9E7595F2BD0C".into()],
             }],
         );
@@ -690,12 +690,12 @@ mod tests {
     }
 
     #[test]
-    fn sign_allowlist_denies_no_to_address() {
+    fn recipient_allowlist_denies_no_to_address() {
         let mut ctx = base_context();
         ctx.transaction.to = None;
         let policy = policy_with_rules(
             "allowlist",
-            vec![PolicyRule::SignAllowlist {
+            vec![PolicyRule::RecipientAllowlist {
                 addresses: vec!["0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into()],
             }],
         );
@@ -705,15 +705,15 @@ mod tests {
     }
 
     #[test]
-    fn sign_allowlist_empty_list_denies_everything() {
+    fn recipient_allowlist_empty_list_denies_everything() {
         let ctx = base_context();
         let policy = policy_with_rules(
             "allowlist",
-            vec![PolicyRule::SignAllowlist { addresses: vec![] }],
+            vec![PolicyRule::RecipientAllowlist { addresses: vec![] }],
         );
         let result = evaluate_policies(&[policy], &ctx);
         assert!(!result.allow);
-        assert!(result.reason.unwrap().contains("not in sign allowlist"));
+        assert!(result.reason.unwrap().contains("not in recipient allowlist"));
     }
 
     #[test]
