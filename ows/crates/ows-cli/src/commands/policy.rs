@@ -68,6 +68,9 @@ pub fn show(id: &str) -> Result<(), CliError> {
                 ows_core::PolicyRule::AllowedTypedDataContracts { contracts } => {
                     format!("  allowed_typed_data_contracts: {}", contracts.join(", "))
                 }
+                ows_core::PolicyRule::SignAllowlist { addresses } => {
+                    format!("  sign_allowlist: {}", addresses.join(", "))
+                }
             };
             println!("{desc}");
         }
