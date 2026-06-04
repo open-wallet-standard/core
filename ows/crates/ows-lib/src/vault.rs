@@ -153,6 +153,12 @@ pub fn load_wallet_by_name_or_id(
 
 /// Delete a wallet file from the vault by ID.
 pub fn delete_wallet_file(id: &str, vault_path: Option<&Path>) -> Result<(), OwsLibError> {
+    // Reject IDs that contain path separators or traversal sequences.
+    if id.contains('/') || id.contains('\\') || id.contains("..") {
+        return Err(OwsLibError::InvalidInput(
+            format!("invalid wallet ID: '{id}'"),
+        ));
+    }
     let dir = wallets_dir(vault_path)?;
     let path = dir.join(format!("{id}.json"));
     if !path.exists() {

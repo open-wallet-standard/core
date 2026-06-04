@@ -118,6 +118,9 @@ enum WalletCommands {
         /// Confirm deletion (required)
         #[arg(long)]
         confirm: bool,
+        /// Wallet passphrase — required to authenticate the deletion
+        #[arg(long)]
+        passphrase: Option<String>,
     },
     /// Rename a wallet
     Rename {
@@ -411,8 +414,8 @@ fn run(cli: Cli) -> Result<(), CliError> {
                 index,
             } => commands::wallet::import(&name, mnemonic, private_key, chain.as_deref(), index),
             WalletCommands::Export { wallet } => commands::wallet::export(&wallet),
-            WalletCommands::Delete { wallet, confirm } => {
-                commands::wallet::delete(&wallet, confirm)
+            WalletCommands::Delete { wallet, confirm, passphrase } => {
+                commands::wallet::delete(&wallet, confirm, passphrase.as_deref())
             }
             WalletCommands::Rename { wallet, new_name } => {
                 commands::wallet::rename(&wallet, &new_name)

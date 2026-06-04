@@ -135,7 +135,7 @@ pub fn export(wallet_name: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-pub fn delete(wallet_name: &str, confirm: bool) -> Result<(), CliError> {
+pub fn delete(wallet_name: &str, confirm: bool, passphrase: Option<&str>) -> Result<(), CliError> {
     if !confirm {
         eprintln!("To delete a wallet, pass --confirm.");
         eprintln!("Consider exporting it first: ows wallet export --wallet {wallet_name}");
@@ -144,8 +144,24 @@ pub fn delete(wallet_name: &str, confirm: bool) -> Result<(), CliError> {
         ));
     }
 
+    // Warn if any API keys are scoped to this wallet — they will become useless after deletion.
     let info = ows_lib::get_wallet(wallet_name, None)?;
-    ows_lib::delete_wallet(wallet_name, None)?;
+    let keys = ows_lib::list_api_keys(None).unwrap_or_default();
+    let affected: Vec<&str> = keys
+        .iter()
+        .filter(|k| k.wallet_ids.contains(&info.id))
+        .map(|k| k.name.as_str())
+        .collect();
+
+    if !affected.is_empty() {
+        eprintln!("Warning: the following API keys are scoped to this wallet and will stop working:");
+        for name in &affected {
+            eprintln!("  - {name}");
+        }
+        eprintln!("Consider revoking them first: ows key revoke --id <id>");
+    }
+
+    ows_lib::delete_wallet(wallet_name, passphrase, None)?;
     audit::log_wallet_deleted(&info.id, &info.name);
 
     println!("Wallet deleted: {} ({})", info.id, info.name);
