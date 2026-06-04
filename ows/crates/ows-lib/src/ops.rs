@@ -372,8 +372,25 @@ pub fn get_wallet(name_or_id: &str, vault_path: Option<&Path>) -> Result<WalletI
 }
 
 /// Delete a wallet from the vault.
-pub fn delete_wallet(name_or_id: &str, vault_path: Option<&Path>) -> Result<(), OwsLibError> {
+pub fn delete_wallet(
+    name_or_id: &str,
+    passphrase: Option<&str>,
+    vault_path: Option<&Path>,
+) -> Result<(), OwsLibError> {
     let wallet = vault::load_wallet_by_name_or_id(name_or_id, vault_path)?;
+
+    // Require passphrase verification before deletion.
+    // This prevents agents and scripts from deleting wallets without owner authentication.
+    let passphrase = passphrase.unwrap_or("");
+    let envelope: CryptoEnvelope =
+        serde_json::from_value(wallet.crypto.clone())
+            .map_err(|e| OwsLibError::InvalidInput(format!("failed to parse crypto envelope: {e}")))?;
+    decrypt(&envelope, passphrase).map_err(|_| {
+        OwsLibError::InvalidInput(
+            "incorrect passphrase — wallet deletion requires owner authentication".into(),
+        )
+    })?;
+
     vault::delete_wallet_file(&wallet.id, vault_path)?;
     Ok(())
 }
@@ -1660,7 +1677,7 @@ mod tests {
         assert!(get_wallet("nope", Some(dir.path())).is_err());
         assert!(export_wallet("nope", None, Some(dir.path())).is_err());
         assert!(sign_message("nope", "evm", "x", None, None, None, Some(dir.path())).is_err());
-        assert!(delete_wallet("nope", Some(dir.path())).is_err());
+        assert!(delete_wallet("nope", None, Some(dir.path())).is_err());
     }
 
     #[test]
@@ -1759,7 +1776,7 @@ mod tests {
         create_wallet("del-me", None, None, Some(vault)).unwrap();
         assert_eq!(list_wallets(Some(vault)).unwrap().len(), 1);
 
-        delete_wallet("del-me", Some(vault)).unwrap();
+        delete_wallet("del-me", None, Some(vault)).unwrap();
         assert_eq!(list_wallets(Some(vault)).unwrap().len(), 0);
     }
 
@@ -1847,7 +1864,7 @@ mod tests {
         assert_ne!(s2.signature, s3.signature);
 
         // Delete one, others survive
-        delete_wallet("w2", Some(vault)).unwrap();
+        delete_wallet("w2", None, Some(vault)).unwrap();
         assert_eq!(list_wallets(Some(vault)).unwrap().len(), 2);
         assert!(sign_message("w1", "evm", "test", None, None, None, Some(vault)).is_ok());
         assert!(sign_message("w3", "evm", "test", None, None, None, Some(vault)).is_ok());
@@ -2199,7 +2216,7 @@ mod tests {
         assert!(!sig.signature.is_empty());
 
         // Delete
-        delete_wallet("del-me-char", Some(vault)).unwrap();
+        delete_wallet("del-me-char", None, Some(vault)).unwrap();
 
         // Sign after delete fails with WalletNotFound
         let result = sign_message("del-me-char", "evm", "test", None, None, None, Some(vault));
