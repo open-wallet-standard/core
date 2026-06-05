@@ -1,43 +1,33 @@
 /**
  * x402-discover-services.js
  *
- * Discover x402-enabled payable services in the OWS marketplace.
+ * Discover x402-enabled services from the Bazaar directory.
+ * Discovery lives in the `ows` CLI, not the Node SDK, so this example drives
+ * the CLI through child_process.
+ *
+ * Prereqs:
+ *   npm install -g @open-wallet-standard/core
  *
  * Usage:
  *   node examples/x402-discover-services.js
  *   node examples/x402-discover-services.js ai
  */
 
-import { discover } from "@open-wallet-standard/core";
+import { execFileSync } from "child_process";
 
-const query = process.argv[2] || null;
+const query = process.argv[2];
 
-async function main() {
+function main() {
   console.log("Discovering x402 services" + (query ? " matching: " + query : "") + "...");
   console.log("-".repeat(50));
 
   try {
-    const result = await discover(query, 10, 0);
-
-    console.log("Total services found:", result.total);
-    console.log("Showing:", result.services.length);
-    console.log("");
-
-    for (const svc of result.services) {
-      console.log("Name    :", svc.name);
-      console.log("URL     :", svc.url);
-      console.log("Price   :", svc.price);
-      console.log("Network :", svc.network);
-      console.log("Tags    :", svc.tags.join(", ") || "none");
-      console.log("Desc    :", svc.description);
-      console.log("-".repeat(50));
-    }
-
-    if (result.total > result.services.length) {
-      console.log("More services available — use offset to page through results.");
-    }
+    // ows pay discover [--query <q>] [--limit N] [--offset N]
+    const args = ["pay", "discover", "--limit", "10"];
+    if (query) args.push("--query", query);
+    execFileSync("ows", args, { stdio: "inherit" });
   } catch (err) {
-    console.error("Error:", err.message);
+    console.error("Discovery failed:", err.message);
     process.exit(1);
   }
 }
