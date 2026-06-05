@@ -26,7 +26,10 @@ Get test USDC on Base Sepolia: https://faucet.circle.com
 x402 payments run through the CLI via :
 
     # Make a paid request to an x402-enabled endpoint
-    ows pay request https://api.example.com/summarize \n      --wallet agent-treasury \n      --method POST \n      --body '{"text": "Long document..."}'
+    ows pay request https://api.example.com/summarize
+      --wallet agent-treasury
+      --method POST
+      --body '{"text": "Long document..."}'
 
 The CLI handles the full 402 -> sign -> retry flow automatically.
 Output includes the settled amount and transaction details.
