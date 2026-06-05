@@ -14,50 +14,39 @@ for agent payments where the final amount is not known until the task completes.
 | exact | Known upfront | Same as authorized |
 | upto  | Max cap authorized | Actual cost (<=max) |
 
-## Minimal Example
+## Prerequisites
 
-    import { pay } from "@open-wallet-standard/core";
+    npm install -g @open-wallet-standard/core
+    ows wallet create --name agent-treasury
 
-    const result = await pay(
-      "agent-treasury",
-      "https://api.example.com/summarize",
-      "POST",
-      JSON.stringify({ text: "Long document..." })
-    );
+Get test USDC on Base Sepolia: https://faucet.circle.com
 
-    if (result.payment) {
-      console.log("Settled :", result.payment.amount, result.payment.token);
-    }
+## Making a upto Payment
 
-## Post-Settlement Accounting
+x402 payments run through the CLI via :
 
-After a upto settlement, track three values:
+    # Make a paid request to an x402-enabled endpoint
+    ows pay request https://api.example.com/summarize \n      --wallet agent-treasury \n      --method POST \n      --body '{"text": "Long document..."}'
 
-| Value | Description |
-|---|---|
-| Authorized | Max amount locked at request time |
-| Settled | Actual amount charged by service |
-| Released | Authorized minus settled (returned to balance) |
+The CLI handles the full 402 -> sign -> retry flow automatically.
+Output includes the settled amount and transaction details.
 
-    class UptoBillingTracker {
-      constructor() { this.entries = []; }
+## Discover Available Services
 
-      record(requestId, authorizedAmount, result) {
-        const settled = result.payment ? parseFloat(result.payment.amount) : 0;
-        const authorized = parseFloat(authorizedAmount);
-        const released = authorized - settled;
-        this.entries.push({ requestId, authorized, settled, released });
-        return { authorized, settled, released };
-      }
+    # List all x402-enabled services
+    ows pay discover
 
-      summary() {
-        return {
-          totalAuthorized : this.entries.reduce((s, e) => s + e.authorized, 0),
-          totalSettled    : this.entries.reduce((s, e) => s + e.settled, 0),
-          totalReleased   : this.entries.reduce((s, e) => s + e.released, 0),
-        };
-      }
-    }
+    # Filter by keyword
+    ows pay discover ai
+    ows pay discover summarize
+
+## Post-Settlement Accounting Script
+
+After each payment, track authorized / settled / released amounts.
+This belongs in your app layer, not in OWS itself.
+
+See  for a runnable Node.js script
+that shells out to  and tracks per-session accounting.
 
 ## OWS vs App Layer Boundary
 
@@ -69,13 +58,5 @@ After a upto settlement, track three values:
 | Enforce per-session spending caps | no | yes |
 | Reconcile with external ledger | no | yes |
 
-OWS provides result.payment.amount (the settled amount).
+OWS provides the settled amount in the CLI output.
 Everything above that is application-layer accounting.
-
-## Running This Example
-
-    npm install -g @open-wallet-standard/core
-    ows wallet create --name agent-treasury
-    node examples/x402-upto-settlement.js
-
-Get test USDC on Base Sepolia: https://faucet.circle.com
