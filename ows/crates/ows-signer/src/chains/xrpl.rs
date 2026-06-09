@@ -4,7 +4,13 @@ use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::SigningKey;
 use k256::PublicKey;
 use ows_core::ChainType;
+#[cfg(target_arch = "wasm32")]
+use ripemd::Ripemd160;
+#[cfg(target_arch = "wasm32")]
+use sha2::{Digest, Sha256};
+#[cfg(not(target_arch = "wasm32"))]
 use xrpl::core::binarycodec::{decode as xrpl_decode, encode as xrpl_encode};
+#[cfg(not(target_arch = "wasm32"))]
 use xrpl::core::keypairs::{
     derive_classic_address, CryptoImplementation, Secp256k1 as XrplSecp256k1,
 };
@@ -40,15 +46,24 @@ impl ChainSigner for XrplSigner {
     /// Algorithm: compressed pubkey → SHA256 → RIPEMD160 → base58check
     /// with version byte `0x00` using the XRP Ledger dictionary.
     ///
-    /// Delegates to `xrpl::core::keypairs::derive_classic_address`.
+    /// Delegates to `xrpl::core::keypairs::derive_classic_address` on native
+    /// targets and uses the equivalent local implementation on wasm.
     fn derive_address(&self, private_key: &[u8]) -> Result<String, SignerError> {
         let signing_key = SigningKey::from_slice(private_key)
             .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))?;
 
         let pubkey_bytes = PublicKey::from(signing_key.verifying_key()).to_sec1_bytes();
 
-        derive_classic_address(&hex::encode_upper(&pubkey_bytes))
-            .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            derive_classic_address(&hex::encode_upper(&pubkey_bytes))
+                .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            classic_address(&pubkey_bytes)
+        }
     }
 
     /// Sign a pre-hashed 32-byte message with secp256k1 (DER output).
@@ -93,28 +108,37 @@ impl ChainSigner for XrplSigner {
             ));
         }
 
-        // Validate private key before signing.
-        SigningKey::from_slice(private_key)
-            .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))?;
-
         // STX\0 (0x53545800) is the XRPL single-signing hash prefix. It is prepended
         // to the serialized fields before SHA512-half, matching the XRPL signing spec.
         let mut prefixed = Vec::with_capacity(4 + tx_bytes.len());
         prefixed.extend_from_slice(&[0x53, 0x54, 0x58, 0x00]);
         prefixed.extend_from_slice(tx_bytes);
 
-        // xrpl-rust's Secp256k1::sign hashes with SHA512-half internally.
-        // The key format expected is "00"-prefixed uppercase hex (secp256k1 convention).
-        let privkey_hex = format!("00{}", hex::encode_upper(private_key));
-        let sig_bytes = XrplSecp256k1
-            .sign(&prefixed, &privkey_hex)
-            .map_err(|e| SignerError::SigningFailed(e.to_string()))?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Validate private key before signing.
+            SigningKey::from_slice(private_key)
+                .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))?;
 
-        Ok(SignOutput {
-            signature: sig_bytes,
-            recovery_id: None,
-            public_key: None,
-        })
+            // xrpl-rust's Secp256k1::sign hashes with SHA512-half internally.
+            // The key format expected is "00"-prefixed uppercase hex (secp256k1 convention).
+            let privkey_hex = format!("00{}", hex::encode_upper(private_key));
+            let sig_bytes = XrplSecp256k1
+                .sign(&prefixed, &privkey_hex)
+                .map_err(|e| SignerError::SigningFailed(e.to_string()))?;
+
+            Ok(SignOutput {
+                signature: sig_bytes,
+                recovery_id: None,
+                public_key: None,
+            })
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let digest = sha512_half(&prefixed);
+            self.sign(private_key, &digest)
+        }
     }
 
     /// Encode a fully-signed XRPL transaction ready for broadcast.
@@ -132,19 +156,33 @@ impl ChainSigner for XrplSigner {
         tx_bytes: &[u8],
         signature: &SignOutput,
     ) -> Result<Vec<u8>, SignerError> {
-        // Convert binary bytes to hex string for xrpl_decode.
-        let tx_hex = hex::encode_upper(tx_bytes);
-        let mut json_tx = xrpl_decode(&tx_hex)
-            .map_err(|e| SignerError::InvalidTransaction(format!("xrpl decode failed: {}", e)))?;
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (tx_bytes, signature);
+            return Err(SignerError::InvalidTransaction(
+                "XRPL transaction encoding is not supported in wasm".into(),
+            ));
+        }
 
-        json_tx["TxnSignature"] =
-            serde_json::Value::String(hex::encode_upper(&signature.signature));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Convert binary bytes to hex string for xrpl_decode.
+            let tx_hex = hex::encode_upper(tx_bytes);
+            let mut json_tx = xrpl_decode(&tx_hex).map_err(|e| {
+                SignerError::InvalidTransaction(format!("xrpl decode failed: {}", e))
+            })?;
 
-        let hex_encoded = xrpl_encode(&json_tx)
-            .map_err(|e| SignerError::InvalidTransaction(format!("xrpl encode failed: {}", e)))?;
+            json_tx["TxnSignature"] =
+                serde_json::Value::String(hex::encode_upper(&signature.signature));
 
-        hex::decode(&hex_encoded)
-            .map_err(|e| SignerError::InvalidTransaction(format!("invalid hex from encode: {}", e)))
+            let hex_encoded = xrpl_encode(&json_tx).map_err(|e| {
+                SignerError::InvalidTransaction(format!("xrpl encode failed: {}", e))
+            })?;
+
+            hex::decode(&hex_encoded).map_err(|e| {
+                SignerError::InvalidTransaction(format!("invalid hex from encode: {}", e))
+            })
+        }
     }
 
     /// Off-chain message signing is not yet supported for XRPL.
@@ -162,6 +200,27 @@ impl ChainSigner for XrplSigner {
                 .into(),
         ))
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn classic_address(compressed_public_key: &[u8]) -> Result<String, SignerError> {
+    let sha = Sha256::digest(compressed_public_key);
+    let account_id = Ripemd160::digest(sha);
+    let mut payload = Vec::with_capacity(1 + account_id.len());
+    payload.push(0x00);
+    payload.extend_from_slice(&account_id);
+    Ok(bs58::encode(payload)
+        .with_alphabet(bs58::Alphabet::RIPPLE)
+        .with_check()
+        .into_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn sha512_half(data: &[u8]) -> [u8; 32] {
+    use sha2::Sha512;
+
+    let hash = Sha512::digest(data);
+    hash[..32].try_into().expect("sha512 output is 64 bytes")
 }
 
 #[cfg(test)]
