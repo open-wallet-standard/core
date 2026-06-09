@@ -76,6 +76,32 @@ impl Config {
         rpc.insert("nano:mainnet".into(), "https://rpc.nano.to".into());
         rpc.insert("near:mainnet".into(), "https://rpc.mainnet.near.org".into());
         rpc.insert("near:testnet".into(), "https://rpc.testnet.near.org".into());
+        rpc.insert(
+            "atto:live".into(),
+            "https://gatekeeper.live.application.atto.cash".into(),
+        );
+        rpc.insert(
+            "atto:beta".into(),
+            "https://gatekeeper.beta.application.atto.cash".into(),
+        );
+        rpc.insert(
+            "atto:dev".into(),
+            "https://gatekeeper.dev.application.atto.cash".into(),
+        );
+        rpc.insert("atto:local".into(), "".into());
+        rpc.insert(
+            "atto-work:live".into(),
+            "https://gatekeeper.live.application.atto.cash".into(),
+        );
+        rpc.insert(
+            "atto-work:beta".into(),
+            "https://gatekeeper.beta.application.atto.cash".into(),
+        );
+        rpc.insert(
+            "atto-work:dev".into(),
+            "https://gatekeeper.dev.application.atto.cash".into(),
+        );
+        rpc.insert("atto-work:local".into(), "".into());
         rpc.insert("eip155:4217".into(), "https://rpc.tempo.xyz".into());
         rpc.insert(
             "eip155:999".into(),
@@ -224,6 +250,14 @@ mod tests {
             config.rpc_url("eip155:999"),
             Some("https://rpc.hyperliquid.xyz/evm")
         );
+        assert_eq!(
+            config.rpc_url("atto:live"),
+            Some("https://gatekeeper.live.application.atto.cash")
+        );
+        assert_eq!(
+            config.rpc_url("atto-work:live"),
+            Some("https://gatekeeper.live.application.atto.cash")
+        );
     }
 
     #[test]
@@ -266,7 +300,7 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 23);
+        assert_eq!(config.rpc.len(), 31);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
         assert_eq!(
             config.rpc_url("near:mainnet"),

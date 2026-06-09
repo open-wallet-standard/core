@@ -1,3 +1,4 @@
+pub mod atto_rpc;
 pub mod error;
 pub mod key_ops;
 pub mod key_store;

@@ -239,7 +239,7 @@ mod integration_tests {
     fn test_sign_roundtrip_ed25519_chains() {
         let mnemonic = Mnemonic::from_phrase(ABANDON_PHRASE).unwrap();
 
-        for chain in [ChainType::Solana, ChainType::Ton] {
+        for chain in [ChainType::Solana, ChainType::Ton, ChainType::Atto] {
             let signer = signer_for_chain(chain);
             let path = signer.default_derivation_path(0);
             let key =

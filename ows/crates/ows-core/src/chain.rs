@@ -18,10 +18,11 @@ pub enum ChainType {
     Xrpl,
     Nano,
     Near,
+    Atto,
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 12] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 13] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
@@ -34,6 +35,7 @@ pub const ALL_CHAIN_TYPES: [ChainType; 12] = [
     ChainType::Xrpl,
     ChainType::Nano,
     ChainType::Near,
+    ChainType::Atto,
 ];
 
 /// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
@@ -194,6 +196,31 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_id: "near:testnet",
     },
     Chain {
+        name: "atto",
+        chain_type: ChainType::Atto,
+        chain_id: "atto:live",
+    },
+    Chain {
+        name: "atto-live",
+        chain_type: ChainType::Atto,
+        chain_id: "atto:live",
+    },
+    Chain {
+        name: "atto-beta",
+        chain_type: ChainType::Atto,
+        chain_id: "atto:beta",
+    },
+    Chain {
+        name: "atto-dev",
+        chain_type: ChainType::Atto,
+        chain_id: "atto:dev",
+    },
+    Chain {
+        name: "atto-local",
+        chain_type: ChainType::Atto,
+        chain_id: "atto:local",
+    },
+    Chain {
         name: "tempo",
         chain_type: ChainType::Evm,
         chain_id: "eip155:4217",
@@ -267,7 +294,7 @@ pub fn parse_chain(s: &str) -> Result<Chain, String> {
            EVM:     ethereum, base, arbitrum, optimism, polygon, bsc, avalanche, plasma, etherlink\n  \
            Solana:  solana\n  \
            Bitcoin: bitcoin\n  \
-           Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl, nano, near\n\n\
+           Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl, nano, near, atto\n\n\
          Or use a CAIP-2 ID (eip155:8453) or bare EVM chain ID (8453)"
     ))
 }
@@ -293,6 +320,7 @@ impl ChainType {
             ChainType::Xrpl => "xrpl",
             ChainType::Nano => "nano",
             ChainType::Near => "near",
+            ChainType::Atto => "atto",
         }
     }
 
@@ -311,6 +339,7 @@ impl ChainType {
             ChainType::Xrpl => 144,
             ChainType::Nano => 165,
             ChainType::Near => 397,
+            ChainType::Atto => 1_869_902_945,
         }
     }
 
@@ -329,6 +358,7 @@ impl ChainType {
             "xrpl" => Some(ChainType::Xrpl),
             "nano" => Some(ChainType::Nano),
             "near" => Some(ChainType::Near),
+            "atto" => Some(ChainType::Atto),
             _ => None,
         }
     }
@@ -349,6 +379,7 @@ impl fmt::Display for ChainType {
             ChainType::Xrpl => "xrpl",
             ChainType::Nano => "nano",
             ChainType::Near => "near",
+            ChainType::Atto => "atto",
         };
         write!(f, "{}", s)
     }
@@ -371,6 +402,7 @@ impl FromStr for ChainType {
             "xrpl" => Ok(ChainType::Xrpl),
             "nano" => Ok(ChainType::Nano),
             "near" => Ok(ChainType::Near),
+            "atto" => Ok(ChainType::Atto),
             _ => Err(format!("unknown chain type: {}", s)),
         }
     }
@@ -404,6 +436,7 @@ mod tests {
             (ChainType::Xrpl, "\"xrpl\""),
             (ChainType::Nano, "\"nano\""),
             (ChainType::Near, "\"near\""),
+            (ChainType::Atto, "\"atto\""),
         ] {
             let json = serde_json::to_string(&chain).unwrap();
             assert_eq!(json, expected);
@@ -426,6 +459,7 @@ mod tests {
         assert_eq!(ChainType::Xrpl.namespace(), "xrpl");
         assert_eq!(ChainType::Nano.namespace(), "nano");
         assert_eq!(ChainType::Near.namespace(), "near");
+        assert_eq!(ChainType::Atto.namespace(), "atto");
     }
 
     #[test]
@@ -442,6 +476,7 @@ mod tests {
         assert_eq!(ChainType::Xrpl.default_coin_type(), 144);
         assert_eq!(ChainType::Nano.default_coin_type(), 165);
         assert_eq!(ChainType::Near.default_coin_type(), 397);
+        assert_eq!(ChainType::Atto.default_coin_type(), 1_869_902_945);
     }
 
     #[test]
@@ -461,6 +496,7 @@ mod tests {
         assert_eq!(ChainType::from_namespace("xrpl"), Some(ChainType::Xrpl));
         assert_eq!(ChainType::from_namespace("nano"), Some(ChainType::Nano));
         assert_eq!(ChainType::from_namespace("near"), Some(ChainType::Near));
+        assert_eq!(ChainType::from_namespace("atto"), Some(ChainType::Atto));
         assert_eq!(ChainType::from_namespace("unknown"), None);
     }
 
@@ -468,6 +504,7 @@ mod tests {
     fn test_from_str() {
         assert_eq!("evm".parse::<ChainType>().unwrap(), ChainType::Evm);
         assert_eq!("Solana".parse::<ChainType>().unwrap(), ChainType::Solana);
+        assert_eq!("Atto".parse::<ChainType>().unwrap(), ChainType::Atto);
         assert!("unknown".parse::<ChainType>().is_err());
     }
 
@@ -475,6 +512,7 @@ mod tests {
     fn test_display() {
         assert_eq!(ChainType::Evm.to_string(), "evm");
         assert_eq!(ChainType::Bitcoin.to_string(), "bitcoin");
+        assert_eq!(ChainType::Atto.to_string(), "atto");
     }
 
     #[test]
@@ -641,7 +679,7 @@ mod tests {
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 12);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 13);
     }
 
     #[test]
@@ -666,5 +704,27 @@ mod tests {
         let chain = default_chain_for_type(ChainType::Evm);
         assert_eq!(chain.name, "ethereum");
         assert_eq!(chain.chain_id, "eip155:1");
+
+        let atto = default_chain_for_type(ChainType::Atto);
+        assert_eq!(atto.name, "atto");
+        assert_eq!(atto.chain_id, "atto:live");
+    }
+
+    #[test]
+    fn test_parse_chain_atto() {
+        let chain = parse_chain("atto").unwrap();
+        assert_eq!(chain.name, "atto");
+        assert_eq!(chain.chain_type, ChainType::Atto);
+        assert_eq!(chain.chain_id, "atto:live");
+
+        let live = parse_chain("atto-live").unwrap();
+        assert_eq!(live.chain_id, "atto:live");
+
+        let beta = parse_chain("atto-beta").unwrap();
+        assert_eq!(beta.chain_id, "atto:beta");
+
+        let via_caip2 = parse_chain("atto:dev").unwrap();
+        assert_eq!(via_caip2.chain_type, ChainType::Atto);
+        assert_eq!(via_caip2.chain_id, "atto:dev");
     }
 }
