@@ -15,13 +15,14 @@ pub enum ChainType {
     Spark,
     Filecoin,
     Sui,
+    Stacks,
     Xrpl,
     Nano,
     Near,
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 12] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 13] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
@@ -31,6 +32,7 @@ pub const ALL_CHAIN_TYPES: [ChainType; 12] = [
     ChainType::Spark,
     ChainType::Filecoin,
     ChainType::Sui,
+    ChainType::Stacks,
     ChainType::Xrpl,
     ChainType::Nano,
     ChainType::Near,
@@ -164,6 +166,11 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_id: "sui:mainnet",
     },
     Chain {
+        name: "stacks",
+        chain_type: ChainType::Stacks,
+        chain_id: "stacks:1",
+    },
+    Chain {
         name: "xrpl",
         chain_type: ChainType::Xrpl,
         chain_id: "xrpl:mainnet",
@@ -290,6 +297,7 @@ impl ChainType {
             ChainType::Spark => "spark",
             ChainType::Filecoin => "fil",
             ChainType::Sui => "sui",
+            ChainType::Stacks => "stacks",
             ChainType::Xrpl => "xrpl",
             ChainType::Nano => "nano",
             ChainType::Near => "near",
@@ -308,6 +316,7 @@ impl ChainType {
             ChainType::Spark => 8797555,
             ChainType::Filecoin => 461,
             ChainType::Sui => 784,
+            ChainType::Stacks => 5757,
             ChainType::Xrpl => 144,
             ChainType::Nano => 165,
             ChainType::Near => 397,
@@ -326,6 +335,7 @@ impl ChainType {
             "spark" => Some(ChainType::Spark),
             "fil" => Some(ChainType::Filecoin),
             "sui" => Some(ChainType::Sui),
+            "stacks" => Some(ChainType::Stacks),
             "xrpl" => Some(ChainType::Xrpl),
             "nano" => Some(ChainType::Nano),
             "near" => Some(ChainType::Near),
@@ -346,6 +356,7 @@ impl fmt::Display for ChainType {
             ChainType::Spark => "spark",
             ChainType::Filecoin => "filecoin",
             ChainType::Sui => "sui",
+            ChainType::Stacks => "stacks",
             ChainType::Xrpl => "xrpl",
             ChainType::Nano => "nano",
             ChainType::Near => "near",
@@ -368,6 +379,7 @@ impl FromStr for ChainType {
             "spark" => Ok(ChainType::Spark),
             "filecoin" => Ok(ChainType::Filecoin),
             "sui" => Ok(ChainType::Sui),
+            "stacks" => Ok(ChainType::Stacks),
             "xrpl" => Ok(ChainType::Xrpl),
             "nano" => Ok(ChainType::Nano),
             "near" => Ok(ChainType::Near),
@@ -401,6 +413,7 @@ mod tests {
             (ChainType::Spark, "\"spark\""),
             (ChainType::Filecoin, "\"filecoin\""),
             (ChainType::Sui, "\"sui\""),
+            (ChainType::Stacks, "\"stacks\""),
             (ChainType::Xrpl, "\"xrpl\""),
             (ChainType::Nano, "\"nano\""),
             (ChainType::Near, "\"near\""),
@@ -423,6 +436,7 @@ mod tests {
         assert_eq!(ChainType::Spark.namespace(), "spark");
         assert_eq!(ChainType::Filecoin.namespace(), "fil");
         assert_eq!(ChainType::Sui.namespace(), "sui");
+        assert_eq!(ChainType::Stacks.namespace(), "stacks");
         assert_eq!(ChainType::Xrpl.namespace(), "xrpl");
         assert_eq!(ChainType::Nano.namespace(), "nano");
         assert_eq!(ChainType::Near.namespace(), "near");
@@ -439,6 +453,7 @@ mod tests {
         assert_eq!(ChainType::Spark.default_coin_type(), 8797555);
         assert_eq!(ChainType::Filecoin.default_coin_type(), 461);
         assert_eq!(ChainType::Sui.default_coin_type(), 784);
+        assert_eq!(ChainType::Stacks.default_coin_type(), 5757);
         assert_eq!(ChainType::Xrpl.default_coin_type(), 144);
         assert_eq!(ChainType::Nano.default_coin_type(), 165);
         assert_eq!(ChainType::Near.default_coin_type(), 397);
@@ -458,6 +473,7 @@ mod tests {
         assert_eq!(ChainType::from_namespace("spark"), Some(ChainType::Spark));
         assert_eq!(ChainType::from_namespace("fil"), Some(ChainType::Filecoin));
         assert_eq!(ChainType::from_namespace("sui"), Some(ChainType::Sui));
+        assert_eq!(ChainType::from_namespace("stacks"), Some(ChainType::Stacks));
         assert_eq!(ChainType::from_namespace("xrpl"), Some(ChainType::Xrpl));
         assert_eq!(ChainType::from_namespace("nano"), Some(ChainType::Nano));
         assert_eq!(ChainType::from_namespace("near"), Some(ChainType::Near));
@@ -641,7 +657,7 @@ mod tests {
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 12);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 13);
     }
 
     #[test]
