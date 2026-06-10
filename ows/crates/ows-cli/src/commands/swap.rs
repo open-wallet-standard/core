@@ -62,6 +62,39 @@ pub fn quote(args: QuoteArgs) -> Result<(), CliError> {
         .map_err(|e| CliError::InvalidArgs(format!("invalid amount: {e}")))?;
 
     let lifi_to = ows_chain_to_lifi(to_chain);
+
+    // Validate chain mappings before making API call
+    if lifi_from.is_empty() {
+        return Err(CliError::InvalidArgs(format!(
+            "unsupported from-chain: '{}'. Supported: ethereum, polygon, base, arbitrum, optimism, avalanche, bsc, solana",
+            from_chain
+        )));
+    }
+    if lifi_to.is_empty() {
+        return Err(CliError::InvalidArgs(format!(
+            "unsupported to-chain: '{}'. Supported: ethereum, polygon, base, arbitrum, optimism, avalanche, bsc, solana",
+            to_chain
+        )));
+    }
+
+    // For cross-VM swaps, supply the destination chain address too
+    let is_to_solana = to_chain.to_lowercase().contains("solana") || lifi_to == "1151111081099592";
+    let to_address = if is_to_solana && !is_solana {
+        wallet
+            .accounts
+            .iter()
+            .find(|a| a.chain_id.starts_with("solana:"))
+            .map(|a| a.address.clone())
+    } else if !is_to_solana && is_solana {
+        wallet
+            .accounts
+            .iter()
+            .find(|a| a.chain_id.starts_with("eip155:"))
+            .map(|a| a.address.clone())
+    } else {
+        None
+    };
+
     let params = ows_pay::SwapParams {
         from_chain: lifi_from.to_string(),
         to_chain: lifi_to.to_string(),
@@ -69,6 +102,7 @@ pub fn quote(args: QuoteArgs) -> Result<(), CliError> {
         to_token: to_token.to_string(),
         from_amount: raw_amount,
         from_address,
+        to_address,
         slippage,
         order: order.to_string(),
     };
@@ -172,6 +206,6 @@ fn ows_chain_to_lifi(chain: &str) -> &'static str {
         "avalanche" | "avax" => "43114",
         "bsc" | "bnb" => "56",
         "solana" | "sol" => "1151111081099592",
-        _ => "unknown",
+        _ => "",
     }
 }

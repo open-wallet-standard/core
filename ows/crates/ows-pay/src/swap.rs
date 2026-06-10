@@ -107,6 +107,7 @@ pub struct SwapParams {
     pub to_token: String,
     pub from_amount: String,
     pub from_address: String,
+    pub to_address: Option<String>,
     pub slippage: f64,
     pub order: String,
 }
@@ -115,7 +116,7 @@ pub struct SwapParams {
 pub async fn get_quote(params: &SwapParams) -> Result<LifiQuote, PayError> {
     let client = reqwest::Client::new();
 
-    let url = format!(
+    let mut url = format!(
         "{}/quote?fromChain={}&toChain={}&fromToken={}&toToken={}&fromAmount={}&fromAddress={}&slippage={}&order={}",
         LIFI_API,
         params.from_chain,
@@ -127,6 +128,9 @@ pub async fn get_quote(params: &SwapParams) -> Result<LifiQuote, PayError> {
         params.slippage,
         params.order,
     );
+    if let Some(ref to_addr) = params.to_address {
+        url.push_str(&format!("&toAddress={to_addr}"));
+    }
 
     let resp = client
         .get(&url)
@@ -139,7 +143,11 @@ pub async fn get_quote(params: &SwapParams) -> Result<LifiQuote, PayError> {
         let status = resp.status().as_u16();
         // Truncate body to avoid logging full third-party payloads
         let body = resp.text().await.unwrap_or_default();
-        let truncated = if body.len() > 120 { &body[..120] } else { &body };
+        let truncated = if body.len() > 120 {
+            &body[..120]
+        } else {
+            &body
+        };
         return Err(PayError::new(
             crate::error::PayErrorCode::HttpStatus,
             format!("LI.FI API error {status}: {truncated}"),
