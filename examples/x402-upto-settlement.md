@@ -23,7 +23,7 @@ Get test USDC on Base Sepolia: https://faucet.circle.com
 
 ## Making a upto Payment
 
-x402 payments run through the CLI via :
+x402 payments run through the CLI via `ows pay request`:
 
     # Make a paid request to an x402-enabled endpoint
     ows pay request https://api.example.com/summarize
@@ -48,8 +48,8 @@ Output includes the settled amount and transaction details.
 After each payment, track authorized / settled / released amounts.
 This belongs in your app layer, not in OWS itself.
 
-See  for a runnable Node.js script
-that shells out to  and tracks per-session accounting.
+See `examples/x402-upto-settlement.js` for a runnable Node.js script
+that shells out to `ows pay request` and tracks per-session accounting.
 
 ## OWS vs App Layer Boundary
 

@@ -9,7 +9,7 @@
  *   node examples/x402-upto-settlement.js
  */
 
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 
 const WALLET = process.env.OWS_WALLET || "agent-treasury";
 
@@ -37,13 +37,13 @@ class UptoBillingTracker {
 
 function owsPay(url, method, body) {
   const args = [
-    "ows", "pay", "request",
+    "pay", "request",
     "--wallet", WALLET,
     "--method", method,
     url,
   ];
   if (body) { args.push("--body", body); }
-  return execSync(args.join(" "), { encoding: "utf8" });
+  return execFileSync("ows", args, { encoding: "utf8" });
 }
 
 const tracker = new UptoBillingTracker();
@@ -57,8 +57,7 @@ console.log("Wallet:", WALLET);
 console.log("-".repeat(50));
 
 for (const task of tasks) {
-  console.log("
-[" + task.id + "] " + task.url);
+  console.log(`\n[${task.id}] ${task.url}`);
   try {
     const output = owsPay(task.url, task.method, task.body);
     const acc = tracker.record(task.id, task.maxAmount, output);
@@ -71,8 +70,7 @@ for (const task of tasks) {
 }
 
 const s = tracker.summary();
-console.log("
-" + "=".repeat(50));
+console.log("\n" + "=".repeat(50));
 console.log("Total authorized : $" + s.totalAuthorized.toFixed(4));
 console.log("Total settled    : $" + s.totalSettled.toFixed(4));
 console.log("Total released   : $" + s.totalReleased.toFixed(4));
