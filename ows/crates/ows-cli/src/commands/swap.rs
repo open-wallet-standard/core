@@ -32,6 +32,22 @@ pub fn quote(args: QuoteArgs) -> Result<(), CliError> {
     // Find EVM address for the from_chain
     // Determine chain prefix for address lookup
     let lifi_from = ows_chain_to_lifi(from_chain);
+    let lifi_to = ows_chain_to_lifi(to_chain);
+
+    // Validate chain mappings before making API call
+    if lifi_from.is_empty() {
+        return Err(CliError::InvalidArgs(format!(
+            "unsupported from-chain: '{}'. Supported: ethereum, polygon, base, arbitrum, optimism, avalanche, bsc, solana",
+            from_chain
+        )));
+    }
+    if lifi_to.is_empty() {
+        return Err(CliError::InvalidArgs(format!(
+            "unsupported to-chain: '{}'. Supported: ethereum, polygon, base, arbitrum, optimism, avalanche, bsc, solana",
+            to_chain
+        )));
+    }
+
     let is_solana = lifi_from == "1151111081099592";
     let from_address = if is_solana {
         wallet
@@ -60,22 +76,6 @@ pub fn quote(args: QuoteArgs) -> Result<(), CliError> {
     };
     let raw_amount = amount_to_raw(amount, decimals_guess)
         .map_err(|e| CliError::InvalidArgs(format!("invalid amount: {e}")))?;
-
-    let lifi_to = ows_chain_to_lifi(to_chain);
-
-    // Validate chain mappings before making API call
-    if lifi_from.is_empty() {
-        return Err(CliError::InvalidArgs(format!(
-            "unsupported from-chain: '{}'. Supported: ethereum, polygon, base, arbitrum, optimism, avalanche, bsc, solana",
-            from_chain
-        )));
-    }
-    if lifi_to.is_empty() {
-        return Err(CliError::InvalidArgs(format!(
-            "unsupported to-chain: '{}'. Supported: ethereum, polygon, base, arbitrum, optimism, avalanche, bsc, solana",
-            to_chain
-        )));
-    }
 
     // For cross-VM swaps, supply the destination chain address too
     let is_to_solana = lifi_to == "1151111081099592";
