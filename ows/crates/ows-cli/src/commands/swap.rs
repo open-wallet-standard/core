@@ -202,10 +202,12 @@ fn ows_chain_to_lifi(chain: &str) -> String {
     let stripped = if let Some(rest) = lower.strip_prefix("eip155:") {
         rest.to_string()
     } else if let Some(rest) = lower.strip_prefix("solana:") {
-        if rest == "mainnet" {
+        // Only solana:mainnet is a valid Solana CAIP-2 reference
+        if rest == "mainnet" || rest == "5eykt4usfpcqjnphnnpqzakosqkp" {
             return "1151111081099592".to_string();
         }
-        rest.to_string()
+        // Any other solana:<ref> is invalid — return empty to trigger validation error
+        return String::new();
     } else {
         lower.clone()
     };
