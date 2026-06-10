@@ -137,10 +137,12 @@ pub async fn get_quote(params: &SwapParams) -> Result<LifiQuote, PayError> {
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
+        // Truncate body to avoid logging full third-party payloads
         let body = resp.text().await.unwrap_or_default();
+        let truncated = if body.len() > 120 { &body[..120] } else { &body };
         return Err(PayError::new(
             crate::error::PayErrorCode::HttpStatus,
-            format!("LI.FI API error {status}: {body}"),
+            format!("LI.FI API error {status}: {truncated}"),
         ));
     }
 

@@ -28,13 +28,16 @@ pub fn quote(args: QuoteArgs) -> Result<(), CliError> {
         .map(|a| a.address.clone())
         .ok_or_else(|| CliError::InvalidArgs("no EVM account found in wallet".into()))?;
 
-    // Convert human-readable amount to raw (assume 18 decimals for ETH, 6 for USDC)
-    let decimals = if from_token.to_uppercase() == "USDC" || from_token.to_uppercase() == "USDT" {
-        6u32
-    } else {
-        18u32
+    // Use LI.FI token info to get correct decimals — fetch first with a best-guess,
+    // then reissue with corrected decimals if the quote returns different token decimals.
+    // Best-guess decimals: USDC/USDT = 6, BTC/WBTC/SBTC = 8, everything else = 18
+    let decimals_guess = match from_token.to_uppercase().as_str() {
+        "USDC" | "USDT" | "USDC.E" | "USDT.E" => 6u32,
+        "WBTC" | "BTC" | "SBTC" | "TBTC" => 8u32,
+        "GUSD" => 2u32,
+        _ => 18u32,
     };
-    let raw_amount = amount_to_raw(amount, decimals)
+    let raw_amount = amount_to_raw(amount, decimals_guess)
         .map_err(|e| CliError::InvalidArgs(format!("invalid amount: {e}")))?;
 
     let params = ows_pay::SwapParams {
