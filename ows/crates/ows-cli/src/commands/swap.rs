@@ -32,7 +32,7 @@ pub fn quote(args: QuoteArgs) -> Result<(), CliError> {
     // Find EVM address for the from_chain
     // Determine chain prefix for address lookup
     let lifi_from = ows_chain_to_lifi(from_chain);
-    let is_solana = from_chain.to_lowercase().contains("solana") || lifi_from == "1151111081099592";
+    let is_solana = lifi_from == "1151111081099592";
     let from_address = if is_solana {
         wallet
             .accounts
@@ -78,7 +78,7 @@ pub fn quote(args: QuoteArgs) -> Result<(), CliError> {
     }
 
     // For cross-VM swaps, supply the destination chain address too
-    let is_to_solana = to_chain.to_lowercase().contains("solana") || lifi_to == "1151111081099592";
+    let is_to_solana = lifi_to == "1151111081099592";
     let to_address = if is_to_solana && !is_solana {
         wallet
             .accounts

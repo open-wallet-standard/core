@@ -137,7 +137,12 @@ pub async fn get_quote(params: &SwapParams) -> Result<LifiQuote, PayError> {
         .header("Accept", "application/json")
         .send()
         .await
-        .map_err(|e| PayError::new(crate::error::PayErrorCode::HttpTransport, e.to_string()))?;
+        .map_err(|_| {
+            PayError::new(
+                crate::error::PayErrorCode::HttpTransport,
+                "failed to connect to LI.FI API".to_string(),
+            )
+        })?;
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
