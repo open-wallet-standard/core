@@ -196,16 +196,32 @@ fn amount_to_raw(amount: &str, decimals: u32) -> Result<String, String> {
 }
 
 /// Map OWS chain names to LI.FI chain identifiers.
-fn ows_chain_to_lifi(chain: &str) -> &'static str {
-    match chain.to_lowercase().as_str() {
-        "ethereum" | "eth" => "1",
-        "polygon" | "pol" | "matic" => "137",
-        "base" => "8453",
-        "arbitrum" | "arb" => "42161",
-        "optimism" | "op" => "10",
-        "avalanche" | "avax" => "43114",
-        "bsc" | "bnb" => "56",
-        "solana" | "sol" => "1151111081099592",
-        _ => "",
+fn ows_chain_to_lifi(chain: &str) -> String {
+    let lower = chain.to_lowercase();
+    // Strip CAIP-2 prefix (eip155:8453 -> 8453)
+    let stripped = if let Some(rest) = lower.strip_prefix("eip155:") {
+        rest.to_string()
+    } else if let Some(rest) = lower.strip_prefix("solana:") {
+        if rest == "mainnet" {
+            return "1151111081099592".to_string();
+        }
+        rest.to_string()
+    } else {
+        lower.clone()
+    };
+    // If it is already a numeric ID, pass through
+    if stripped.chars().all(|c| c.is_ascii_digit()) {
+        return stripped;
+    }
+    match stripped.as_str() {
+        "ethereum" | "eth" => "1".to_string(),
+        "polygon" | "pol" | "matic" => "137".to_string(),
+        "base" => "8453".to_string(),
+        "arbitrum" | "arb" => "42161".to_string(),
+        "optimism" | "op" => "10".to_string(),
+        "avalanche" | "avax" => "43114".to_string(),
+        "bsc" | "bnb" => "56".to_string(),
+        "solana" | "sol" => "1151111081099592".to_string(),
+        _ => String::new(),
     }
 }
