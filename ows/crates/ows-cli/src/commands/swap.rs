@@ -13,7 +13,16 @@ pub struct QuoteArgs<'a> {
 }
 
 pub fn quote(args: QuoteArgs) -> Result<(), CliError> {
-    let QuoteArgs { wallet_name, from_token, to_token, amount, from_chain, to_chain, slippage, order } = args;
+    let QuoteArgs {
+        wallet_name,
+        from_token,
+        to_token,
+        amount,
+        from_chain,
+        to_chain,
+        slippage,
+        order,
+    } = args;
     let to_chain = to_chain.unwrap_or(from_chain);
 
     // Load wallet to get address
@@ -21,12 +30,24 @@ pub fn quote(args: QuoteArgs) -> Result<(), CliError> {
         .map_err(|e| CliError::InvalidArgs(format!("wallet not found: {e}")))?;
 
     // Find EVM address for the from_chain
-    let from_address = wallet
-        .accounts
-        .iter()
-        .find(|a| a.chain_id.starts_with("eip155:"))
-        .map(|a| a.address.clone())
-        .ok_or_else(|| CliError::InvalidArgs("no EVM account found in wallet".into()))?;
+    // Determine chain prefix for address lookup
+    let lifi_from = ows_chain_to_lifi(from_chain);
+    let is_solana = from_chain.to_lowercase().contains("solana") || lifi_from == "1151111081099592";
+    let from_address = if is_solana {
+        wallet
+            .accounts
+            .iter()
+            .find(|a| a.chain_id.starts_with("solana:"))
+            .map(|a| a.address.clone())
+            .ok_or_else(|| CliError::InvalidArgs("no Solana account found in wallet".into()))?
+    } else {
+        wallet
+            .accounts
+            .iter()
+            .find(|a| a.chain_id.starts_with("eip155:"))
+            .map(|a| a.address.clone())
+            .ok_or_else(|| CliError::InvalidArgs("no EVM account found in wallet".into()))?
+    };
 
     // Use LI.FI token info to get correct decimals — fetch first with a best-guess,
     // then reissue with corrected decimals if the quote returns different token decimals.
@@ -40,9 +61,10 @@ pub fn quote(args: QuoteArgs) -> Result<(), CliError> {
     let raw_amount = amount_to_raw(amount, decimals_guess)
         .map_err(|e| CliError::InvalidArgs(format!("invalid amount: {e}")))?;
 
+    let lifi_to = ows_chain_to_lifi(to_chain);
     let params = ows_pay::SwapParams {
-        from_chain: from_chain.to_string(),
-        to_chain: to_chain.to_string(),
+        from_chain: lifi_from.to_string(),
+        to_chain: lifi_to.to_string(),
         from_token: from_token.to_string(),
         to_token: to_token.to_string(),
         from_amount: raw_amount,
@@ -136,5 +158,20 @@ fn amount_to_raw(amount: &str, decimals: u32) -> Result<String, String> {
         Ok("0".into())
     } else {
         Ok(trimmed.to_string())
+    }
+}
+
+/// Map OWS chain names to LI.FI chain identifiers.
+fn ows_chain_to_lifi(chain: &str) -> &'static str {
+    match chain.to_lowercase().as_str() {
+        "ethereum" | "eth" => "1",
+        "polygon" | "pol" | "matic" => "137",
+        "base" => "8453",
+        "arbitrum" | "arb" => "42161",
+        "optimism" | "op" => "10",
+        "avalanche" | "avax" => "43114",
+        "bsc" | "bnb" => "56",
+        "solana" | "sol" => "1151111081099592",
+        _ => "unknown",
     }
 }
