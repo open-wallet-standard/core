@@ -700,5 +700,4 @@ mod tests {
         let chain = parse_chain("84532").unwrap();
         assert_eq!(chain.chain_id, "eip155:84532");
     }
-
 }
