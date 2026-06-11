@@ -24,13 +24,14 @@ curl -fsSL https://docs.openwallet.sh/install.sh | bash
 Or install only what you need:
 
 ```bash
-npm install @open-wallet-standard/core    # Node.js SDK
-npm install -g @open-wallet-standard/core # Node.js SDK + CLI (provides `ows` command)
+npm install @open-wallet-standard/core     # Node.js SDK
+npm install -g @open-wallet-standard/core  # Node.js SDK + CLI (provides `ows` command)
+npm install @open-wallet-standard/adapters # Framework adapters (viem, Solana, WDK)
 pip install open-wallet-standard           # Python
 cd ows && cargo build --workspace --release # From source
 ```
 
-The language bindings are **fully self-contained** — they embed the Rust core via native FFI. Installing globally with `-g` also provides the `ows` CLI.
+The language bindings are **fully self-contained** — they embed the Rust core via native FFI. Installing globally with `-g` also provides the `ows` CLI. The [`@open-wallet-standard/adapters`](https://www.npmjs.com/package/@open-wallet-standard/adapters) package plugs an OWS wallet into viem, `@solana/web3.js`, and the Tether WDK.
 
 ## Quick Start
 

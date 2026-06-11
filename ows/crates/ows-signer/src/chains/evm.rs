@@ -38,6 +38,145 @@ impl EvmSigner {
             .map_err(|_| SignerError::InvalidPrivateKey("key parsing failed".into()))
     }
 
+    fn parse_quantity_bytes(
+        value: &str,
+        field: &str,
+        max_len: usize,
+    ) -> Result<Vec<u8>, SignerError> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(SignerError::InvalidMessage(format!(
+                "{field} cannot be empty"
+            )));
+        }
+
+        let bytes = if let Some(hex_value) = trimmed
+            .strip_prefix("0x")
+            .or_else(|| trimmed.strip_prefix("0X"))
+        {
+            if hex_value.is_empty() {
+                Vec::new()
+            } else {
+                let normalized = if hex_value.len() % 2 == 0 {
+                    hex_value.to_string()
+                } else {
+                    format!("0{hex_value}")
+                };
+                let decoded = hex::decode(&normalized).map_err(|e| {
+                    SignerError::InvalidMessage(format!("invalid {field} hex value: {e}"))
+                })?;
+                let first_nonzero = decoded
+                    .iter()
+                    .position(|byte| *byte != 0)
+                    .unwrap_or(decoded.len());
+                decoded[first_nonzero..].to_vec()
+            }
+        } else {
+            // A decimal number fitting in `max_len` bytes has at most
+            // ceil(max_len * log10(256)) ≈ max_len * 2.41 digits.
+            // We use 3 * max_len + 1 as a conservative upper bound to
+            // reject impossibly large inputs before the O(n·m) conversion.
+            let max_digits = max_len * 3 + 1;
+            if trimmed.len() > max_digits {
+                return Err(SignerError::InvalidMessage(format!(
+                    "{field} exceeds {max_len} bytes"
+                )));
+            }
+            Self::parse_decimal_bytes(trimmed, field)?
+        };
+
+        if bytes.len() > max_len {
+            return Err(SignerError::InvalidMessage(format!(
+                "{field} exceeds {max_len} bytes"
+            )));
+        }
+
+        Ok(bytes)
+    }
+
+    fn parse_decimal_bytes(value: &str, field: &str) -> Result<Vec<u8>, SignerError> {
+        if !value.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(SignerError::InvalidMessage(format!(
+                "{field} must be decimal digits or 0x-prefixed hex"
+            )));
+        }
+
+        let value = value.trim_start_matches('0');
+        if value.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut bytes = Vec::<u8>::new();
+        for digit in value.bytes().map(|b| (b - b'0') as u32) {
+            let mut carry = digit;
+            for byte in bytes.iter_mut().rev() {
+                let acc = (*byte as u32) * 10 + carry;
+                *byte = (acc & 0xff) as u8;
+                carry = acc >> 8;
+            }
+            while carry > 0 {
+                bytes.insert(0, (carry & 0xff) as u8);
+                carry >>= 8;
+            }
+        }
+
+        Ok(bytes)
+    }
+
+    fn parse_address_bytes(address: &str) -> Result<[u8; 20], SignerError> {
+        let address = address
+            .strip_prefix("0x")
+            .or_else(|| address.strip_prefix("0X"))
+            .unwrap_or(address);
+        let decoded = hex::decode(address).map_err(|e| {
+            SignerError::InvalidMessage(format!("invalid authorization address: {e}"))
+        })?;
+        decoded.try_into().map_err(|_| {
+            SignerError::InvalidMessage(
+                "authorization address must be exactly 20 bytes".to_string(),
+            )
+        })
+    }
+
+    /// Build the EIP-7702 authorization preimage: `0x05 || rlp([chain_id, address, nonce])`.
+    pub fn authorization_payload(
+        &self,
+        chain_id: &str,
+        address: &str,
+        nonce: &str,
+    ) -> Result<Vec<u8>, SignerError> {
+        let chain_id = Self::parse_quantity_bytes(chain_id, "chain_id", 32)?;
+        let address = Self::parse_address_bytes(address)?;
+        let nonce = Self::parse_quantity_bytes(nonce, "nonce", 8)?;
+
+        let items = [
+            crate::rlp::encode_bytes(&chain_id),
+            crate::rlp::encode_bytes(&address),
+            crate::rlp::encode_bytes(&nonce),
+        ]
+        .concat();
+
+        let mut payload = Vec::with_capacity(1 + items.len());
+        payload.push(0x05);
+        payload.extend_from_slice(&crate::rlp::encode_list(&items));
+        Ok(payload)
+    }
+
+    /// Compute the EIP-7702 authorization digest:
+    /// `keccak256(0x05 || rlp([chain_id, address, nonce]))`.
+    pub fn authorization_hash(
+        &self,
+        chain_id: &str,
+        address: &str,
+        nonce: &str,
+    ) -> Result<[u8; 32], SignerError> {
+        let payload = self.authorization_payload(chain_id, address, nonce)?;
+        let digest = Keccak256::digest(&payload);
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&digest);
+        Ok(hash)
+    }
+
     /// Sign EIP-712 typed structured data.
     pub fn sign_typed_data(
         &self,
@@ -232,6 +371,51 @@ mod tests {
         let signer = EvmSigner;
         let result = signer.sign_message(&privkey, b"Hello World").unwrap();
         assert_eq!(result.signature.len(), 65);
+    }
+
+    #[test]
+    fn test_oversized_decimal_nonce_rejected_early() {
+        let signer = EvmSigner;
+        // A nonce string far exceeding u64 range should be rejected, not churn CPU.
+        let huge_nonce = "9".repeat(10_000);
+        let err = signer
+            .authorization_payload(
+                "8453",
+                "0x1111111111111111111111111111111111111111",
+                &huge_nonce,
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("exceeds"),
+            "expected size error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_authorization_payload_uses_magic_byte_and_rlp_tuple() {
+        let signer = EvmSigner;
+        let payload = signer
+            .authorization_payload("0", "0x1111111111111111111111111111111111111111", "0")
+            .unwrap();
+
+        assert_eq!(
+            hex::encode(payload),
+            "05d78094111111111111111111111111111111111111111180"
+        );
+    }
+
+    #[test]
+    fn test_authorization_hash_is_keccak_of_authorization_payload() {
+        let signer = EvmSigner;
+        let payload = signer
+            .authorization_payload("8453", "0x1111111111111111111111111111111111111111", "7")
+            .unwrap();
+        let hash = signer
+            .authorization_hash("8453", "0x1111111111111111111111111111111111111111", "7")
+            .unwrap();
+
+        let expected = Keccak256::digest(&payload);
+        assert_eq!(hash.as_slice(), expected.as_slice());
     }
 
     #[test]

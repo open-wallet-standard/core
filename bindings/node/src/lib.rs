@@ -269,6 +269,58 @@ pub fn sign_typed_data(
     .map_err(map_err)
 }
 
+/// Sign a raw 32-byte hash on a secp256k1-backed chain. Returns hex-encoded signature.
+#[napi]
+pub fn sign_hash(
+    wallet: String,
+    chain: String,
+    hash_hex: String,
+    passphrase: Option<String>,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> Result<SignResult> {
+    ows_lib::sign_hash(
+        &wallet,
+        &chain,
+        &hash_hex,
+        passphrase.as_deref(),
+        index,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map(|r| SignResult {
+        signature: r.signature,
+        recovery_id: r.recovery_id.map(|v| v as u32),
+    })
+    .map_err(map_err)
+}
+
+/// Sign an EIP-7702 authorization tuple. Returns hex-encoded signature.
+#[napi]
+pub fn sign_authorization(
+    wallet: String,
+    chain: String,
+    address: String,
+    nonce: String,
+    passphrase: Option<String>,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> Result<SignResult> {
+    ows_lib::sign_authorization(
+        &wallet,
+        &chain,
+        &address,
+        &nonce,
+        passphrase.as_deref(),
+        index,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map(|r| SignResult {
+        signature: r.signature,
+        recovery_id: r.recovery_id.map(|v| v as u32),
+    })
+    .map_err(map_err)
+}
+
 // ---------------------------------------------------------------------------
 // Policy management
 // ---------------------------------------------------------------------------
@@ -285,9 +337,8 @@ pub fn create_policy(policy_json: String, vault_path_opt: Option<String>) -> Res
 /// List all registered policies.
 #[napi]
 pub fn list_policies(vault_path_opt: Option<String>) -> Result<Vec<serde_json::Value>> {
-    let policies =
-        ows_lib::policy_store::list_policies(vault_path(vault_path_opt).as_deref())
-            .map_err(map_err)?;
+    let policies = ows_lib::policy_store::list_policies(vault_path(vault_path_opt).as_deref())
+        .map_err(map_err)?;
     policies
         .iter()
         .map(|p| serde_json::to_value(p).map_err(|e| napi::Error::from_reason(e.to_string())))
@@ -297,9 +348,8 @@ pub fn list_policies(vault_path_opt: Option<String>) -> Result<Vec<serde_json::V
 /// Get a single policy by ID.
 #[napi]
 pub fn get_policy(id: String, vault_path_opt: Option<String>) -> Result<serde_json::Value> {
-    let policy =
-        ows_lib::policy_store::load_policy(&id, vault_path(vault_path_opt).as_deref())
-            .map_err(map_err)?;
+    let policy = ows_lib::policy_store::load_policy(&id, vault_path(vault_path_opt).as_deref())
+        .map_err(map_err)?;
     serde_json::to_value(&policy).map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
@@ -355,14 +405,13 @@ pub fn create_api_key(
 /// List all API keys (tokens are never returned).
 #[napi]
 pub fn list_api_keys(vault_path_opt: Option<String>) -> Result<Vec<serde_json::Value>> {
-    let keys =
-        ows_lib::key_store::list_api_keys(vault_path(vault_path_opt).as_deref())
-            .map_err(map_err)?;
+    let keys = ows_lib::key_store::list_api_keys(vault_path(vault_path_opt).as_deref())
+        .map_err(map_err)?;
     keys.iter()
         .map(|k| {
             // Strip wallet_secrets from the output — never expose encrypted material
-            let mut v = serde_json::to_value(k)
-                .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+            let mut v =
+                serde_json::to_value(k).map_err(|e| napi::Error::from_reason(e.to_string()))?;
             v.as_object_mut().map(|m| m.remove("wallet_secrets"));
             Ok(v)
         })
@@ -372,8 +421,7 @@ pub fn list_api_keys(vault_path_opt: Option<String>) -> Result<Vec<serde_json::V
 /// Revoke (delete) an API key by ID.
 #[napi]
 pub fn revoke_api_key(id: String, vault_path_opt: Option<String>) -> Result<()> {
-    ows_lib::key_store::delete_api_key(&id, vault_path(vault_path_opt).as_deref())
-        .map_err(map_err)
+    ows_lib::key_store::delete_api_key(&id, vault_path(vault_path_opt).as_deref()).map_err(map_err)
 }
 
 /// Sign and broadcast a transaction. Returns the transaction hash.
