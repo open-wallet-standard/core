@@ -4,10 +4,17 @@ use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::SigningKey;
 use k256::PublicKey;
 use ows_core::ChainType;
+use sha2::{Digest, Sha512};
 use xrpl::core::binarycodec::{decode as xrpl_decode, encode as xrpl_encode};
-use xrpl::core::keypairs::{
-    derive_classic_address, CryptoImplementation, Secp256k1 as XrplSecp256k1,
-};
+use xrpl::core::keypairs::derive_classic_address;
+
+/// XRPL hash: the first 32 bytes of SHA-512 ("SHA512Half").
+fn sha512_half(data: &[u8]) -> [u8; 32] {
+    let hash = Sha512::digest(data);
+    hash[..32]
+        .try_into()
+        .expect("SHA-512 output is always 64 bytes")
+}
 
 /// XRPL chain signer (secp256k1).
 ///
@@ -77,11 +84,11 @@ impl ChainSigner for XrplSigner {
     /// `encode(tx)` — the serialized transaction fields with no hash prefix.
     ///
     /// Internally prepends the XRPL single-signing prefix `STX\0` (0x53545800),
-    /// then delegates to `xrpl::core::keypairs::Secp256k1::sign` which computes
-    /// SHA512-half and produces a DER-encoded secp256k1 signature.
+    /// computes the SHA512-half digest, and signs it with secp256k1 (k256) to
+    /// produce a DER-encoded signature.
     ///
-    /// Returns a `SignOutput` with the DER signature and the compressed public key
-    /// (33 bytes), both required by `encode_signed_transaction`.
+    /// Returns a `SignOutput` carrying the DER signature; the `SigningPubKey` is
+    /// already embedded in `tx_bytes`, so no public key is returned here.
     fn sign_transaction(
         &self,
         private_key: &[u8],
@@ -93,28 +100,18 @@ impl ChainSigner for XrplSigner {
             ));
         }
 
-        // Validate private key before signing.
-        SigningKey::from_slice(private_key)
-            .map_err(|e| SignerError::InvalidPrivateKey(e.to_string()))?;
-
-        // STX\0 (0x53545800) is the XRPL single-signing hash prefix. It is prepended
-        // to the serialized fields before SHA512-half, matching the XRPL signing spec.
+        // STX\0 (0x53545800) is the XRPL single-signing hash prefix, prepended to
+        // the serialized fields before the SHA512-half digest that gets signed.
         let mut prefixed = Vec::with_capacity(4 + tx_bytes.len());
         prefixed.extend_from_slice(&[0x53, 0x54, 0x58, 0x00]);
         prefixed.extend_from_slice(tx_bytes);
 
-        // xrpl-rust's Secp256k1::sign hashes with SHA512-half internally.
-        // The key format expected is "00"-prefixed uppercase hex (secp256k1 convention).
-        let privkey_hex = format!("00{}", hex::encode_upper(private_key));
-        let sig_bytes = XrplSecp256k1
-            .sign(&prefixed, &privkey_hex)
-            .map_err(|e| SignerError::SigningFailed(e.to_string()))?;
-
-        Ok(SignOutput {
-            signature: sig_bytes,
-            recovery_id: None,
-            public_key: None,
-        })
+        // Sign the SHA512-half digest directly with k256 (low-S, DER), the same path
+        // as `sign`. We deliberately do not route through xrpl-rust's keypair signer:
+        // it trims a leading "00" off the key hex, which also strips a leading zero
+        // byte of the scalar and corrupts roughly 1 in 256 keys into InvalidSecretKey.
+        let digest = sha512_half(&prefixed);
+        self.sign(private_key, &digest)
     }
 
     /// Encode a fully-signed XRPL transaction ready for broadcast.
@@ -169,15 +166,6 @@ mod tests {
     use super::*;
     use crate::hd::HdDeriver;
     use crate::mnemonic::Mnemonic;
-    use sha2::{Digest, Sha512};
-
-    /// XRPL hash function: first 32 bytes of SHA-512.
-    /// Used only in tests to verify sign_transaction's internal hashing.
-    fn sha512_half(data: &[u8]) -> [u8; 32] {
-        let hash = Sha512::digest(data);
-        hash[..32].try_into().expect("sha512 output is 64 bytes")
-    }
-
     const ABANDON_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
     /// Known test private key (32 bytes).
@@ -286,6 +274,41 @@ mod tests {
         let privkey = test_privkey();
         let signer = XrplSigner;
         assert!(signer.sign_transaction(&privkey, b"").is_err());
+    }
+
+    #[test]
+    fn test_sign_transaction_leading_zero_scalar_key() {
+        // Regression: a secp256k1 private key whose scalar begins with a 0x00 byte
+        // must still sign. The previous XRPL keypair path trimmed that leading zero
+        // along with the "00" type prefix, producing a short key and an
+        // InvalidSecretKey error for roughly 1 in 256 derived keys.
+        let mut privkey = [0u8; 32];
+        for (i, b) in privkey.iter_mut().enumerate().skip(1) {
+            *b = (i as u8).wrapping_mul(7).wrapping_add(1);
+        }
+        assert_eq!(privkey[0], 0x00, "test key must have a leading zero byte");
+
+        let signer = XrplSigner;
+        let result = signer.sign_transaction(&privkey, b"leading_zero_scalar_tx");
+        assert!(
+            result.is_ok(),
+            "leading-zero-scalar key must sign: {:?}",
+            result.err()
+        );
+        let sig = result.unwrap();
+        assert_eq!(sig.signature[0], 0x30, "expected DER signature tag");
+
+        // Prove the signature is cryptographically valid, not just well-formed: it
+        // must verify against the key's public key over the same SHA512-half digest.
+        use k256::ecdsa::signature::hazmat::PrehashVerifier;
+        let mut prefixed = vec![0x53, 0x54, 0x58, 0x00];
+        prefixed.extend_from_slice(b"leading_zero_scalar_tx");
+        let digest = sha512_half(&prefixed);
+        let der = k256::ecdsa::Signature::from_der(&sig.signature).expect("valid DER");
+        let sk = SigningKey::from_slice(&privkey).unwrap();
+        sk.verifying_key()
+            .verify_prehash(&digest, &der)
+            .expect("signature must verify against the derived public key");
     }
 
     #[test]
