@@ -117,7 +117,11 @@ pub fn run(
             }
         }
     } else {
-        eprintln!("HTTP {}", result.status);
+        if result.payment.is_some() {
+            eprintln!("HTTP {} — payment rejected by server", result.status);
+        } else {
+            eprintln!("HTTP {}", result.status);
+        }
     }
 
     println!("{}", result.body);
