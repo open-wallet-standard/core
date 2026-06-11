@@ -92,6 +92,7 @@ pub fn sign_with_api_key(
         wallet_name_or_id,
         chain,
         &hex::encode(tx_bytes),
+        extract_recipient(chain, tx_bytes),
         index,
         vault_path,
     )?;
@@ -116,11 +117,14 @@ pub fn sign_message_with_api_key(
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<crate::types::SignResult, OwsLibError> {
+    // Messages carry no transaction recipient; `to` stays `None` and
+    // `recipient_allowlist` policies deny message signing (fail-closed).
     let (key, _) = enforce_policy_and_decrypt_key_with_raw_hex(
         token,
         wallet_name_or_id,
         chain,
         &hex::encode(msg_bytes),
+        None,
         index,
         vault_path,
     )?;
@@ -143,11 +147,14 @@ pub fn sign_hash_with_api_key(
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<crate::types::SignResult, OwsLibError> {
+    // Raw hashes carry no decodable recipient; `to` stays `None` and
+    // `recipient_allowlist` policies deny hash signing (fail-closed).
     let (key, _) = enforce_policy_and_decrypt_key_with_raw_hex(
         token,
         wallet_name_or_id,
         chain,
         &hex::encode(policy_bytes),
+        None,
         index,
         vault_path,
     )?;
@@ -290,6 +297,7 @@ pub fn enforce_policy_and_decrypt_key(
         wallet_name_or_id,
         chain,
         &hex::encode(tx_bytes),
+        extract_recipient(chain, tx_bytes),
         index,
         vault_path,
     )
@@ -300,6 +308,7 @@ fn enforce_policy_and_decrypt_key_with_raw_hex(
     wallet_name_or_id: &str,
     chain: &ows_core::Chain,
     raw_hex: &str,
+    to: Option<String>,
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<(SecretBytes, ApiKeyFile), OwsLibError> {
@@ -324,7 +333,7 @@ fn enforce_policy_and_decrypt_key_with_raw_hex(
         wallet_id: wallet.id.clone(),
         api_key_id: key_file.id.clone(),
         transaction: ows_core::policy::TransactionContext {
-            to: None,
+            to,
             value: None,
             raw_hex: raw_hex.to_string(),
             data: None,
@@ -357,6 +366,17 @@ fn parse_domain_chain_id(v: &serde_json::Value) -> Option<u64> {
     v.as_str()
         .and_then(|s| s.parse::<u64>().ok())
         .or_else(|| v.as_u64())
+}
+
+/// Best-effort extraction of the transaction recipient for policy evaluation.
+///
+/// Only EVM typed transactions (EIP-1559/EIP-2930) are supported; everything
+/// else yields `None`, which `recipient_allowlist` treats as deny (fail-closed).
+fn extract_recipient(chain: &ows_core::Chain, tx_bytes: &[u8]) -> Option<String> {
+    if chain.chain_type != ows_core::ChainType::Evm {
+        return None;
+    }
+    ows_signer::rlp::extract_to_address(tx_bytes)
 }
 
 fn noop_spending_context(date: &str) -> ows_core::policy::SpendingContext {
@@ -707,6 +727,149 @@ mod tests {
             msg_result.err()
         );
         assert!(!msg_result.unwrap().signature.is_empty());
+    }
+
+    /// Build an unsigned EIP-1559 tx (`0x02 || RLP([...])`) with the given `to` address.
+    fn build_eip1559_tx(to_hex: &str) -> Vec<u8> {
+        use ows_signer::rlp::{encode_bytes, encode_list};
+        let to = hex::decode(to_hex.trim_start_matches("0x")).unwrap();
+        let items: Vec<u8> = [
+            encode_bytes(&[0x21, 0x05]), // chain_id = 8453
+            encode_bytes(&[1]),          // nonce
+            encode_bytes(&[1]),          // maxPriorityFeePerGas
+            encode_bytes(&[2]),          // maxFeePerGas
+            encode_bytes(&[0x52, 0x08]), // gasLimit = 21000
+            encode_bytes(&to),           // to
+            encode_bytes(&[5]),          // value
+            encode_bytes(&[]),           // data
+            encode_list(&[]),            // accessList
+        ]
+        .concat();
+        let mut tx = vec![0x02];
+        tx.extend_from_slice(&encode_list(&items));
+        tx
+    }
+
+    fn setup_recipient_allowlist_policy(vault: &Path, addresses: Vec<String>) -> String {
+        let policy = ows_core::Policy {
+            id: "recipient-policy".to_string(),
+            name: "Recipient Allowlist Policy".to_string(),
+            version: 1,
+            created_at: "2026-03-22T10:00:00Z".to_string(),
+            rules: vec![PolicyRule::RecipientAllowlist { addresses }],
+            executable: None,
+            config: None,
+            action: PolicyAction::Deny,
+        };
+        policy_store::save_policy(&policy, Some(vault)).unwrap();
+        policy.id
+    }
+
+    #[test]
+    fn sign_with_api_key_recipient_allowlist_allows_matching_recipient() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        // Mixed case in the policy; tx encodes raw bytes → comparison must be
+        // case-insensitive end to end.
+        let policy_id = setup_recipient_allowlist_policy(
+            &vault,
+            vec!["0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into()],
+        );
+
+        let (token, _) = create_api_key(
+            "agent",
+            &[wallet_id],
+            &[policy_id],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+
+        let chain = ows_core::parse_chain("base").unwrap();
+        let tx = build_eip1559_tx("0x742d35cc6634c0532925a3b844bc9e7595f2bd0c");
+
+        let result = sign_with_api_key(&token, "test-wallet", &chain, &tx, None, Some(&vault));
+        assert!(
+            result.is_ok(),
+            "allowlisted recipient should be signable: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn sign_with_api_key_recipient_allowlist_denies_non_matching_recipient() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let policy_id = setup_recipient_allowlist_policy(
+            &vault,
+            vec!["0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into()],
+        );
+
+        let (token, _) = create_api_key(
+            "agent",
+            &[wallet_id],
+            &[policy_id],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+
+        let chain = ows_core::parse_chain("base").unwrap();
+        let tx = build_eip1559_tx("0xdeadbeef00000000000000000000000000000000");
+
+        let result = sign_with_api_key(&token, "test-wallet", &chain, &tx, None, Some(&vault));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            OwsLibError::Core(OwsError::PolicyDenied { reason, .. }) => {
+                assert!(reason.contains("not in recipient allowlist"));
+            }
+            other => panic!("expected PolicyDenied, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn sign_with_api_key_recipient_allowlist_denies_undecodable_tx() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let policy_id = setup_recipient_allowlist_policy(
+            &vault,
+            vec!["0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into()],
+        );
+
+        let (token, _) = create_api_key(
+            "agent",
+            &[wallet_id],
+            &[policy_id],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+
+        let chain = ows_core::parse_chain("base").unwrap();
+        // Not a decodable typed tx → recipient unknown → fail closed
+        let tx_bytes = vec![0u8; 32];
+
+        let result =
+            sign_with_api_key(&token, "test-wallet", &chain, &tx_bytes, None, Some(&vault));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            OwsLibError::Core(OwsError::PolicyDenied { reason, .. }) => {
+                assert!(reason.contains("no 'to' address"));
+            }
+            other => panic!("expected PolicyDenied, got: {other}"),
+        }
     }
 
     #[test]

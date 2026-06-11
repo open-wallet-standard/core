@@ -44,6 +44,57 @@ fn decode_length(data: &[u8]) -> Result<(usize, usize), &'static str> {
     }
 }
 
+/// Decode a single RLP item at the start of `data`, returning its payload
+/// and the remaining bytes after the item.
+fn decode_item(data: &[u8]) -> Result<(&[u8], &[u8]), &'static str> {
+    let (offset, length) = decode_length(data)?;
+    if data.len() < offset + length {
+        return Err("truncated item");
+    }
+    Ok((&data[offset..offset + length], &data[offset + length..]))
+}
+
+/// Extract the `to` address from unsigned EVM typed transaction bytes
+/// (`0x01 || RLP([...])` for EIP-2930, `0x02 || RLP([...])` for EIP-1559).
+///
+/// Returns `None` when the address cannot be determined: unrecognized
+/// transaction type (including legacy), malformed/truncated RLP, or an
+/// empty `to` field (contract creation). Callers enforcing recipient
+/// policies must treat `None` as "recipient unknown" and fail closed.
+pub fn extract_to_address(unsigned_tx: &[u8]) -> Option<String> {
+    if unsigned_tx.len() < 2 {
+        return None;
+    }
+
+    // Position of `to` in the unsigned transaction field list:
+    // 0x01 (EIP-2930): [chain_id, nonce, gas_price, gas_limit, to, ...]
+    // 0x02 (EIP-1559): [chain_id, nonce, max_priority_fee, max_fee, gas_limit, to, ...]
+    let to_index = match unsigned_tx[0] {
+        0x01 => 4,
+        0x02 => 5,
+        _ => return None,
+    };
+
+    let rlp_data = &unsigned_tx[1..];
+    // The envelope payload must be a list.
+    if rlp_data[0] < 0xc0 {
+        return None;
+    }
+    let (mut items, _) = decode_item(rlp_data).ok()?;
+
+    for _ in 0..to_index {
+        let (_, rest) = decode_item(items).ok()?;
+        items = rest;
+    }
+    let (to_payload, _) = decode_item(items).ok()?;
+
+    // Empty payload = contract creation; any non-20-byte payload is malformed.
+    if to_payload.len() != 20 {
+        return None;
+    }
+    Some(format!("0x{}", hex::encode(to_payload)))
+}
+
 fn read_be_uint(bytes: &[u8]) -> usize {
     let mut val = 0usize;
     for &b in bytes {
@@ -290,6 +341,102 @@ mod tests {
             v_and_rs[0], 0x80,
             "v=0 must be RLP-encoded as 0x80 (integer zero), not 0x00 (byte value zero)"
         );
+    }
+
+    /// Build an unsigned EIP-1559 tx (`0x02 || RLP([...])`) with the given `to` payload.
+    fn build_eip1559_tx(to: &[u8]) -> Vec<u8> {
+        let items: Vec<u8> = [
+            encode_bytes(&[1]),  // chain_id
+            encode_bytes(&[7]),  // nonce
+            encode_bytes(&[1]),  // maxPriorityFeePerGas
+            encode_bytes(&[2]),  // maxFeePerGas
+            encode_bytes(&[21]), // gasLimit
+            encode_bytes(to),    // to
+            encode_bytes(&[5]),  // value
+            encode_bytes(&[]),   // data
+            encode_list(&[]),    // accessList
+        ]
+        .concat();
+        let mut tx = vec![0x02];
+        tx.extend_from_slice(&encode_list(&items));
+        tx
+    }
+
+    /// Build an unsigned EIP-2930 tx (`0x01 || RLP([...])`) with the given `to` payload.
+    fn build_eip2930_tx(to: &[u8]) -> Vec<u8> {
+        let items: Vec<u8> = [
+            encode_bytes(&[1]),  // chain_id
+            encode_bytes(&[7]),  // nonce
+            encode_bytes(&[2]),  // gasPrice
+            encode_bytes(&[21]), // gasLimit
+            encode_bytes(to),    // to
+            encode_bytes(&[5]),  // value
+            encode_bytes(&[]),   // data
+            encode_list(&[]),    // accessList
+        ]
+        .concat();
+        let mut tx = vec![0x01];
+        tx.extend_from_slice(&encode_list(&items));
+        tx
+    }
+
+    #[test]
+    fn test_extract_to_address_eip1559() {
+        let to = hex::decode("742d35cc6634c0532925a3b844bc9e7595f2bd0c").unwrap();
+        let tx = build_eip1559_tx(&to);
+        assert_eq!(
+            extract_to_address(&tx).as_deref(),
+            Some("0x742d35cc6634c0532925a3b844bc9e7595f2bd0c")
+        );
+    }
+
+    #[test]
+    fn test_extract_to_address_eip2930() {
+        let to = hex::decode("742d35cc6634c0532925a3b844bc9e7595f2bd0c").unwrap();
+        let tx = build_eip2930_tx(&to);
+        assert_eq!(
+            extract_to_address(&tx).as_deref(),
+            Some("0x742d35cc6634c0532925a3b844bc9e7595f2bd0c")
+        );
+    }
+
+    #[test]
+    fn test_extract_to_address_contract_creation_returns_none() {
+        let tx = build_eip1559_tx(&[]);
+        assert_eq!(extract_to_address(&tx), None);
+    }
+
+    #[test]
+    fn test_extract_to_address_legacy_tx_returns_none() {
+        // Legacy txs start with an RLP list prefix, not a type byte.
+        let items: Vec<u8> = [
+            encode_bytes(&[7]), // nonce
+            encode_bytes(&[2]), // gasPrice
+            encode_bytes(&[21]), // gasLimit
+            encode_bytes(&hex::decode("742d35cc6634c0532925a3b844bc9e7595f2bd0c").unwrap()),
+            encode_bytes(&[5]), // value
+            encode_bytes(&[]),  // data
+        ]
+        .concat();
+        let tx = encode_list(&items);
+        assert_eq!(extract_to_address(&tx), None);
+    }
+
+    #[test]
+    fn test_extract_to_address_garbage_returns_none() {
+        assert_eq!(extract_to_address(&[]), None);
+        assert_eq!(extract_to_address(&[0x02]), None);
+        assert_eq!(extract_to_address(&[0u8; 32]), None);
+        // Type byte but payload is a string, not a list
+        assert_eq!(extract_to_address(&[0x02, 0x83, 0x01, 0x02, 0x03]), None);
+    }
+
+    #[test]
+    fn test_extract_to_address_truncated_returns_none() {
+        let to = hex::decode("742d35cc6634c0532925a3b844bc9e7595f2bd0c").unwrap();
+        let tx = build_eip1559_tx(&to);
+        // Cut the tx off in the middle of the `to` field
+        assert_eq!(extract_to_address(&tx[..tx.len() - 10]), None);
     }
 
     #[test]
