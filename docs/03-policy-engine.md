@@ -171,6 +171,12 @@ Restricts which recipient addresses an API key can sign transactions for. Case-i
 }
 ```
 
+**Behavior:**
+- The recipient is extracted from the unsigned transaction bytes for **EVM typed transactions (EIP-1559 / EIP-2930)** and compared against the allowlist (case-insensitive).
+- The rule **fails closed**: whenever the recipient cannot be determined, the request is denied. This includes legacy (pre-EIP-2930) transactions, malformed transaction bytes, contract creation (empty `to`), and **non-EVM chains**.
+- `sign_message` and `sign_typed_data` requests are also denied under this rule, because they carry no transaction recipient. Don't attach `recipient_allowlist` to API keys that need message or typed-data signing — per-operation gating is planned as a follow-up ([#169](https://github.com/open-wallet-standard/core/pull/169)).
+- Addresses are validated as well-formed EVM addresses and normalized to lowercase when the policy is saved.
+
 ## Custom Executable Policies
 
 For anything declarative rules can't express — on-chain simulation, external API calls, complex business logic. Custom executables are the escape hatch.
