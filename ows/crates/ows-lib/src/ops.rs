@@ -817,6 +817,7 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
             "broadcast not yet supported for Filecoin".into(),
         )),
         ChainType::Sui => broadcast_sui(rpc_url, signed_bytes),
+        ChainType::Stacks => broadcast_stacks(rpc_url, signed_bytes),
         ChainType::Xrpl => broadcast_xrpl(rpc_url, signed_bytes),
         ChainType::Nano => broadcast_nano(rpc_url, signed_bytes),
         ChainType::Near => crate::near_rpc::broadcast_tx_commit(rpc_url, signed_bytes),
@@ -964,6 +965,62 @@ fn broadcast_sui(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibErr
     let sig_part = &signed_bytes[split..];
 
     crate::sui_grpc::execute_transaction(rpc_url, tx_part, sig_part)
+}
+
+fn broadcast_stacks(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
+    // Hiro API: POST /v2/transactions with raw binary body.
+    // curl needs a file for --data-binary with raw bytes.
+    let url = format!("{}/v2/transactions", rpc_url.trim_end_matches('/'));
+
+    let random_suffix: u64 = rand::random();
+    let tmp = std::env::temp_dir().join(format!("ows_stacks_tx_{random_suffix}.bin"));
+    std::fs::write(&tmp, signed_bytes)
+        .map_err(|e| OwsLibError::BroadcastFailed(format!("failed to write temp file: {e}")))?;
+
+    let file_arg = format!("@{}", tmp.display());
+    let result = Command::new("curl")
+        .args([
+            "-sSL",
+            "-X",
+            "POST",
+            "-H",
+            "Content-Type: application/octet-stream",
+            "--data-binary",
+            &file_arg,
+            &url,
+        ])
+        .output();
+
+    // Always clean up the temp file, even if curl failed to launch.
+    let _ = std::fs::remove_file(&tmp);
+
+    let output =
+        result.map_err(|e| OwsLibError::BroadcastFailed(format!("failed to run curl: {e}")))?;
+
+    let resp = String::from_utf8_lossy(&output.stdout).to_string();
+
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&resp) {
+        if let Some(err) = parsed.get("error") {
+            let reason = parsed
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            return Err(OwsLibError::BroadcastFailed(format!(
+                "stacks broadcast error: {err} — {reason}"
+            )));
+        }
+        if let Some(txid) = parsed.as_str() {
+            return Ok(txid.to_string());
+        }
+    }
+
+    if !output.status.success() {
+        return Err(OwsLibError::BroadcastFailed(format!(
+            "stacks broadcast failed: {resp}"
+        )));
+    }
+
+    Ok(resp.trim().trim_matches('"').to_string())
 }
 
 fn broadcast_nano(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
@@ -1182,7 +1239,8 @@ mod tests {
     fn derive_address_all_chains() {
         let phrase = generate_mnemonic(12).unwrap();
         let chains = [
-            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "sui", "xrpl", "nano", "near",
+            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "filecoin", "sui",
+            "stacks", "xrpl", "nano", "near",
         ];
         for chain in &chains {
             let addr = derive_address(&phrase, chain, None).unwrap();
@@ -1267,7 +1325,8 @@ mod tests {
         // support generic off-chain message signing without a defined convention.
         // NEAR's V1 sign_message is raw ed25519 (NEP-413 follow-up tracked).
         let chains = [
-            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "near",
+            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "filecoin", "sui",
+            "stacks", "near",
         ];
         for chain in &chains {
             let result = sign_message(
@@ -1310,15 +1369,21 @@ mod tests {
         // bytes ARE the signable payload. Any non-empty bytes exercise the
         // sha256 -> ed25519 pipeline.
         let near_tx_hex = "42".repeat(80);
+        let mut stacks_tx = vec![0u8; 180];
+        stacks_tx[5] = 0x04;
+        let stacks_tx_hex = hex::encode(stacks_tx);
 
         let chains = [
-            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "xrpl", "near",
+            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "filecoin", "sui",
+            "stacks", "xrpl", "near",
         ];
         for chain in &chains {
             let tx = if *chain == "solana" {
                 &solana_tx_hex
             } else if *chain == "near" {
                 &near_tx_hex
+            } else if *chain == "stacks" {
+                &stacks_tx_hex
             } else {
                 generic_tx_hex
             };
