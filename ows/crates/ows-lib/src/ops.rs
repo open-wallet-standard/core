@@ -1311,6 +1311,10 @@ mod tests {
         // sha256 -> ed25519 pipeline.
         let near_tx_hex = "42".repeat(80);
 
+        // XRPL signing decodes the tx to inject SigningPubKey, so it needs a real
+        // binary-encoded *unsigned* transaction (no SigningPubKey/TxnSignature).
+        let xrpl_tx_hex = "12000024000000016140000000000F424068400000000000000C8114AFF3C2E33458B30714CA16FFEE19952DD35C17C883145720939C1336A7356A70ED861D5934345C6B6360";
+
         let chains = [
             "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "xrpl", "near",
         ];
@@ -1319,6 +1323,8 @@ mod tests {
                 &solana_tx_hex
             } else if *chain == "near" {
                 &near_tx_hex
+            } else if *chain == "xrpl" {
+                xrpl_tx_hex
             } else {
                 generic_tx_hex
             };
