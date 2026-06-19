@@ -42,5 +42,9 @@
     "index.d.ts",
     "bin/ows",
     "README.md"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/open-wallet-standard/core.git"
+  }
 }
