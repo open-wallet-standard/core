@@ -12,5 +12,9 @@
     "ows-node.darwin-x64.node",
     "ows"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/open-wallet-standard/core.git"
+  }
 }
