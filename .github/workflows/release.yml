@@ -215,6 +215,9 @@ jobs:
     needs: [node-addons, build]
     runs-on: ubuntu-latest
     environment: release
+    permissions:
+      id-token: write
+      contents: read
 
     defaults:
       run:
@@ -270,9 +273,10 @@ jobs:
           cp cli-binaries/ows-linux-x86_64   npm/linux-x64-gnu/ows  && chmod +x npm/linux-x64-gnu/ows
           cp cli-binaries/ows-linux-aarch64  npm/linux-arm64-gnu/ows && chmod +x npm/linux-arm64-gnu/ows
 
+      - name: Upgrade npm for OIDC trusted publishing (needs >= 11.5.1)
+        run: npm install --global npm@latest
+
       - name: Publish platform packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           for dir in npm/*/; do
             output=$(npm publish "$dir" --access public 2>&1) || {
@@ -287,14 +291,15 @@ jobs:
           done
 
       - name: Publish main package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --ignore-scripts
 
   publish-npm-adapters:
     needs: publish-npm
     runs-on: ubuntu-latest
     environment: release
+    permissions:
+      id-token: write
+      contents: read
 
     defaults:
       run:
@@ -316,9 +321,10 @@ jobs:
       - name: Install dependencies
         run: npm install --ignore-scripts
 
+      - name: Upgrade npm for OIDC trusted publishing (needs >= 11.5.1)
+        run: npm install --global npm@latest
+
       - name: Publish adapters package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --ignore-scripts
 
   publish-crates:
