@@ -221,6 +221,10 @@ pub fn build_state_block(
 // NanoSigner
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// NOMS (Nano Off-chain Message Standard) magic header.
+/// See: https://github.com/OpenRai/Standards/blob/main/rfcs/ORIS-001.md
+const NOMS_MAGIC_HEADER: &[u8; 25] = b"\x18Nano Off-chain Message:\n";
+
 /// Nano chain signer (Ed25519 with blake2b-512).
 pub struct NanoSigner;
 
@@ -288,16 +292,34 @@ impl ChainSigner for NanoSigner {
         self.sign(private_key, &block_hash)
     }
 
+    // Implements Nano Off-chain Message Signing (NOMS).
+    // See: https://github.com/OpenRai/Standards/blob/main/rfcs/ORIS-001.md
     fn sign_message(
         &self,
-        _private_key: &[u8],
-        _message: &[u8],
+        private_key: &[u8],
+        message: &[u8],
     ) -> Result<SignOutput, SignerError> {
-        Err(SignerError::SigningFailed(
-            "Nano off-chain message signing is not supported: no canonical standard exists. \
-             Define an ecosystem convention before enabling this."
-                .into(),
-        ))
+        let msg_len = u32::try_from(message.len())
+            .map_err(|_| SignerError::InvalidMessage("message too large for NOMS".into()))?;
+
+        let mut payload = Vec::with_capacity(NOMS_MAGIC_HEADER.len() + 4 + message.len());
+        payload.extend_from_slice(NOMS_MAGIC_HEADER);
+        payload.extend_from_slice(&msg_len.to_be_bytes());
+        payload.extend_from_slice(message);
+
+        let mut hasher = Blake2b::<U32>::new();
+        hasher.update(&payload);
+        let mut message_hash = [0u8; 32];
+        message_hash.copy_from_slice(&hasher.finalize());
+
+        // Note on double-hashing:
+        // The NOMS spec dictates creating a 32-byte Blake2b-256 digest of the payload.
+        // We then pass this 32-byte digest to `self.sign()`, which internally applies
+        // Nano's Ed25519-blake2b signature scheme. That scheme computes a Blake2b-512
+        // hash over the scalar and the message (which in this case is the 32-byte digest).
+        // This effective `Blake2b-512(scalar || Blake2b-256(payload))` double-hash is
+        // intentional and precisely matches the ORIS-001 specification.
+        self.sign(private_key, &message_hash)
     }
 
     fn encode_signed_transaction(
@@ -485,16 +507,81 @@ mod tests {
     }
 
     #[test]
-    fn test_sign_message_unsupported() {
+    fn test_sign_message_noms() {
         let key = derive_key(MNEMONIC_12, "", "m/44'/165'/0'");
         let signer = NanoSigner;
         let message = b"hello nano";
+        let result = signer.sign_message(&key, message).unwrap();
+
+        // Assert output format
+        assert_eq!(result.signature.len(), 64);
+        assert!(result.recovery_id.is_none());
+        assert!(result.public_key.is_some());
+
+        let vk = NanoSigner::verifying_key(&key).unwrap();
+
+        // Verify that the signed hash matches NOMS spec manually
+        let mut expected_payload = Vec::new();
+        expected_payload.extend_from_slice(super::NOMS_MAGIC_HEADER);
+        expected_payload.extend_from_slice(&(u32::try_from(message.len()).unwrap()).to_be_bytes());
+        expected_payload.extend_from_slice(message);
+
+        let mut hasher = Blake2b::<U32>::new();
+        hasher.update(&expected_payload);
+        let mut expected_hash = [0u8; 32];
+        expected_hash.copy_from_slice(&hasher.finalize());
+
+        let sig = ed25519_dalek::Signature::from_bytes(&result.signature.try_into().unwrap());
+        raw_verify::<Blake2b512>(&vk, &expected_hash, &sig).expect("should verify against NOMS payload hash");
+    }
+
+    #[test]
+    fn test_sign_message_noms_known_vector() {
+        let signer = NanoSigner;
+        
+        // Note: This is the final 32-byte Ed25519-blake2b private key.
+        // It is NOT a Nano Wallet "Seed". 
+        // Implementations treating this input as a Seed may erroneously perform a 
+        // derivation hash (e.g. `blake2b_256(seed || index)`) before expansion, 
+        // producing an entirely different keypair (like the 'nano_3iq5r...' address).
+        let private_key = hex::decode("681FD5ED71A9F81E9D29E3450F6CD8AACB87346FD21A26003389290B9D0CB173").unwrap();
+        
+        // The exact corresponding 32-byte public key.
+        let expected_pubkey = hex::decode("D2B3C9D00FFB55E84E7979D67308A515FB07CA79E40A77EB1AAFE62881781783").unwrap();
+        
+        // The UTF-8 string with an emoji which gets domain-separated and hashed via NOMS before being signed.
+        let message = "Hej Nano!🥦".as_bytes();
+        
+        // Expected ED25519-blake2b signature over the Blake2b-256 NOMS payload digest.
+        let expected_signature = hex::decode("535c745819d0f40056f3c46402b4fae4356b3a8897bde99c955d411920e740d781e6dddcbde228e8b86c4383a1003f9f315519ff73bd356f561d19865dc90f09").unwrap();
+
+        // The sign_message call expands the 32-byte key via Blake2b-512 and signs the hashed payload.
+        let result = signer.sign_message(&private_key, message).unwrap();
+
+        // Verify the directly extracted public key matches our expected bytes.
+        assert_eq!(result.public_key.unwrap(), expected_pubkey);
+        
+        // Verify the signature bytes match exactly.
+        assert_eq!(result.signature, expected_signature);
+        
+        // Verify that encoding the 'nano_' address directly from this raw private key 
+        // correctly resolves to the expected address ('nano_3noms...').
+        assert_eq!(signer.derive_address(&private_key).unwrap(), "nano_3noms9a1zytox399kygpge6cc7hu1z79ms1cgzojodz8741qi7w5u3nzb8mn");
+    }
+
+    #[test]
+    fn test_sign_message_noms_empty_string() {
+        let key = derive_key(MNEMONIC_12, "", "m/44'/165'/0'");
+        let signer = NanoSigner;
+
+        // Empty string should not panic on `u32::try_from` or `payload` construction.
+        let message = b"";
         let result = signer.sign_message(&key, message);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Nano off-chain message signing is not supported"));
+        assert!(result.is_ok());
+
+        // Validate signature output length manually
+        let sig_output = result.unwrap();
+        assert_eq!(sig_output.signature.len(), 64);
     }
 
     #[test]
