@@ -108,7 +108,7 @@ Delete the API key file. The encrypted secret copy is gone. `SHA256(T)` matches 
 
 ## Declarative Policy Rules
 
-These rule types are evaluated in-process (microseconds, no subprocess). Per-transaction value caps, recipient allowlists, and cumulative daily spend are **not** implemented as declarative rules; use an **`executable`** policy (see below) if you need that level of control.
+These rule types are evaluated in-process (microseconds, no subprocess). Per-transaction value caps and cumulative daily spend are **not** implemented as declarative rules; use an **`executable`** policy (see below) if you need that level of control.
 
 ### `allowed_chains`
 
@@ -156,6 +156,26 @@ Restricts which smart contracts an API key can sign EIP-712 typed data for. The 
   "action": "deny"
 }
 ```
+
+### `recipient_allowlist`
+
+Restricts which recipient addresses an API key can sign transactions for. Case-insensitive comparison. Denies transactions with no `to` field (e.g. contract creation).
+
+```json
+{
+  "type": "recipient_allowlist",
+  "addresses": [
+    "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C",
+    "0xDEADBEEF00000000000000000000000000000000"
+  ]
+}
+```
+
+**Behavior:**
+- The recipient is extracted from the unsigned transaction bytes for **EVM typed transactions (EIP-1559 / EIP-2930)** and compared against the allowlist (case-insensitive).
+- The rule **fails closed**: whenever the recipient cannot be determined, the request is denied. This includes legacy (pre-EIP-2930) transactions, malformed transaction bytes, contract creation (empty `to`), and **non-EVM chains**.
+- `sign_message` and `sign_typed_data` requests are also denied under this rule, because they carry no transaction recipient. Don't attach `recipient_allowlist` to API keys that need message or typed-data signing — per-operation gating is planned as a follow-up ([#169](https://github.com/open-wallet-standard/core/pull/169)).
+- Addresses are validated as well-formed EVM addresses and normalized to lowercase when the policy is saved.
 
 ## Custom Executable Policies
 
