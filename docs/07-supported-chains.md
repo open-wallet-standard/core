@@ -39,6 +39,7 @@ OWS groups chains into families that share a cryptographic curve and address der
 | XRPL | secp256k1 | 144 | `m/44'/144'/0'/0/{index}` | Base58Check (`r...`) | `xrpl` |
 | Spark | secp256k1 | 8797555 | `m/84'/0'/0'/0/{index}` | `spark:` + compressed pubkey hex | `spark` |
 | Filecoin | secp256k1 | 461 | `m/44'/461'/0'/0/{index}` | `f1` + base32(blake2b-160) | `fil` |
+| Nano | ed25519 | 165 | `m/44'/165'/{index}'` | `nano_` prefixed | `nano` |
 | NEAR | ed25519 | 397 | `m/44'/397'/{index}'` | 64-char lowercase hex of pubkey (implicit account) | `near` |
 
 ## Known Networks
@@ -74,6 +75,7 @@ Each network has a canonical chain identifier. Endpoint discovery and transport 
 | XRPL | `xrpl:mainnet` |
 | Spark | `spark:mainnet` |
 | Filecoin | `fil:mainnet` |
+| Nano | `nano:mainnet` |
 | NEAR | `near:mainnet` |
 | NEAR (testnet) | `near:testnet` |
 
@@ -107,6 +109,7 @@ xrpl-testnet  → xrpl:testnet
 xrpl-devnet   → xrpl:devnet
 spark     → spark:mainnet
 filecoin  → fil:mainnet
+nano      → nano:mainnet
 near          → near:mainnet
 near-testnet  → near:testnet
 ```
@@ -133,6 +136,7 @@ Master Seed (512 bits via PBKDF2)
     ├── m/44'/144'/0'/0/0   → XRPL Account 0
     ├── m/84'/0'/0'/0/0     → Spark Account 0
     ├── m/44'/461'/0'/0/0   → Filecoin Account 0
+    ├── m/44'/165'/0'       → Nano Account 0
     └── m/44'/397'/0'       → NEAR Account 0
 ```
 
