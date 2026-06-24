@@ -146,6 +146,13 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_atto_chain_id() {
+        let id: ChainId = "atto:live".parse().unwrap();
+        assert_eq!(id.namespace, "atto");
+        assert_eq!(id.reference, "live");
+    }
+
+    #[test]
     fn test_reject_empty_namespace() {
         assert!("".parse::<ChainId>().is_err());
     }

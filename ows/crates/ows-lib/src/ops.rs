@@ -10,6 +10,7 @@ use ows_signer::{
     MnemonicStrength, SecretBytes,
 };
 
+use crate::atto_rpc::{AttoWorkRequest, AttoWorkServerClient};
 use crate::error::OwsLibError;
 use crate::types::{AccountInfo, SendResult, SignResult, WalletInfo};
 use crate::vault;
@@ -36,6 +37,14 @@ fn parse_chain(s: &str) -> Result<ows_core::Chain, OwsLibError> {
     ows_core::parse_chain(s).map_err(OwsLibError::InvalidInput)
 }
 
+fn wallet_account_id(chain: &ows_core::Chain, address: &str) -> String {
+    let account = match chain.chain_type {
+        ChainType::Atto => address.strip_prefix("atto://").unwrap_or(address),
+        _ => address,
+    };
+    format!("{}:{account}", chain.chain_id)
+}
+
 /// Derive accounts for all chain families from a mnemonic at the given index.
 fn derive_all_accounts(mnemonic: &Mnemonic, index: u32) -> Result<Vec<WalletAccount>, OwsLibError> {
     let mut accounts = Vec::with_capacity(ALL_CHAIN_TYPES.len());
@@ -46,7 +55,7 @@ fn derive_all_accounts(mnemonic: &Mnemonic, index: u32) -> Result<Vec<WalletAcco
         let curve = signer.curve();
         let key = HdDeriver::derive_from_mnemonic(mnemonic, "", &path, curve)?;
         let address = signer.derive_address(key.expose())?;
-        let account_id = format!("{}:{}", chain.chain_id, address);
+        let account_id = wallet_account_id(&chain, &address);
         accounts.push(WalletAccount {
             account_id,
             address,
@@ -119,7 +128,7 @@ fn derive_all_accounts_from_keys(keys: &KeyPair) -> Result<Vec<WalletAccount>, O
         let address = signer.derive_address(key)?;
         let chain = default_chain_for_type(*ct);
         accounts.push(WalletAccount {
-            account_id: format!("{}:{}", chain.chain_id, address),
+            account_id: wallet_account_id(&chain, &address),
             address,
             chain_id: chain.chain_id.to_string(),
             derivation_path: String::new(),
@@ -820,7 +829,172 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         ChainType::Xrpl => broadcast_xrpl(rpc_url, signed_bytes),
         ChainType::Nano => broadcast_nano(rpc_url, signed_bytes),
         ChainType::Near => crate::near_rpc::broadcast_tx_commit(rpc_url, signed_bytes),
+        ChainType::Atto => broadcast_atto(rpc_url, signed_bytes),
     }
+}
+
+fn broadcast_atto(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
+    let mut transaction =
+        ows_signer::chains::atto::atto_signed_transaction_to_api_json_value(signed_bytes)?;
+    let tx_hash = ows_signer::chains::atto::atto_signed_transaction_hash_hex(signed_bytes)?;
+
+    if transaction
+        .get("signature")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|sig| sig.trim().is_empty())
+    {
+        return Err(OwsLibError::InvalidInput(
+            "missing Atto signature in signed transaction payload".into(),
+        ));
+    }
+    if transaction
+        .get("address")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|address| address.trim().is_empty())
+    {
+        return Err(OwsLibError::InvalidInput(
+            "missing Atto address in signed transaction payload".into(),
+        ));
+    }
+
+    if transaction
+        .get("work")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(is_missing_atto_work)
+    {
+        let work = generate_atto_work(&transaction)?;
+        transaction
+            .as_object_mut()
+            .ok_or_else(|| {
+                OwsLibError::InvalidInput("Atto transaction payload must be a JSON object".into())
+            })?
+            .insert("work".to_string(), serde_json::Value::String(work));
+    }
+
+    let publish_payload = atto_node_transaction_payload(&transaction)?;
+    let streamed_hash = crate::atto_rpc::AttoNodeClient::new(rpc_url)
+        .publish_transaction_value_stream(&publish_payload)?;
+    Ok(streamed_hash.unwrap_or(tx_hash))
+}
+
+fn atto_node_transaction_payload(
+    transaction: &serde_json::Value,
+) -> Result<serde_json::Value, OwsLibError> {
+    let mut block = transaction.clone();
+    let object = block.as_object_mut().ok_or_else(|| {
+        OwsLibError::InvalidInput("Atto transaction payload must be a JSON object".into())
+    })?;
+    let signature = object
+        .remove("signature")
+        .and_then(|value| value.as_str().map(str::to_string))
+        .ok_or_else(|| {
+            OwsLibError::InvalidInput("missing Atto signature in signed transaction payload".into())
+        })?;
+    let work = object
+        .remove("work")
+        .and_then(|value| value.as_str().map(str::to_string))
+        .ok_or_else(|| {
+            OwsLibError::InvalidInput("missing Atto work in signed transaction payload".into())
+        })?;
+
+    Ok(serde_json::json!({
+        "block": block,
+        "signature": signature,
+        "work": work,
+    }))
+}
+
+fn is_missing_atto_work(work: &str) -> bool {
+    let trimmed = work.trim();
+    trimmed.is_empty() || trimmed == "0000000000000000"
+}
+
+fn generate_atto_work(transaction: &serde_json::Value) -> Result<String, OwsLibError> {
+    let network = atto_transaction_string_field(transaction, "network")?;
+    let timestamp = atto_transaction_i64_field(transaction, "timestamp")?;
+    let target = atto_work_target(transaction)?;
+    let work_url = resolve_atto_work_url(network)?;
+
+    Ok(AttoWorkServerClient::new(work_url)
+        .work(&AttoWorkRequest {
+            network: network.to_string(),
+            timestamp,
+            target,
+        })?
+        .work)
+}
+
+fn atto_work_target(transaction: &serde_json::Value) -> Result<String, OwsLibError> {
+    let block_type = atto_transaction_string_field(transaction, "type")?;
+    let field = if block_type.eq_ignore_ascii_case("OPEN") {
+        "publicKey"
+    } else {
+        "previous"
+    };
+    atto_transaction_string_field(transaction, field).map(str::to_string)
+}
+
+fn atto_transaction_string_field<'a>(
+    transaction: &'a serde_json::Value,
+    field: &str,
+) -> Result<&'a str, OwsLibError> {
+    transaction
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            OwsLibError::InvalidInput(format!(
+                "missing Atto {field} in signed transaction payload"
+            ))
+        })
+}
+
+fn atto_transaction_i64_field(
+    transaction: &serde_json::Value,
+    field: &str,
+) -> Result<i64, OwsLibError> {
+    let value = transaction.get(field).ok_or_else(|| {
+        OwsLibError::InvalidInput(format!(
+            "missing Atto {field} in signed transaction payload"
+        ))
+    })?;
+    value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+        .ok_or_else(|| {
+            OwsLibError::InvalidInput(format!(
+                "invalid Atto {field} in signed transaction payload"
+            ))
+        })
+}
+
+fn resolve_atto_work_url(network: &str) -> Result<String, OwsLibError> {
+    let network_key = match network.to_ascii_uppercase().as_str() {
+        "LIVE" => "live",
+        "BETA" => "beta",
+        "DEV" => "dev",
+        "LOCAL" => "local",
+        other => {
+            return Err(OwsLibError::InvalidInput(format!(
+                "unsupported Atto network in signed transaction payload: {other}"
+            )));
+        }
+    };
+    let key = format!("atto-work:{network_key}");
+    let config = Config::load_or_default();
+    let defaults = Config::default_rpc();
+    let url = config
+        .rpc
+        .get(&key)
+        .or_else(|| defaults.get(&key))
+        .ok_or_else(|| OwsLibError::InvalidInput(format!("no Atto work URL configured for {key}")))?
+        .clone();
+    if url.trim().is_empty() {
+        return Err(OwsLibError::InvalidInput(format!(
+            "Atto work URL is not configured for {key}"
+        )));
+    }
+    Ok(url)
 }
 
 fn broadcast_xrpl(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
@@ -1129,6 +1303,32 @@ mod tests {
 
     const TEST_PRIVKEY: &str = "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318";
 
+    fn sample_atto_unsigned_payload_with_work() -> Vec<u8> {
+        let block = ows_signer::chains::atto::AttoBlock::Receive(
+            ows_signer::chains::atto::AttoReceiveBlock {
+                network: ows_signer::chains::atto::AttoNetwork::Local,
+                version: 0,
+                public_key: [0x11; 32],
+                height: 2,
+                balance: 42,
+                timestamp_ms: 1_700_000_000_000,
+                previous: [0x22; 32],
+                send_hash: [0x33; 32],
+            },
+        );
+        let mut payload = block.to_buffer();
+        payload.extend_from_slice(&[0x44; 8]);
+        payload
+    }
+
+    fn sample_atto_signed_payload() -> Vec<u8> {
+        let mut payload = sample_atto_unsigned_payload_with_work();
+        let work = payload.split_off(payload.len() - 8);
+        payload.extend_from_slice(&[0xaa; 64]);
+        payload.extend_from_slice(&work);
+        payload
+    }
+
     fn save_allowed_chains_policy(vault: &Path, id: &str, chain_ids: Vec<String>) {
         let policy = ows_core::Policy {
             id: id.to_string(),
@@ -1183,10 +1383,14 @@ mod tests {
         let phrase = generate_mnemonic(12).unwrap();
         let chains = [
             "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "sui", "xrpl", "nano", "near",
+            "atto",
         ];
         for chain in &chains {
             let addr = derive_address(&phrase, chain, None).unwrap();
             assert!(!addr.is_empty(), "address should be non-empty for {chain}");
+            if *chain == "atto" {
+                assert!(addr.starts_with("atto://"));
+            }
         }
     }
 
@@ -1238,6 +1442,30 @@ mod tests {
         let w1 = create_wallet("w1", None, None, Some(v1.path())).unwrap();
         assert!(!w1.accounts.is_empty());
 
+        let atto_account = w1
+            .accounts
+            .iter()
+            .find(|acct| acct.chain_id == "atto:live")
+            .expect("Atto account should be derived for new wallets");
+        assert!(atto_account.address.starts_with("atto://"));
+        assert_eq!(atto_account.derivation_path, "m/44'/1869902945'/0'");
+        let expected_atto_account_id = format!(
+            "atto:live:{}",
+            atto_account.address.strip_prefix("atto://").unwrap()
+        );
+
+        let stored = vault::load_wallet_by_name_or_id("w1", Some(v1.path())).unwrap();
+        let stored_atto = stored
+            .accounts
+            .iter()
+            .find(|acct| acct.chain_id == "atto:live")
+            .expect("Atto account should persist in wallet JSON");
+        assert_eq!(
+            stored_atto.account_id, expected_atto_account_id,
+            "Atto account IDs must persist without duplicating the atto:// address scheme"
+        );
+        assert!(stored_atto.address.starts_with("atto://"));
+
         // Export mnemonic
         let phrase = export_wallet("w1", None, Some(v1.path())).unwrap();
         assert_eq!(phrase.split_whitespace().count(), 12);
@@ -1267,7 +1495,7 @@ mod tests {
         // support generic off-chain message signing without a defined convention.
         // NEAR's V1 sign_message is raw ed25519 (NEP-413 follow-up tracked).
         let chains = [
-            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "near",
+            "evm", "solana", "bitcoin", "cosmos", "tron", "ton", "spark", "sui", "near", "atto",
         ];
         for chain in &chains {
             let result = sign_message(
@@ -1860,6 +2088,39 @@ mod tests {
     }
 
     // ================================================================
+    // 11A. ATTO PAYLOAD
+    // ================================================================
+
+    #[test]
+    fn atto_node_transaction_payload_separates_block_signature_and_work() {
+        let transaction = ows_signer::chains::atto::atto_signed_transaction_to_api_json_value(
+            &sample_atto_signed_payload(),
+        )
+        .unwrap();
+
+        let payload = atto_node_transaction_payload(&transaction).unwrap();
+        let block = payload["block"].as_object().unwrap();
+
+        assert_eq!(payload["block"]["type"], "RECEIVE");
+        assert_eq!(payload["work"], "4444444444444444");
+        assert_eq!(payload["signature"].as_str().unwrap().len(), 128);
+        assert!(!block.contains_key("signature"));
+        assert!(!block.contains_key("work"));
+        assert!(block["address"].as_str().unwrap().starts_with("atto://"));
+    }
+
+    #[test]
+    fn atto_broadcast_rejects_malformed_signed_payloads() {
+        let err = broadcast(ChainType::Atto, "http://127.0.0.1:9", b"not json").unwrap_err();
+
+        assert!(
+            err.to_string().contains("invalid transaction")
+                || err.to_string().contains("unsupported Atto block type"),
+            "{err}"
+        );
+    }
+
+    // ================================================================
     // 11. BUG REGRESSION: CLI send_transaction broadcasts raw signature
     // ================================================================
 
@@ -2281,6 +2542,123 @@ mod tests {
         let sig = sign_transaction("char-pk", "evm", "deadbeef", None, None, Some(vault)).unwrap();
         assert!(!sig.signature.is_empty());
         assert!(sig.recovery_id.is_some());
+    }
+
+    #[test]
+    fn atto_private_key_import_uses_ed25519_without_corrupting_secp256k1() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        let atto_ed25519_key = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+        let expected_atto = signer_for_chain(ChainType::Atto)
+            .derive_address(&hex::decode(atto_ed25519_key).unwrap())
+            .unwrap();
+
+        let wallet = import_wallet_private_key(
+            "atto-pk",
+            atto_ed25519_key,
+            Some("atto"),
+            Some("pass"),
+            Some(vault),
+            Some(TEST_PRIVKEY),
+            None,
+        )
+        .unwrap();
+
+        let atto_account = wallet
+            .accounts
+            .iter()
+            .find(|acct| acct.chain_id == "atto:live")
+            .expect("Atto account should be present for private-key imports");
+        assert_eq!(atto_account.address, expected_atto);
+        let stored = vault::load_wallet_by_name_or_id("atto-pk", Some(vault)).unwrap();
+        let stored_atto = stored
+            .accounts
+            .iter()
+            .find(|acct| acct.chain_id == "atto:live")
+            .expect("Atto account should persist for private-key imports");
+        assert!(stored_atto.address.starts_with("atto://"));
+        assert_eq!(
+            stored_atto.account_id,
+            format!(
+                "atto:live:{}",
+                expected_atto.strip_prefix("atto://").unwrap()
+            )
+        );
+
+        let atto_sig = sign_message(
+            "atto-pk",
+            "atto",
+            "atto import test",
+            Some("pass"),
+            None,
+            None,
+            Some(vault),
+        )
+        .unwrap();
+        assert!(!atto_sig.signature.is_empty());
+        assert!(atto_sig.recovery_id.is_none());
+
+        let evm_sig = sign_transaction(
+            "atto-pk",
+            "base",
+            "deadbeef",
+            Some("pass"),
+            None,
+            Some(vault),
+        )
+        .unwrap();
+        assert!(!evm_sig.signature.is_empty());
+        assert!(evm_sig.recovery_id.is_some());
+    }
+
+    #[test]
+    fn atto_allowed_chains_policy_allows_and_denies_canonical_chain_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = create_wallet("atto-policy", None, None, Some(vault)).unwrap();
+        save_allowed_chains_policy(vault, "atto-only", vec!["atto:live".to_string()]);
+
+        let (token, _) = crate::key_ops::create_api_key(
+            "atto-policy-key",
+            std::slice::from_ref(&wallet.id),
+            &["atto-only".to_string()],
+            "",
+            None,
+            Some(vault),
+        )
+        .unwrap();
+
+        let allowed = sign_message(
+            &wallet.id,
+            "atto",
+            "policy allows canonical Atto",
+            Some(&token),
+            None,
+            None,
+            Some(vault),
+        );
+        assert!(
+            allowed.is_ok(),
+            "Atto allowlist should pass: {:?}",
+            allowed.err()
+        );
+
+        let denied = sign_message(
+            &wallet.id,
+            "base",
+            "policy denies non-Atto",
+            Some(&token),
+            None,
+            None,
+            Some(vault),
+        );
+        match denied.unwrap_err() {
+            OwsLibError::Core(OwsError::PolicyDenied { reason, .. }) => {
+                assert!(reason.contains("eip155:8453"));
+                assert!(reason.contains("not in allowlist"));
+            }
+            other => panic!("expected PolicyDenied, got: {other}"),
+        }
     }
 
     #[test]
