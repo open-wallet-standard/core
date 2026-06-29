@@ -13,5 +13,6 @@ pub mod vault;
 
 // Re-export the primary API.
 pub use error::OwsLibError;
+pub use key_store::list_api_keys;
 pub use ops::*;
 pub use types::*;
