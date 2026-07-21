@@ -56,11 +56,13 @@ use transient_crypto::commitment::PedersenRandomness;
 use transient_crypto::proofs::ProofPreimage;
 
 use super::build::{
-    decode_shielded_recipient, decode_unshielded_recipient, deserialize_u128, err, far_future_ttl,
-    prove_preimage, prove_to_unsealed_bytes, wire_type_to_shielded, wire_type_to_unshielded,
-    DesiredOutput, PreimageTx, TransferKind,
+    decode_shielded_recipient, decode_unshielded_recipient, deserialize_u128,
+    effects_from_movements, err, far_future_ttl, prove_preimage, prove_to_unsealed_bytes,
+    wire_type_to_shielded, wire_type_to_unshielded, DesiredOutput, Movement, PreimageTx,
+    TransferKind,
 };
 use crate::parse_token_type;
+use ows_core::policy::TransactionEffect;
 
 /// The connector convention default when a request omits `intentSegment`.
 const DEFAULT_INTENT_SEGMENT: u16 = 1;
@@ -133,6 +135,42 @@ pub fn parse_make_intent_json(json: &str) -> Result<MakeIntentRequest, std::io::
         desired_outputs: req.desired_outputs,
         intent_segment: req.intent_segment,
     })
+}
+
+/// The wallet-relative effects a `makeIntent` maker offer will have, derived from the request alone: the
+/// maker contributes each desired input (outflow), and receives each desired output routed back to its
+/// own address (inflow) — an output to some other recipient is not the maker's movement. The policy seam
+/// gates on this before [`authorize`] proves anything.
+pub(super) fn request_effects(
+    chain_id: &str,
+    crypto_provider: &MidnightCryptoProvider,
+    req: &MakeIntentRequest,
+) -> Result<Vec<TransactionEffect>, std::io::Error> {
+    let addresses = crypto_provider
+        .addresses(&MidnightNetwork::from_chain_id(chain_id))
+        .map_err(|e| err(e.to_string()))?;
+    let mut movements = Vec::new();
+    for i in &req.desired_inputs {
+        movements.push(Movement {
+            kind: i.kind,
+            token_type: &i.token_type,
+            value: -crate::balance_tx::signed_amount(i.value)?,
+        });
+    }
+    for o in &req.desired_outputs {
+        let self_addr = match o.kind {
+            TransferKind::Unshielded => &addresses.unshielded,
+            TransferKind::Shielded => &addresses.shielded,
+        };
+        if o.recipient == *self_addr {
+            movements.push(Movement {
+                kind: o.kind,
+                token_type: &o.token_type,
+                value: crate::balance_tx::signed_amount(o.value)?,
+            });
+        }
+    }
+    effects_from_movements(&addresses, movements)
 }
 
 /// Build the maker's imbalanced offer, prove it, and return the signable bytes. Runs **after** the
