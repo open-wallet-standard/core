@@ -48,6 +48,7 @@ use transient_crypto::proofs::Proof as ZswapProof;
 use ows_core::policy::TransactionEffect;
 use ows_core::sync_cache::SyncCacheScope;
 
+use crate::contracts::{contract_interactions, ContractInteraction};
 use crate::UnshieldedUtxo;
 
 mod fee_sizing;
@@ -886,6 +887,14 @@ impl BalancedPlan {
             &shielded_inflow,
             self.dust.dust_outflow(),
         )
+    }
+
+    /// The contract actions the transaction being balanced carries — who it talks to, and how much each
+    /// contract declares it takes in and pays out. The counterpart the wallet-relative
+    /// [effects](Self::segment_effects) deliberately omit; the wallet's own balancing adds no contract
+    /// action, so these are entirely the dapp's.
+    pub(crate) fn contracts(&self) -> Vec<ContractInteraction> {
+        contract_interactions(self.base.actions())
     }
 }
 
