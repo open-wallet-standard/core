@@ -8,6 +8,10 @@ independent domains** — unshielded (Night), shielded (Zswap), and dust (fees) 
 own key and address. That difference reaches most commands, so this page goes command by
 command: the code path, the reasoning behind it, and how it differs from the other chains.
 
+Commands with no Midnight-specific behavior work on a Midnight wallet exactly as the generic
+docs describe: `fund deposit` (MoonPay only), `pay request` / `pay discover` (x402 only),
+`wallet export` / `rename` / `delete`, `mnemonic generate`, `update`, and `uninstall`.
+
 ## Network identifiers
 
 OWS registers `midnight:mainnet`, `midnight:preview`, and `midnight:preprod`, with the aliases
@@ -456,6 +460,338 @@ as a stall error or a missing dust section, never as a partial balance reported 
   snapshot code lives in `unshielded.rs`.
 - Sync timeouts and their environment overrides: `midnight_env.rs`.
 
+## Transactions on Midnight
+
+On Midnight a transaction is a zero-knowledge-proven artifact rather than plain signed bytes,
+and the wallet — not the DApp — balances it and pays the fee. The signing commands below share
+two ideas.
+
+### Intents and segments are not the same thing
+
+These two words are easy to blur, and several commands depend on the difference.
+
+An **intent** is *physical* structure: a transaction carries a map of them, keyed by a `u16`
+**intent id**. One intent bundles a guaranteed unshielded offer, a fallible unshielded offer,
+contract actions, and dust actions — the unit the wallet authorizes together, with one
+signature and one binding commitment.
+
+A **segment** is *logical* execution structure: the unit the ledger applies atomically.
+A transaction executes in segments, and there are two kinds:
+
+- **Segment 0, the guaranteed segment** — assembled **across every intent**: the guaranteed
+  half of *all* of them applies together, as one all-or-nothing unit. It is not any single
+  intent's segment, which is exactly why no intent may be keyed at id 0.
+- **A fallible segment** — one per intent that has a fallible half, allowed to fail on its
+  own without reverting segment 0. Its segment id **is** that intent's id.
+
+So the id `7` names *one intent* and *its fallible segment*, while that same intent's
+guaranteed half executes in segment 0 alongside every other intent's. The ledger keeps both
+coordinates on every event it emits — `logical_segment` (which segment executed it) and
+`physical_segment` (which intent contributed it).
+
+Two consequences run through the sections below: a value movement is reported per **segment**
+(what will execute together), while `makeIntent`'s `intentId` names an **intent** — and
+because that id doubles as the intent's fallible segment id, `0` is rejected.
+
+### The seed-free crypto provider
+
+`ows-midnight` (the crate that does all the network orchestration — balance sync,
+connector balancing, dapp-connector methods) holds **no raw key material**. All key
+derivation and key-bearing work is owned by `ows-signer` behind a per-account capability
+object, `MidnightCryptoProvider`:
+
+- `MidnightSigner` is **stateless** — network identity, HRPs, address derivation,
+  encode/decode of the packed key. It is the factory: `signer.crypto_provider(&credential)`
+  decodes the packed blob **once**.
+- `MidnightCryptoProvider` is **stateful, per-account** — it owns the decoded seeds and
+  the derived Zswap/dust keys, and exposes only *public* values (verifying key, dust
+  public key, addresses) plus *keyful-but-opaque* operations (fold a ledger event into
+  wallet state; authorize a shielded input or dust fee). The typed secret keys never
+  leave the provider.
+
+`ows-lib` sits at the boundary: it holds the credential, builds one
+`MidnightCryptoProvider`, and hands only `&provider` into `ows-midnight`. This is why
+`fund balance` and `sign tx` both route through `ows-lib` first — it is the only layer
+that ever touches the decrypted key.
+
+## Sign and seal (`ows sign tx`)
+
+**Purpose:** turn a DApp Connector request into a fully proven, signed, **sealed**
+transaction — without broadcasting it.
+
+```sh
+OWS_PASSPHRASE= ows sign tx --chain midnight:preview --wallet length-wallet --json --tx '{
+  "method": "makeTransfer",
+  "desiredOutputs": [
+    { "kind": "unshielded", "type": "night", "value": "1000000", "recipient": "<mn_addr…>" }
+  ],
+  "options": { "payFees": true }
+}'
+# → { "recovery_id": …, "signature": "…", "transaction": "0x…sealed hex" }
+```
+
+On every other chain, `sign tx` accepts hex-encoded unsigned transaction bytes and returns
+a signature. On Midnight the wallet **is** the DApp Connector: the `--tx` argument is a
+JSON connector request describing *what the user wants*, and the wallet constructs,
+balances, proves, signs, and seals a complete transaction. `sign tx` seals it and returns
+the sealed hex on `SignResult.transaction`; it does **not** broadcast. (Broadcasting is
+[`sign send-tx`](#sign-and-send-ows-sign-send-tx).)
+
+### Why `--tx` is JSON, not hex
+
+`decode_tx_input` (`ows-lib/src/ops.rs`) hex-decodes for every chain **except** Midnight,
+where it normalizes the argument into a connector request (a bare MIP-0005 `zswapoffer` or hex
+transaction is wrapped into the request that carries it) and passes the JSON on as UTF-8 bytes.
+This is because a Midnight connector request is a JSON document, not a wire transaction, and it
+must be parsed by the *key-aware* step (the wallet's own inputs are needed to balance it).
+Decoding needs no key, so it can run before policy evaluation on the agent path.
+
+### The pipeline
+
+```
+decode_tx_input            normalize the connector request (no key)
+        │
+prepare_signable_tx        the key-aware step (ows-lib):
+        │   ├─ build ONE MidnightCryptoProvider from the credential (ows-lib holds the key)
+        │   ├─ plan_connector_tx       → an inert ConnectorPlan (no proofs, no signatures)
+        │   ├─ plan.segment_effects(…) → the wallet-relative net movement, per segment
+        │   ├─ ── POLICY SEAM ──       gate(chain_extra)   ← second, effect-aware policy pass
+        │   └─ plan.authorize(…)       → build + prove + sign the binding + serialize
+        │
+sign / seal                extract signable bytes, sign, encode_signed_transaction (seal)
+        │
+SignResult.transaction     the sealed, submit-ready tx hex (NOT broadcast)
+```
+
+The key design point is that **the plan is inert** — `ConnectorPlan` carries no bearer
+instrument (no proofs, no signatures). That lets the wallet derive the transaction's
+*effects* and run a policy check on them **before** any expensive proving happens. If the
+policy denies, the key is dropped unused and nothing is ever proved.
+
+`ows-lib` is the only layer that touches the decrypted key: it builds the
+`MidnightCryptoProvider` once and hands only `&provider` into `ows-midnight`.
+
+### Owner mode vs agent (token) mode
+
+`sign tx` reads `OWS_PASSPHRASE`:
+
+- **Owner passphrase** → decrypt the key directly, full authority. `prepare_signable_tx`
+  is called with a gate that always allows — no policy at all.
+- **API token** (`ows_key_…`) → two policy passes:
+  1. **First pass** (`enforce_policies_and_decrypt_key`) — before the key is released,
+     the request's *shape* is gated. `make_transaction_context` surfaces the raw request;
+     `effects` is empty and there is no `chain_extra`, because nothing has been planned
+     yet. Every policy on the key runs: declarative rules (allowed chains, expiry, …) and
+     executables.
+  2. **Second pass** (the policy seam, `enforce_effect_policies`) — after planning, the
+     plan's key-derived, wallet-relative **effects** are filled in under `chain_extra` and
+     every policy runs again: the declarative rules are re-checked, and the executables
+     now see the effects.
+
+Both `sign tx` and `sign send-tx` run this same two-pass connector pipeline on the agent
+path — `sign_and_send` routes Midnight through `decode_tx_input` + `prepare_signable_tx`
+exactly as `sign tx` does. The only difference is the tail: `sign tx` seals and returns
+the hex; `sign send-tx` also broadcasts. So a policy denial at either pass blocks a
+broadcast too — the transaction is never proved, let alone submitted.
+
+### The four connector methods
+
+`plan_connector_tx` routes on the request's top-level `method`. An **absent** `method`
+resolves to `balanceUnsealedTransaction`, the wallet's original (pre-multi-method)
+behavior. Each method has its own submodule under `ows-midnight/src/dapp_connector/`.
+
+#### `makeTransfer`
+
+*"Send these outputs."* The wallet builds an outputs-only transaction (a deliberate
+deficit), then balances it with its **own** inputs, proves, signs, and seals. Fees are
+paid in **dust**, never in the transferred token.
+
+- Unshielded outputs ride the guaranteed offer of an intent keyed at a **non-zero intent
+  id** — id 0 names the guaranteed segment, which is built across every intent rather than
+  belonging to one, so the ledger rejects an intent declared there (surfaced on-chain as
+  `Custom error: 167`). The outputs still execute unconditionally, in segment 0 with every
+  other intent's guaranteed half; only the *intent's id* is non-zero.
+- Shielded outputs ride the guaranteed Zswap offer directly.
+- The outputs-only proven transaction reuses the same `plan_unsealed_proven_tx →
+  authorize_proven_tx` tail as `balanceUnsealed` — one "diagonal" that every method funnels
+  into.
+
+#### `makeIntent`
+
+*"Build a maker swap offer."* The wallet contributes real inputs and declares wanted
+outputs, producing a deliberately **imbalanced** maker offer (a swap intent). `sign tx`
+seals it as a fully-sealed offer (`proof,pedersen-schnorr`) for hand-off to a taker.
+Shielded *inputs* to a maker offer are supported — the wallet selects whole shielded coins,
+returns the excess as change to the maker, and the spend witnesses are built and proved in
+the signer.
+
+**`options.intentId`** — the id the maker's intent keys at, per the spec: a number, or
+`"random"` to let the wallet draw one (its suggested mode for swaps; a wide draw is what keeps
+two independently-built intents from colliding when the taker merges its own in). Omitted, it
+is `1`. Id `0` is rejected — it names the guaranteed segment, which spans all intents rather
+than being any one intent's, so the ledger rejects an intent declared there (`Custom error:
+167`) — as is anything past the 16-bit id space. The id doubles as the segment id of this
+intent's fallible half, which is what a policy reading effects sees.
+
+**`options.payFees`** — `true` is **rejected** here, with an error saying so. A maker offer is
+imbalanced and fee-free by construction: the taker funds the DUST fee when it completes the
+swap. The spec's blanket default for `payFees` is `true`, but its own reference SDK defaults
+`initSwap` to `false`, and an error is the honest answer to a request this wallet cannot
+satisfy — better than returning an offer that quietly does the opposite. Omitted or `false`
+builds the fee-free offer. (The other three methods do honor `payFees` in both directions.)
+
+**`options.ttl` — when the offer expires.** Optional; Unix epoch seconds. Omitted, the wallet
+picks the widest window the ledger accepts (`global_ttl` past now — currently an hour, and the
+reference wallet SDK's default too), which is what every offer got before this option existed.
+
+The expiry matters more here than on the other methods. `Intent.ttl` is inside the seal cover
+and `makeIntent` runs no balancing tail, so **nothing downstream can change it** — not the
+taker, not a service relaying the offer. It is also the maker's only unilateral way out: a
+sealed offer is a bearer artifact, cancellable only by letting it expire or by double-spending
+one of its inputs. A maker quoting a price it re-quotes often is therefore writing a free option
+against itself for the whole window, and wants a short one:
+
+```sh
+# this quote stands for 30 seconds
+"options": { "ttl": 1785878998 }
+```
+
+The request is rejected at parse — before any proving is paid for — if the instant is not in the
+future (born expired) or is further than `global_ttl` ahead, the two bounds the ledger enforces
+against the block the offer lands in (`IntentTtlExpired`, `IntentTtlTooFarInFuture`).
+
+A taker should read the maker's TTL before completing an offer: the merged transaction has to
+land inside it, and the taker's own tip-aligned TTL does not extend it — the ledger checks each
+intent's TTL separately.
+
+> `ttl` is **not** in the DApp Connector specification, which defines no expiry option on any
+> method and leaves the choice to the wallet. It is an OWS extension, kept optional precisely so
+> that a spec-compliant dApp that never sends it is unaffected, and proposed upstream for the
+> spec to adopt.
+
+#### `balanceSealedTransaction`
+
+*"Complete a maker's offer as the taker."* The maker offer is **fully sealed**
+(`proof,pedersen-schnorr`), and its binding fixes its value balance, so the taker can't balance
+it in place: it completes it by **MERGING**. It builds the per-token complement of the maker's
+imbalance, funds the merged tx's DUST fee, seals its half, and `Transaction::merge`s the two.
+
+- The maker is given as hex, a bare `swapoffer` bech32 (MIP-0005), or a MIP-0006 offer
+  payload; each decodes to the same sealed offer.
+- A **proven** (`proof,embedded-fr`) transaction is refused; `balanceUnsealedTransaction`
+  balances one in place.
+- The maker must keep all its value in the guaranteed section (segment 0). One with coins, an
+  unshielded offer, or an imbalance in a fallible segment is refused, since that segment could
+  fail on its own while the taker's payment stands.
+
+#### `balanceUnsealedTransaction`
+
+*"Balance this proven, unsealed transaction against my inputs."* The dApp hands the wallet
+an already-**proven** (`proof,embedded-fr`) transaction; the wallet balances it, signs, and
+seals. This is the original method (and the default when `method` is absent).
+
+- A `proof-preimage` transaction is **rejected** with a precise "out-of-spec, not
+  unsupported" message — the dApp must prove its own part first.
+
+> The only **rejected-by-design** input is a `proof-preimage` maker (above) — out of spec,
+> not unsupported. `makeIntent` shielded inputs, the sealed-maker merge, and the MIP-0005 /
+> MIP-0006 offer forms are all supported.
+
+### Fees are always dust
+
+Every method pays fees in **dust**, sized against the node's real fee gate. Two fee modes
+exist depending on the wallet's NIGHT registration state:
+
+- **Generationless DUST** — when the wallet has *unregistered* NIGHT inputs, a dust
+  registration is derived from them on the fly.
+- **DUST spend proofs** — when all NIGHT is already registered, existing dust is spent with
+  proofs.
+
+Fee sizing is done by mock-proving the shielded/dust fragments offline (through the crypto
+provider's `build_preimage_dust_spends`) so the fee is right before the real proof is
+built. The best-Dust NIGHT coin is reserved for the fee registration, and leftover NIGHT is
+rotated through a fallible offer so change returns cleanly.
+
+### The effect model (what the policy seam gates on)
+
+`ConnectorPlan::segment_effects` computes the transaction's **wallet-relative net
+movement**, grouped by the **segment** each piece executes in — not by the intent that
+carried it. Segment `0` is the guaranteed one (applied unconditionally once the tx lands,
+pooling the guaranteed halves of every intent); a non-zero segment is one intent's fallible
+half, which may revert on its own, and its id is that intent's id. Within a segment it is one
+`TransactionEffect` per value domain that nets non-zero, keyed by the wallet's own address for
+that domain. (Intent versus segment is spelled out in
+[Intents and segments](#intents-and-segments-are-not-the-same-thing).) How it is derived depends
+on the method:
+
+- **`balanceUnsealed` / `balanceSealed` / `makeTransfer`** → *plan-derived*, from an inert
+  `BalancedPlan`: the wallet's inputs netted against its own change and outputs. This
+  **includes the DUST fee** the transfer burns, so a `sum(|diff|)` cap sees the whole
+  movement. For `makeTransfer` the plan is sized on demand at the seam — the outputs are
+  **mock-proven** (proofs are fixed-size, so the fee is exact) and the balancing is planned
+  against the wallet's synced UTXOs, so **no real proving happens before the gate**. It does
+  mean the seam **syncs the wallet and selects inputs** for a `makeTransfer`; a transfer the
+  wallet cannot fund fails at planning, before the gate ever runs.
+- **`makeIntent`** → *request-derived*, from the declared inputs (outflow) and self-outputs
+  (inflow). A maker offer is deliberately imbalanced and **pays no fee** (the taker does), so
+  the request already is the complete movement — there is nothing to plan.
+- **`balanceSealedMerge`** (a fully-sealed maker completed by merging) → the taker's own half,
+  request-derived like `makeIntent`, **plus the DUST fee the merge burns** (when `payFees` on a
+  live-DUST chain). The fee covers the whole merged tx and the maker never pays, so it is sized
+  against a **mock-proven taker complement** — fixed-size proofs give the exact fee with no real
+  proving — and folded in as a dust outflow, so a `sum(|diff|)` cap sees the burn.
+
+Shielded value a dapp routes back to the wallet is netted in as well: the base offers'
+outputs are trial-decrypted with the shielded viewing key and each recognized receipt is
+keyed by the segment its offer executes in. Without it the list would only carry the wallet's own
+balancing contribution, over-stating outflow — a conservative cap bound rather than the
+wallet's true net. Recognizing a receipt needs no spend key.
+
+There is deliberately **no flat, segment-summed view**. Summing the segments discards the
+guaranteed-versus-fallible distinction, which is the whole point of what the seam hands a
+policy: a fallible inflow must never be allowed to offset a guaranteed outflow. See
+[Effect-aware policies](#effect-aware-policies-ows-policy-create) for how a policy is expected to read this, and for
+the sibling `chain_extra.contracts` list that answers *who* the transaction talks to.
+
+So a `makeTransfer` of `V` NIGHT to someone else nets to `-V` in NIGHT plus the DUST fee it
+burns — the NIGHT matching the recipient's on-chain credit `+V` (change returns to self).
+Verified against a real broadcast on preview: a 1,000,000-NIGHT transfer credited the recipient
+exactly 1,000,000.
+
+### The second policy pass in detail
+
+`enforce_effect_policies` (`ows-lib/src/key_ops.rs`) is the gate `prepare_signable_tx`
+runs at the plan→authorize seam. It fills the plan's per-segment movement into the
+transaction context under `chain_extra` — leaving the flat `effects` field empty, since
+the wallet can only account for its **own** movement, not the transaction's full effects —
+and calls `evaluate_policies`, the same evaluation as the first pass. The declarative rules
+run again, since planning can take minutes on a cold sync and a rule such as an expiry may
+have lapsed meanwhile; the executable policies now see the effects. A denial returns a
+`PolicyDenied` error, so the key is never used to prove anything.
+
+This is what lets a policy express a rule like *"cap the summed movement at 1,000,000"* —
+a rule that is impossible to enforce at the first pass, because the first pass sees empty
+effects; the real movement is only known after planning. See [Effect-aware policies](#effect-aware-policies-ows-policy-create).
+
+### How this differs from other chains
+
+| | Other chains | Midnight |
+|---|---|---|
+| `--tx` input | hex unsigned tx bytes | **JSON** DApp Connector request |
+| What signing produces | a signature | a fully **sealed** transaction (`SignResult.transaction`) |
+| Who balances / pays fees | the caller | the **wallet** (fees in dust) |
+| Proof | none | zero-knowledge proofs built at authorize time |
+| Policy passes | one (request shape) | **two** (shape, then effects) |
+
+### Validation
+
+The connector methods need a local prover, a funded wallet and the indexer, so they run by hand
+on preview: `e2e/dapp-connector-siblings.md` walks through each method, and
+`e2e/midnight-connector-siblings.sh` drives them interactively. The second pass is covered by
+`effect_policy_pass_gates_via_executable_policy` (`ows-lib/src/key_ops.rs`), which drives
+`enforce_effect_policies` the way an executable program consumes it, and by the
+`plan_segment_effects` cases in `ows-midnight/src/balance_tx.rs`.
+
 ## Sign and send (`ows sign send-tx`)
 
 **Purpose:** take a DApp-connector request for a `midnight:<network>` wallet, balance it with the
@@ -666,3 +1002,332 @@ provider can't be built and the command errors (there is nothing public to sign 
 - Signing: `ows-signer/src/chains/midnight.rs` (`signed_message_bytes` frames the message,
   `sign_unshielded_message` signs it with the provider's unshielded key). The per-network id /
   address HRPs come from `MidnightNetwork`.
+
+## Effect-aware policies (`ows policy create`)
+
+**Purpose:** register a policy (from a JSON file) that a minted API key can enforce.
+
+```sh
+ows policy create --file /tmp/policy.json
+```
+
+`policy create` itself is generic — it stores a `Policy` JSON. What Midnight adds is a
+*reason* to write an **executable** policy that reads a transaction's wallet-relative
+effects, because only an executable policy can read them.
+
+### Two kinds of policy, two passes
+
+A Midnight `sign tx` on the agent path is gated **twice** (see [Sign and seal](#sign-and-seal-ows-sign-tx)),
+and every policy on the key runs both times:
+
+1. **First pass**, over the request's *shape*. The transaction has not been planned yet, so
+   there is no movement to see: `effects` is empty and `chain_extra` is absent. Declarative
+   rules such as `AllowedChains` and `ExpiresAt` decide here; executables run too.
+2. **Second pass**, over the transaction's *effects*. After the wallet plans the balancing,
+   the plan's key-derived, wallet-relative effects are filled in **per execution segment**
+   under `chain_extra`, and every policy runs again. The declarative rules are re-checked,
+   since planning can outlast an expiry, and the executables decide on the movement.
+
+So an executable policy sees each Midnight transaction **twice**. It should **allow when
+`chain_extra` is absent**, which is the first pass, and decide once it is present. A program
+that denies whenever the effects are missing denies every Midnight transaction at the first
+pass; to fail closed, deny inside the second pass instead, for example when `chain_extra` is
+present but its `segment_effects` don't parse.
+
+The Midnight effects are handed to the program under **`transaction.chain_extra`**, not the
+generic `transaction.effects` field. That field would imply a full account of *all* a
+transaction's effects; the wallet can only account for its **own** movement, per segment, so
+it leaves `effects` empty and populates `chain_extra` instead.
+
+So a policy that needs to reason about *how much value moves* must be **executable** — a
+program that reads `transaction.chain_extra.segment_effects` from the policy context. A
+purely declarative rule can never see the movement, because the movement is unknown until
+after planning.
+
+> **⚠ Deploy footgun — declarative-only keys don't cap movement.** Declarative rules can't
+> read `chain_extra`. So a key whose policies carry *only* declarative rules (`AllowedChains`,
+> expiry, …) passes the second pass whenever it passed the first — it moves unlimited value at
+> the seam. Shape rules gate
+> *which* transactions may be signed; **only an executable effect policy caps how much they
+> move.** Don't ship an agent key with shape rules only and assume movement is bounded.
+
+### Anatomy of an effect-aware executable policy
+
+The policy JSON points `executable` at a program (any language) that reads the policy
+context on stdin and prints an `{allow, reason}` verdict. The effects are under
+`transaction.chain_extra.segment_effects`, one entry **per execution segment** —
+`{segment, effects:[{address, diff:[[token, delta], …]}]}`, each domain effect keyed by the
+wallet's own address. Each `delta` is a signed decimal **string**, as in every chain's
+effects, so parse it before doing arithmetic on it (a JSON number would lose precision past
+2^53). `segment == 0` is the guaranteed segment, always executed and pooled
+across every intent in the transaction; anything non-zero is one intent's fallible half,
+allowed to fail on its own (see
+[Intents and segments](#intents-and-segments-are-not-the-same-thing)). A cap that treats all movement the same sums across every segment;
+one that only bounds what *will* execute can restrict itself to segment 0:
+
+```python
+#!/usr/bin/env python3
+import sys, json
+ctx = json.load(sys.stdin)
+extra = (ctx.get("transaction") or {}).get("chain_extra")
+if extra is None:  # first pass: nothing planned yet, the second pass decides
+    print(json.dumps({"allow": True, "reason": "first pass"}))
+    sys.exit()
+segs = extra.get("segment_effects", [])
+total = sum(abs(int(d)) for s in segs for e in s.get("effects", []) for _, d in e.get("diff", []))
+print(json.dumps({"allow": total <= 1_000_000,
+                  "reason": f"summed movement {total} (cap 1000000)"}))
+```
+
+> **⚠ A fallible segment id is an identifier, not a sequence number.** It is the id of the
+> intent whose fallible half runs there, whatever `u16` that transaction's author picked — a
+> real preprod transaction carries intents at ids 2260 and 15441, not 1 and 2. Never assume
+> small or contiguous ids, and never read one as a position: test guaranteed-versus-fallible
+> as `segment == 0` versus `segment != 0`.
+
+Registered as a policy that `deny`s on failure:
+
+```json
+{ "id": "midnight-move-cap", "name": "Midnight movement cap", "version": 1,
+  "created_at": "2026-07-15T00:00:00Z", "rules": [],
+  "executable": "/tmp/cap.py", "action": "deny" }
+```
+
+Then minted into a key (`ows key create … --policy midnight-move-cap`, see
+[API keys](#api-keys-ows-key-create)). When the agent runs `sign tx`, the second pass hands
+this program the real effects and it caps the movement — a cap that fires **before** any
+proving, so a denied transaction costs no prover work.
+
+### Who the transaction talks to — `chain_extra.contracts`
+
+`segment_effects` answers *how much the wallet moves*, and deliberately nothing else: no
+counterparty, no provenance. The counterparty lives in its own sibling key,
+**`transaction.chain_extra.contracts`** — one entry per contract action the transaction
+performs, so a policy can gate on *who* as well as *how much*:
+
+```json
+{ "segment": 0,
+  "kind": "call",
+  "address": "9f3c…",
+  "entry_point": "swap",
+  "sent_to":       [["0000…", "1000"]],
+  "received_from": [["a71b…", "25"]] }
+```
+
+- **`segment`** — the segment this action executes in, same convention as the effects: `0`
+  guaranteed, non-zero fallible (the carrying intent's id). One call carried by one intent can
+  declare both a guaranteed and a fallible transcript, and then appears **twice** — once per
+  transcript, each at the segment that transcript runs in — so a record is read on its own
+  rather than by where it sits in the list. Entry count tracks transcripts, not intents.
+- **`kind`** — `call`, `deploy`, or `maintain`. Only a `call` names an `entry_point`; a
+  deploy or a maintenance update declares no value movement, so its amounts are empty.
+- **`sent_to` / `received_from`** — per token, the value the contract's transcript declares
+  it takes in and pays out, named from the wallet's side, as a decimal string like the
+  effects' deltas.
+
+Only the `balance*` methods can carry contract actions — they complete a transaction someone
+else authored. `makeTransfer` and `makeIntent` build the wallet's own transfer from the
+request alone, so their `contracts` is always empty.
+
+> **⚠ The amounts are contract-*declared*, not proven wallet movement.** They are what the
+> transcript says the contract takes in and pays out, so they equal what *the wallet* sends
+> and receives only when the wallet is that contract's sole counterparty in the segment — the
+> normal shape for a wallet-authored connector transaction, but not a guarantee. For what the
+> wallet actually moves, cap on `segment_effects`; use `contracts` to decide **whether to
+> deal with this counterparty at all** (an address allow-list, an entry-point allow-list),
+> not as a second opinion on the amounts.
+
+```python
+#!/usr/bin/env python3
+import sys, json
+ctx = json.load(sys.stdin)
+extra = (ctx.get("transaction") or {}).get("chain_extra")
+def verdict(allow, reason):
+    print(json.dumps({"allow": allow, "reason": reason}))
+    sys.exit()
+if not (ctx["chain_id"].startswith("midnight:") and ctx["request_type"] == "sign_transaction"):
+    verdict(False, f"{ctx['request_type']} on {ctx['chain_id']} is not what this key is for")
+if extra is None:  # a Midnight transaction's first pass: nothing planned yet, the second decides
+    verdict(True, "first pass")
+called = {c["address"] for c in extra.get("contracts", []) if c["kind"] == "call"}
+unknown = called - {"9f3c…"}
+verdict(not unknown, f"unapproved contracts: {sorted(unknown)}")
+```
+
+### Why the design consumes an executable policy rather than a built-in rule
+
+An earlier iteration added a built-in `MovementLimits` rule to the core policy set. That
+was **dropped**: baking a movement cap into the engine forces every consumer to accept one
+fixed notion of "movement", and Midnight effects are richer than a single scalar
+(per-domain, per-token, signed). Leaving the consumer as an **executable** policy keeps the
+engine agnostic — a deployment expresses whatever cap, per-token limit, or allow-list it
+wants as a program, and the engine's only job is to supply the effects and honor the
+verdict.
+
+### How this differs from other chains
+
+Every chain can attach declarative rules and executable policies. The Midnight-specific
+part is the **second pass**: only Midnight derives wallet-relative effects *after* planning
+and re-runs the key's policies with them. On other chains, a transaction's effect is
+knowable at the first pass, so there is nothing to re-evaluate.
+
+### Validation
+
+- **Unit:** `effect_policy_pass_gates_via_executable_policy` (`ows-lib/src/key_ops.rs`)
+  drives `enforce_effect_policies` over a constructed `chain_extra` the way the executable
+  programs consume `transaction.chain_extra.segment_effects`, and
+  `effect_policy_pass_rechecks_declarative_rules` checks that an expired policy still denies
+  there; `plan_segment_effects` cases in
+  `ows-midnight/src/balance_tx.rs` cover the per-segment effect derivation, and
+  `contract_interactions` cases in `ows-midnight/src/contracts.rs` cover the per-segment
+  `contracts` derivation.
+- **Real chain bytes:** `a_real_preprod_contract_call_is_read_from_the_chain_bytes`
+  (`ows-midnight/src/contracts.rs`) extracts `contracts` from a settled preprod
+  `addUnshieldedLiquidity` call and cross-checks the address and entry point against what the
+  indexer independently reports for that transaction.
+
+## API keys (`ows key create`)
+
+**Purpose:** mint an API token (`ows_key_…`) that an autonomous agent uses in place of the
+owner passphrase, scoped to specific wallets and policies.
+
+```sh
+ows key create --name midnight-agent --wallet length-wallet --policy midnight-move-cap
+# → ows_key_a126…            (printed once; store it)
+```
+
+`key create` is generic, but it is the linchpin of Midnight's **agent** model: every
+Midnight command that needs the key accepts *either* the owner passphrase *or* a token in
+`OWS_PASSPHRASE`, and the token is what turns on policy enforcement.
+
+### Owner vs token — one env var, two meanings
+
+`OWS_PASSPHRASE` is inspected by prefix (`key_store::TOKEN_PREFIX` = `ows_key_`):
+
+- **No `ows_key_` prefix** → treated as the **owner envelope passphrase**. Decrypts the
+  stored mnemonic with scrypt. Full authority, no policy gate. (Imported wallets use an
+  empty passphrase, so owner unlock is literally `OWS_PASSPHRASE=`.)
+- **`ows_key_` prefix** → treated as an **API token**. The key is looked up by token hash,
+  the token's expiry and wallet-scope are checked (`load_authorized_wallet`), policies are
+  evaluated, and only on allow is the key decrypted (via HKDF). This is the agent path.
+
+Both converge on the same packed Midnight key and the same downstream code — only
+credential resolution and policy-gating differ.
+
+### Where the token matters for Midnight
+
+#### `fund balance`
+
+A token routes balance reads through the policy-enforcing channel
+(`enforce_policies_and_decrypt_key`) rather than the raw envelope decrypt. Balance has no
+transaction to bind spending policies against, so here the token proves *access* — it lets
+an agent read shielded/dust balances without holding the owner passphrase. A bad or
+unknown token fails cleanly (`error: API key not found`, exit 1, no panic). A no-policy token
+yields the full balance.
+
+#### `sign tx`
+
+A token turns on **both** policy passes for the connector pipeline
+(see [Sign and seal](#sign-and-seal-ows-sign-tx)):
+
+1. the first pass gates the request shape,
+2. the second, effect-aware pass gates the wallet-relative movement (executable policies),
+   and re-checks the declarative rules.
+
+Attach the effect-aware policy at mint time with `--policy <id>` (see
+[Effect-aware policies](#effect-aware-policies-ows-policy-create)); the token then enforces it on every `sign tx`.
+
+> **⚠ A declarative-only token does not cap movement.** Declarative rules can't read the
+> effects. A token whose policies carry *only* declarative rules (`AllowedChains`, expiry, …)
+> passes the second pass whenever it passed the first — it gates *which*
+> transactions may be signed, not *how much they move*. To bound value, the token must carry
+> an **executable** effect policy; minted with shape rules only, it lets the agent move
+> unlimited value on Midnight.
+
+### Scope and lifecycle
+
+- `--wallet` is repeatable — a token is scoped to the wallet ids it is minted for, and
+  `load_authorized_wallet` rejects use against any other wallet.
+- `--policy` is repeatable — attach one or more policy ids.
+- `--expires-at` sets an optional ISO-8601 expiry, checked on every use.
+- `ows key list` shows the keys (never the tokens); `ows key revoke --id <id> --confirm`
+  removes one.
+
+### How this differs from other chains
+
+The token machinery is chain-agnostic. The Midnight-specific consequences are the two
+places above — token-routed balance reads across three domains, and the **two-pass**
+policy enforcement on the connector `sign tx` path (only Midnight has a second,
+effect-aware pass).
+
+### Validation
+
+- **Balance:** `e2e/midnight-fund-balance.sh` mints a token for the wallet and runs the balance
+  in owner and token mode side by side.
+- **Signing:** `effect_policy_pass_gates_via_executable_policy` (`ows-lib/src/key_ops.rs`) runs
+  the second, effect-aware pass over a token's executable policy.
+
+## Endpoints (`ows config show`)
+
+**Purpose:** show the vault path and the configured RPC endpoints, including Midnight's.
+
+```sh
+ows config show
+# …
+# RPC endpoints:
+#   midnight:mainnet:node    https://rpc.mainnet.midnight.network/                    (default)
+#   midnight:preprod:node    https://rpc.preprod.midnight.network/                    (default)
+#   midnight:preview         https://indexer.preview.midnight.network/api/v4/graphql  (default)
+#   midnight:preview:node    https://rpc.preview.midnight.network/                    (default)
+```
+
+`config show` is generic, but Midnight is the one chain family that registers **two
+endpoints per network**, and understanding why is central to how Midnight commands reach
+the network.
+
+Only preview ships a default indexer: mainnet and preprod have no public indexer that answers
+without an API key, so their `midnight:<net>` entry has to be set (see
+[Fund balance](#fund-balance-ows-fund-balance)). All three networks ship a default node.
+
+### Two endpoints per network: indexer vs node
+
+Midnight splits its read and write paths across different services:
+
+- **`midnight:<net>` → the GraphQL indexer.** Used by [`fund balance`](#fund-balance-ows-fund-balance)
+  to read unshielded UTXOs, replay the shielded (`zswapLedgerEvents`) and dust ledgers, and
+  read the current block height for the snapshot fast-path. `resolve_indexer_url` looks up
+  this key.
+- **`midnight:<net>:node` → the Substrate node.** Used by
+  [`sign send-tx`](#sign-and-send-ows-sign-send-tx) to broadcast a sealed transaction
+  (`Midnight::send_mn_transaction`). `resolve_midnight_node_rpc_url` looks up the
+  `{chain_id}:node` key.
+
+The two are resolved by **separate** functions on purpose. Both are exact lookups on their
+key — `resolve_indexer_url` on `midnight:<net>`, `resolve_midnight_node_rpc_url` on
+`midnight:<net>:node` — and node resolution deliberately has **no namespace fallback**: a
+missing `:node` entry errors with a clear message rather than silently sending a broadcast
+to the indexer URL. An explicit `--rpc-url` overrides the node lookup. Each resolver's
+error names the exact config key to set, so a missing endpoint is self-explaining.
+
+### Overriding endpoints
+
+`config show` annotates each endpoint `(default)` or `(custom)`. A custom
+`~/.ows/config.json` can point any of these keys at a private indexer or node (e.g. for a
+feature testnet whose reference isn't a shipped default). Because a Midnight network is
+identified by its **verbatim CAIP-2 reference**, an ad-hoc `midnight:feature-x` network
+addresses and signs correctly out of the box — you only need to add `midnight:feature-x`
+and `midnight:feature-x:node` entries so its indexer and node can be reached.
+
+### How this differs from other chains
+
+Other chain families register one RPC endpoint per network. Midnight registers two — a
+read endpoint (indexer) and a write endpoint (node) — reflecting its split read/write
+architecture. The commands resolve them through different code paths so the two are never
+confused.
+
+### Validation
+
+Endpoint resolution is covered by unit tests in `ows-core/src/config.rs`
+(`rpc_url("midnight:preview")` → the indexer URL; `rpc_url("midnight:preview:node")` → the
+node URL). End to end, `e2e/midnight-fund-balance.sh` reads through the indexer and
+`e2e/midnight-sign-send-tx.sh` broadcasts through the node.

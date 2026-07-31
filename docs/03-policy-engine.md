@@ -266,6 +266,8 @@ For executable policies, the engine injects `policy_config` into the JSON payloa
 
 Only chains whose signer overrides `make_transaction_context` fill `effects`; today that is Cardano. Everywhere else — EVM included — `effects` is empty and `raw_hex` is the whole payload, so a policy that needs parsed transaction fields has to decode `raw_hex` itself.
 
+Midnight also leaves `effects` empty, but a cap can still see its movement. The wallet plans a Midnight transaction only after the first policy pass, then runs the key's policies a second time with its own wallet-relative movement, per execution segment, in `chain_extra.segment_effects`. A cap meant to cover Midnight reads that field, and allows when `chain_extra` is absent, which is the first pass. See "Effect-aware policies" in `docs/midnight.md`.
+
 > **Earlier versions documented `transaction.to` and `transaction.value`.** Both fields existed on the struct but were never populated by any chain, on any code path, so a policy reading them always saw `null`. They are removed in favour of `effects`; nothing that worked has stopped working.
 
 ### Migrating a policy that detects typed data
