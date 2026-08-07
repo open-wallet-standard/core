@@ -17,7 +17,8 @@
 # A taker completes the sealed maker (4's output) by MERGING in its complementary half plus a dust fee
 # (5).
 #
-# Proving runs in-process (circuit keys fetched on first use) — no separate prover service.
+# Proving runs in-process by default (circuit keys fetched on first use) — or against
+# rpc["midnight:<net>:prover"] when configured. No proof server is required out of the box.
 #
 # Usage:  ./midnight-connector-siblings.sh [network]   # network defaults to midnight:preprod
 # Env:    CHAIN=midnight:preview   PROFILE=debug (faster build, slower prove)

@@ -1,5 +1,5 @@
-//! URL helpers shared between the indexer-backed sync modules and the
-//! node submission pipeline.
+//! URL helpers shared between the indexer-backed sync modules, the
+//! node submission pipeline and the proof-server client.
 
 use reqwest::Url;
 
@@ -24,6 +24,20 @@ pub(crate) fn without_credentials(url: &str) -> Option<String> {
     parsed.set_query(None);
     parsed.set_fragment(None);
     Some(parsed.into())
+}
+
+/// Whether `url` points at this machine: `localhost` or a loopback IP. A plaintext (`http://`,
+/// `ws://`) endpoint is accepted only then, since the connection carries what that endpoint is
+/// trusted with.
+pub(crate) fn is_loopback(url: &Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    })
 }
 
 /// Derive the GraphQL-over-WebSocket endpoint from a configured indexer URL: the GraphQL HTTP

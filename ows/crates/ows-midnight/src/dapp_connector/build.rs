@@ -19,7 +19,6 @@ use midnight_ledger::structure::{
 use midnight_serialize::{tagged_serialize, Deserializable};
 use midnight_storage::db::InMemoryDB;
 use ows_core::policy::TransactionEffect;
-use ows_core::sync_cache::SyncCacheScope;
 use ows_signer::chains::midnight::MidnightAddresses;
 use ows_signer::chains::MidnightSigner;
 use serde::{Deserialize, Deserializer};
@@ -227,13 +226,7 @@ pub(super) fn prove_preimage(
     chain_id: &str,
     preimage: PreimageTx,
 ) -> Result<ProvenTx, std::io::Error> {
-    let scope = SyncCacheScope {
-        chain_id: Some(chain_id.to_string()),
-        ..Default::default()
-    };
-    let dir = crate::cache_io::proving_keys_dir(&scope)
-        .ok_or_else(|| err("could not resolve the Midnight proving-key directory"))?;
-    let prover = crate::Prover::new(dir);
+    let prover = crate::balance_tx::midnight_prover(chain_id)?;
     let cost_model = &INITIAL_PARAMETERS.cost_model.runtime_cost_model;
     crate::block_on(preimage.prove(prover, cost_model))
         .map_err(|e| err(format!("prove constructed outputs: {e}")))

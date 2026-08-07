@@ -1279,17 +1279,21 @@ ows config show
 #   midnight:preprod:node    https://rpc.preprod.midnight.network/                    (default)
 #   midnight:preview         https://indexer.preview.midnight.network/api/v4/graphql  (default)
 #   midnight:preview:node    https://rpc.preview.midnight.network/                    (default)
+#   midnight:preview:prover  http://127.0.0.1:6300                                    (custom)
 ```
 
 `config show` is generic, but Midnight is the one chain family that registers **two
-endpoints per network**, and understanding why is central to how Midnight commands reach
-the network.
+endpoints per network** (indexer + node), with an optional third for proving, and
+understanding why is central to how Midnight commands reach the network.
 
 Only preview ships a default indexer: mainnet and preprod have no public indexer that answers
 without an API key, so their `midnight:<net>` entry has to be set (see
 [Fund balance](#fund-balance-ows-fund-balance)). All three networks ship a default node.
 
-### Two endpoints per network: indexer vs node
+The sample above shows a custom `:prover` entry. That key is **not** shipped in defaults, so
+it appears in `config show` only after you add it to `~/.ows/config.json`.
+
+### Endpoints per network: indexer, node, and optional prover
 
 Midnight splits its read and write paths across different services:
 
@@ -1301,29 +1305,53 @@ Midnight splits its read and write paths across different services:
   [`sign send-tx`](#sign-and-send-ows-sign-send-tx) to broadcast a sealed transaction
   (`Midnight::send_mn_transaction`). `resolve_midnight_node_rpc_url` looks up the
   `{chain_id}:node` key.
+- **`midnight:<net>:prover` → an optional proof server** (HTTP, default port 6300). When
+  set, authorize / prove paths post `/check` and `/prove` to that URL. When absent or blank,
+  OWS proves in-process with the local zkir prover (circuit keys under
+  `~/.ows/chains/midnight/proving-keys`). There is no shipped default — local proving remains
+  the default. Example override in `~/.ows/config.json`:
 
-The two are resolved by **separate** functions on purpose. Both are exact lookups on their
-key — `resolve_indexer_url` on `midnight:<net>`, `resolve_midnight_node_rpc_url` on
+```json
+{
+  "rpc": {
+    "midnight:preview:prover": "http://127.0.0.1:6300"
+  }
+}
+```
+
+Remote proving sends each proof's preimage to the configured host, and a spend's preimage
+carries the key that authorizes it: the wallet's **coin secret key** for a shielded spend, which
+can spend every shielded coin the wallet holds, and its **dust secret key** for a DUST spend,
+which can burn its DUST as fees. The unshielded key, which controls NIGHT and other unshielded
+tokens, never leaves the signer. Only point `:prover` at a proof server you trust as much as the
+wallet itself, and prefer a local instance (`http://127.0.0.1:6300`). A plaintext `http://` URL
+is accepted only for a loopback address; anything else needs `https://`. Credentials in the URL
+never appear in error messages.
+
+Indexer and node are resolved by **separate** functions on purpose. Both are exact lookups on
+their key — `resolve_indexer_url` on `midnight:<net>`, `resolve_midnight_node_rpc_url` on
 `midnight:<net>:node` — and node resolution deliberately has **no namespace fallback**: a
 missing `:node` entry errors with a clear message rather than silently sending a broadcast
 to the indexer URL. An explicit `--rpc-url` overrides the node lookup. Each resolver's
-error names the exact config key to set, so a missing endpoint is self-explaining.
+error names the exact config key to set, so a missing endpoint is self-explaining. The
+optional `:prover` key is likewise an exact lookup (`resolve_midnight_prover_url`); missing
+means local proving, not an error.
 
 ### Overriding endpoints
 
 `config show` annotates each endpoint `(default)` or `(custom)`. A custom
-`~/.ows/config.json` can point any of these keys at a private indexer or node (e.g. for a
-feature testnet whose reference isn't a shipped default). Because a Midnight network is
-identified by its **verbatim CAIP-2 reference**, an ad-hoc `midnight:feature-x` network
-addresses and signs correctly out of the box — you only need to add `midnight:feature-x`
-and `midnight:feature-x:node` entries so its indexer and node can be reached.
+`~/.ows/config.json` can point any of these keys at a private indexer, node, or proof server
+(e.g. for a feature testnet whose reference isn't a shipped default). Because a Midnight
+network is identified by its **verbatim CAIP-2 reference**, an ad-hoc `midnight:feature-x`
+network addresses and signs correctly out of the box — you only need to add
+`midnight:feature-x` and `midnight:feature-x:node` entries so its indexer and node can be
+reached (and optionally `midnight:feature-x:prover` for a remote proof server).
 
 ### How this differs from other chains
 
-Other chain families register one RPC endpoint per network. Midnight registers two — a
-read endpoint (indexer) and a write endpoint (node) — reflecting its split read/write
-architecture. The commands resolve them through different code paths so the two are never
-confused.
+Other chain families register one RPC endpoint per network. Midnight registers two — a read endpoint (indexer) and a write endpoint (node) — reflecting its split
+read/write architecture, plus an optional prove endpoint. The commands resolve them through
+different code paths so they are never confused.
 
 ### Validation
 

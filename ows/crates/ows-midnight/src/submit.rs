@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use super::urls::{http_url_to_ws_url, without_credentials};
+use super::urls::{http_url_to_ws_url, is_loopback, without_credentials};
 
 fn err(msg: impl Into<String>) -> std::io::Error {
     std::io::Error::other(msg.into())
@@ -198,15 +198,7 @@ fn require_tls_unless_loopback(node_rpc_url: &str) -> Result<(), std::io::Error>
         "http" | "ws" => {}
         _ => return Err(invalid_scheme(node_rpc_url)),
     }
-    let loopback = url.host_str().is_some_and(|host| {
-        host.eq_ignore_ascii_case("localhost")
-            || host
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback())
-    });
-    if loopback {
+    if is_loopback(&url) {
         Ok(())
     } else {
         Err(err(format!(

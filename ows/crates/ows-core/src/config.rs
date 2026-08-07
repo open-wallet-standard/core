@@ -109,6 +109,8 @@ impl Config {
             "midnight:preview:node".into(),
             "https://rpc.preview.midnight.network/".into(),
         );
+        // Optional proof server: `rpc["{chain_id}:prover"]`. Intentionally omitted from defaults —
+        // when unset, Midnight proves in-process with the local zkir prover.
         rpc
     }
 }
