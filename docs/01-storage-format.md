@@ -204,9 +204,29 @@ All signing operations are appended to `~/.ows/logs/audit.jsonl`:
 }
 ```
 
-Current CLI audit operations include `create_wallet`, `import_wallet`, `export_wallet`, `broadcast_transaction`, `delete_wallet`, and `rename_wallet`.
+Current CLI audit operations:
 
-All fields except `timestamp`, `wallet_id`, and `operation` are optional.
+| Operation | Scope | Recorded when |
+|---|---|---|
+| `create_wallet`, `import_wallet`, `export_wallet`, `delete_wallet`, `rename_wallet` | wallet | the vault's wallet set changes |
+| `sign_transaction` | wallet | a transaction signing is **attempted**, whether or not it is broadcast |
+| `sign_message` | wallet | a message or EVM typed-data signing is **attempted** |
+| `broadcast_transaction` | wallet | signed bytes are submitted to a node |
+| `create_api_key`, `revoke_api_key` | wallet | an agent credential is minted or revoked — one record per wallet the key reaches |
+| `create_policy`, `delete_policy` | vault | the policy set changes |
+
+Signing and broadcasting are recorded separately, because they are separable: a signature — on Midnight, a fully sealed and submittable transaction — can be produced by one party and submitted by another, so a `broadcast_transaction` record alone does not account for every artifact a wallet has released.
+
+A command that both signs and broadcasts (`sign send-tx`) writes both records: a policy gates the signing, so recording only the broadcast would leave the signing half invisible — and a refused attempt invisible entirely.
+
+Signing records carry two `details` fields:
+
+- `actor=owner` or `actor=api_key` — distinguishing what a human did from what an autonomous agent did under a minted token. The token itself is never recorded.
+- `outcome=allowed`, or `outcome=denied, policy=<id>, reason=<text>` — the policy verdict. A denial is recorded under the **same** operation name as a success, so a refused attempt is a record rather than an absence, and an agent repeatedly hitting its cap is visible in the trail.
+
+Only a policy denial is recorded as `outcome=denied`. Any other failure — a network error, a malformed request, a missing prover — is the operation breaking rather than a policy deciding, and is not an audit event. `reason` is text an executable policy produced, so implementations SHOULD bound its length.
+
+All fields except `timestamp` and `operation` are optional. `wallet_id` is present for every **wallet-scoped** operation and is always the wallet's id, never its (renameable) name; it is absent for **vault-scoped** operations — policy registration and deletion — which belong to no single wallet. Omitting it, rather than recording a placeholder, keeps a per-wallet query over the log from picking up records that are not about a wallet.
 
 The audit log is append-only. Implementations MUST NOT allow deletion or modification of existing entries. Log rotation is permitted (e.g., monthly archives).
 

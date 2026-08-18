@@ -2,7 +2,7 @@ use ows_signer::chains::EvmSigner;
 use ows_signer::signer_for_chain;
 use ows_signer::ChainSigner;
 
-use crate::{parse_chain, CliError};
+use crate::{audit, parse_chain, CliError};
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -17,12 +17,15 @@ pub fn run(
 ) -> Result<(), CliError> {
     // Check for API token in passphrase — route through library for policy enforcement
     let passphrase = super::peek_passphrase();
-    if passphrase
-        .as_deref()
-        .is_some_and(|p| p.starts_with(ows_lib::key_store::TOKEN_PREFIX))
-    {
-        if let Some(td_json) = typed_data {
-            let result = ows_lib::sign_typed_data(
+    let actor = audit::Actor::from_passphrase(passphrase.as_deref());
+    let kind = if typed_data.is_some() {
+        "typed_data"
+    } else {
+        "message"
+    };
+    if matches!(actor, audit::Actor::ApiKey) {
+        let result = if let Some(td_json) = typed_data {
+            ows_lib::sign_typed_data(
                 wallet_name,
                 chain_str,
                 td_json,
@@ -30,19 +33,36 @@ pub fn run(
                 Some(index),
                 address,
                 None,
-            )?;
-            return print_result(&result, json_output);
-        }
-        let result = ows_lib::sign_message(
+            )
+        } else {
+            ows_lib::sign_message(
+                wallet_name,
+                chain_str,
+                message,
+                passphrase.as_deref(),
+                Some(encoding),
+                Some(index),
+                address,
+                None,
+            )
+        };
+        let result = match result {
+            Ok(result) => result,
+            // A policy refusal is a verdict worth recording, so it is logged before propagating.
+            Err(e) => {
+                if let Some(outcome) = audit::denial(&e) {
+                    log_signed(wallet_name, chain_str, kind, &actor, &outcome);
+                }
+                return Err(e.into());
+            }
+        };
+        log_signed(
             wallet_name,
             chain_str,
-            message,
-            passphrase.as_deref(),
-            Some(encoding),
-            Some(index),
-            address,
-            None,
-        )?;
+            kind,
+            &actor,
+            &audit::Outcome::Allowed,
+        );
         return print_result(&result, json_output);
     }
 
@@ -77,7 +97,30 @@ pub fn run(
     // Encode per chain — Midnight prefixes the x-only pubkey to the BIP-340 signature; every other
     // chain returns the hex signature as-is.
     let result = ows_lib::sign_result_from_message_output(chain.chain_type, &output)?;
+    log_signed(
+        wallet_name,
+        chain_str,
+        kind,
+        &actor,
+        &audit::Outcome::Allowed,
+    );
     print_result(&result, json_output)
+}
+
+/// Trace the signature this command just handed out — a message signature is a bearer artifact too,
+/// and an EVM typed-data one can authorize value movement. Same wallet-id resolution as `sign tx`:
+/// keyed on the id so the record joins the rest of the log, and skipped rather than fatal when the
+/// wallet no longer resolves.
+fn log_signed(
+    wallet_name: &str,
+    chain_str: &str,
+    kind: &str,
+    actor: &audit::Actor,
+    outcome: &audit::Outcome,
+) {
+    if let Ok(info) = ows_lib::get_wallet(wallet_name, None) {
+        audit::log_message_signed(&info.id, chain_str, kind, actor, outcome);
+    }
 }
 
 fn print_result(result: &ows_lib::SignResult, json_output: bool) -> Result<(), CliError> {
