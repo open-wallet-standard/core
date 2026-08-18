@@ -133,6 +133,31 @@ fn try_registration_dust_actions(
     )))
 }
 
+/// Blocks of fee-price drift a sized DUST section must survive. Midnight re-prices fees every block
+/// from how full the previous one was, so a fee sized against the current tip under-pays if the tx
+/// lands a few blocks later into a busier chain. `Transaction::fees_with_margin` prices exactly that:
+/// it scales the fee by `max_price_adjustment ^ margin`, the worst-case drift over `margin` blocks.
+/// Five matches the reference wallet SDK's `feeBlocksMargin`.
+const FEE_BLOCKS_MARGIN: usize = 5;
+
+/// Absolute floor on that drift cushion, in specks.
+///
+/// The margin is *multiplicative* and `fees_with_margin` truncates to an integer, so on a quiet chain
+/// — where the whole fee is a speck or two — it rounds away and the section is sized with **no**
+/// headroom at all. Measured on preprod: a 1-speck fee yields a 1-speck margined fee, and such
+/// transactions are then rejected by the node whenever the price ticks up between building and
+/// landing (`Invalid Transaction`), intermittently and unreproducibly.
+///
+/// So the cushion is the larger of the two: the multiplicative margin governs on a busy chain, this
+/// floor on a quiet one. A speck is 1e-15 DUST, so this is negligible against any real balance.
+const FEE_MIN_ABSOLUTE_MARGIN: u128 = 100_000;
+
+/// The fee a DUST section is sized against: the ledger's own margined fee, floored so the cushion
+/// never truncates to nothing. See [`FEE_MIN_ABSOLUTE_MARGIN`].
+fn with_drift_margin(margined_fee: u128, base_fee: u128) -> u128 {
+    margined_fee.max(base_fee.saturating_add(FEE_MIN_ABSOLUTE_MARGIN))
+}
+
 /// Sum the fee value carried by a set of dust spends.
 fn sum_dust_v_fee<P: ProofKind<InMemoryDB>>(
     spends: impl IntoIterator<Item = impl std::borrow::Borrow<DustSpend<P, InMemoryDB>>>,
@@ -267,9 +292,14 @@ pub(super) fn size_dust_fee(ctx: &DustFeeContext) -> Result<DustFeePlan, std::io
             intent_ttl,
         ),
     );
-    let mut fee_target = tx_first
-        .fees(ctx.ledger_params, false)
-        .map_err(|e| err(format!("DUST fee estimate failed: {e:?}")))?;
+    let mut fee_target = with_drift_margin(
+        tx_first
+            .fees_with_margin(ctx.ledger_params, FEE_BLOCKS_MARGIN)
+            .map_err(|e| err(format!("DUST fee estimate failed: {e:?}")))?,
+        tx_first
+            .fees(ctx.ledger_params, false)
+            .map_err(|e| err(format!("DUST fee estimate failed: {e:?}")))?,
+    );
 
     // The dust state is expensive to sync, so pull it only when the spend fallback is first needed.
     let mut dust_state: Option<DustLocalState<InMemoryDB>> = None;
@@ -336,9 +366,18 @@ pub(super) fn size_dust_fee(ctx: &DustFeeContext) -> Result<DustFeePlan, std::io
             });
         }
 
-        let actual_fee = tx_check
-            .fees(ctx.ledger_params, true)
-            .map_err(|e| err(format!("DUST fee re-estimate failed: {e:?}")))?;
+        // Re-estimate against the section we just built — margined, and via `fees_with_margin`'s
+        // `enforce_time_to_dismiss: false`, so a tx still under the time-to-dismiss bound grows its
+        // section here instead of erroring out (which is what `dust_section_covers_fee` returning
+        // not-covered for `OutsideTimeToDismiss` asks the loop to do).
+        let actual_fee = with_drift_margin(
+            tx_check
+                .fees_with_margin(ctx.ledger_params, FEE_BLOCKS_MARGIN)
+                .map_err(|e| err(format!("DUST fee re-estimate failed: {e:?}")))?,
+            tx_check
+                .fees(ctx.ledger_params, false)
+                .map_err(|e| err(format!("DUST fee re-estimate failed: {e:?}")))?,
+        );
         let dust_paid = sum_dust_v_fee(dust_actions.spends.iter_deref());
         fee_target = actual_fee
             .max(fee_target.saturating_add(1))
@@ -415,9 +454,14 @@ pub(crate) fn size_merge_dust_fee(
 
     // First estimate: the merged fee with no DUST section yet.
     let merged0 = merged_with_taker_dust(maker, taker_base, dust_seg, None, intent_ttl)?;
-    let mut fee_target = merged0
-        .fees(ledger_params, false)
-        .map_err(|e| err(format!("merged DUST fee estimate failed: {e:?}")))?;
+    let mut fee_target = with_drift_margin(
+        merged0
+            .fees_with_margin(ledger_params, FEE_BLOCKS_MARGIN)
+            .map_err(|e| err(format!("merged DUST fee estimate failed: {e:?}")))?,
+        merged0
+            .fees(ledger_params, false)
+            .map_err(|e| err(format!("merged DUST fee estimate failed: {e:?}")))?,
+    );
 
     // Syncing the spendable dust state is expensive; the merge always needs it (spend path), so pull
     // it once up front.
@@ -465,9 +509,18 @@ pub(crate) fn size_merge_dust_fee(
             return Ok((plan, Box::new(dust_state)));
         }
 
-        // The DUST section under-covers the fee: grow the target and re-size.
+        // The DUST section under-covers the fee: grow the target — to the *margined* fee of the tx we
+        // just measured, so the next round's section survives the price drift too — and re-size.
+        let margin_fee = with_drift_margin(
+            merged
+                .fees_with_margin(ledger_params, FEE_BLOCKS_MARGIN)
+                .map_err(|e| err(format!("merged DUST fee re-estimate failed: {e:?}")))?,
+            merged
+                .fees(ledger_params, false)
+                .map_err(|e| err(format!("merged DUST fee re-estimate failed: {e:?}")))?,
+        );
         let dust_paid = sum_dust_v_fee(dust_actions.spends.iter_deref());
-        fee_target = fee
+        fee_target = margin_fee
             .max(fee_target.saturating_add(1))
             .max(dust_paid.saturating_add(1));
         if attempt + 1 == MAX_FEE_ITERS {
@@ -614,6 +667,25 @@ mod tests {
             new_commitment: DustCommitment(Fr::default()),
             proof: (),
         }
+    }
+
+    /// The drift cushion must never truncate to nothing. On a quiet chain the ledger's multiplicative
+    /// margin rounds a 1-speck fee back to 1 speck — zero headroom, and the node then rejects the tx
+    /// whenever the price ticks up before it lands. The absolute floor is what covers that; on a busy
+    /// chain, where the multiplicative margin is the larger of the two, it governs instead.
+    #[test]
+    fn the_drift_cushion_never_rounds_away() {
+        // Quiet chain: ledger margin truncated back to the base fee → the floor supplies the headroom.
+        assert_eq!(with_drift_margin(1, 1), 1 + FEE_MIN_ABSOLUTE_MARGIN);
+        assert!(
+            with_drift_margin(1, 1) > 1,
+            "a sized fee must carry headroom"
+        );
+
+        // Busy chain: the multiplicative margin dwarfs the floor and governs.
+        let base = 100_000_000;
+        let margined = base * 5;
+        assert_eq!(with_drift_margin(margined, base), margined);
     }
 
     #[test]

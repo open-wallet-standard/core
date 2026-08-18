@@ -956,16 +956,22 @@ fn mock_prove_shielded_offer(
         })
 }
 
-/// Select just enough of the wallet's generated dust notes to pay `fee_dust`, building each spend's
-/// proof-preimage against the synced state. Targets a headroom over the fee (the spends themselves
-/// add to the fee, so the caller re-runs this with a higher target when needed).
+/// Select just enough of the wallet's generated dust notes to pay exactly `fee_dust`, building each
+/// spend's proof-preimage against the synced state.
+///
+/// The selected spends' `v_fee` sums to `fee_dust` and no more: every star of `v_fee` is burnt, so a
+/// cushion added here would be a silent donation *and* would understate the burn to a policy (the
+/// plan reports `fee_dust` as the wallet's DUST outflow). The cushion that covers fee drift between
+/// sizing and inclusion belongs in `fee_dust` itself — the balancer sizes it with
+/// `Transaction::fees_with_margin`, which prices the ledger's per-block fee adjustment properly
+/// rather than guessing a multiplier.
 fn select_dust_spends_preimage(
     mut st: DustLocalState<InMemoryDB>,
     dsk: &DustSecretKey,
     fee_dust: u128,
     dust_ctime: Timestamp,
 ) -> Result<Vec<DustSpend<ProofPreimageMarker, InMemoryDB>>, SignerError> {
-    let mut need = fee_dust.saturating_mul(2).saturating_add(100_000);
+    let mut need = fee_dust;
     let mut spends = Vec::new();
     for qdo in st.utxos().collect::<Vec<_>>() {
         if need == 0 {
@@ -1464,6 +1470,83 @@ mod tests {
             format!("{e}").contains("insufficient DUST balance"),
             "unexpected error: {e}"
         );
+    }
+
+    /// A dust state holding one generated note the wallet owns, replayed from the ledger's own
+    /// `DustInitialUtxo` event so the generation and commitment trees line up the way a synced state's
+    /// do — enough for `spend` to build a proof preimage against it, with no indexer or prover.
+    fn dust_state_with_one_note(
+        dsk: &DustSecretKey,
+        night_value: u128,
+        ctime: Timestamp,
+    ) -> DustLocalState<InMemoryDB> {
+        use midnight_base_crypto::hash::HashOutput;
+        use midnight_ledger::dust::{
+            dust_nonce, DustGenerationInfo, InitialNonce, QualifiedDustOutput,
+            INITIAL_DUST_PARAMETERS,
+        };
+        use midnight_ledger::events::{Event, EventDetails, EventSource};
+        use midnight_ledger::structure::TransactionHash;
+
+        let owner = DustPublicKey::from(dsk.clone());
+        let backing_night = InitialNonce(HashOutput([7u8; 32]));
+        let event = Event {
+            source: EventSource {
+                transaction_hash: TransactionHash(HashOutput([0u8; 32])),
+                logical_segment: 0,
+                physical_segment: 0,
+            },
+            content: EventDetails::DustInitialUtxo {
+                output: QualifiedDustOutput {
+                    initial_value: night_value
+                        .saturating_mul(INITIAL_DUST_PARAMETERS.night_dust_ratio as u128),
+                    owner,
+                    nonce: dust_nonce(&backing_night, 0, dsk),
+                    seq: 0,
+                    ctime,
+                    backing_night,
+                    mt_index: 0,
+                },
+                generation: DustGenerationInfo {
+                    value: night_value,
+                    owner,
+                    nonce: backing_night,
+                    dtime: Timestamp::from_secs(u64::MAX),
+                },
+                generation_index: 0,
+                block_time: ctime,
+            },
+        };
+        DustLocalState::new(INITIAL_DUST_PARAMETERS)
+            .replay_events(dsk, std::iter::once(&event))
+            .expect("replay the initial dust utxo")
+    }
+
+    /// The selected spends pay **exactly** the requested fee — no cushion. Every star of `v_fee` is
+    /// burnt, so a cushion here is a silent donation, and it would also understate the burn to a
+    /// policy (which is shown the plan's `fee_dust`). Headroom against fee drift belongs in
+    /// `fee_dust` itself, sized by the balancer with `fees_with_margin`.
+    #[test]
+    fn dust_spends_pay_exactly_the_requested_fee() {
+        let provider = MidnightSigner::mainnet()
+            .crypto_provider(&SecretBytes::from_slice(&signing_key_blob()))
+            .unwrap();
+        let ctime = Timestamp::from_secs(1_000);
+        // A whole NIGHT backing the note, spent an hour on so it has generated well past the fee.
+        let st = dust_state_with_one_note(
+            &provider.dust_sk,
+            midnight_ledger::structure::STARS_PER_NIGHT,
+            ctime,
+        );
+        let now = Timestamp::from_secs(1_000 + 3_600);
+
+        for fee in [1u128, 10_000, 999_999] {
+            let spends = provider
+                .build_preimage_dust_spends(st.clone(), fee, now)
+                .unwrap_or_else(|e| panic!("build spends for fee {fee}: {e}"));
+            let paid: u128 = spends.iter().map(|s| s.v_fee).sum();
+            assert_eq!(paid, fee, "spends must pay exactly the requested fee");
+        }
     }
 
     /// `recognize_shielded_inflow` picks up exactly the zswap outputs routed to this wallet — the
