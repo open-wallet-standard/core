@@ -185,6 +185,33 @@ fn sync_spendable_dust_state(
     ))
 }
 
+/// Re-read the chain tip once the dust state is synced.
+///
+/// The sync replays every ledger event the wallet has not seen — a handful when its snapshot is warm,
+/// tens of thousands on a cold cache — and the node re-prices fees *every block* while it runs. The tip
+/// handed to the sizing call was read before that replay, so pricing against it spends the whole drift
+/// margin before sizing even begins. The same staleness bounds a dust spend: its `ctime` has to land
+/// inside the ledger's validity window (`OutOfDustValidityWindow`), which a long replay can walk out of.
+///
+/// So the tip is re-read here, and the fee, the dust ctime and the intent TTL all derive from the
+/// fresher one — leaving only proving and submission between pricing and inclusion, which is what
+/// [`FEE_BLOCKS_MARGIN`] is sized for.
+fn reprice_after_sync(
+    indexer_url: &str,
+    priced_at: Timestamp,
+) -> Result<(LedgerParameters, Timestamp), std::io::Error> {
+    let (params, tip_secs) = crate::block_on(crate::ledger_params::fetch_indexer_tip(indexer_url))?;
+    let fresh = Timestamp::from_secs(tip_secs);
+    // How far the chain ran while we synced is the whole reason this call exists, so say it: a warm
+    // sync moves the tip by seconds, a cold one by hours, and the second case is unreadable from a
+    // fee number alone.
+    let drift = tip_secs.saturating_sub(priced_at.to_secs());
+    if drift > 0 {
+        eprintln!("[ows-midnight] dust sync advanced the tip by {drift}s; re-pricing the DUST fee");
+    }
+    Ok((params, fresh))
+}
+
 /// The transaction context a DUST fee section is sized against: the proven standard tx and its
 /// single intent segment, the balanced unshielded offer and the UTXOs funding it, the wallet's
 /// dust key / night key, the crypto provider + indexer + scope (to sync a spendable dust state and
@@ -275,12 +302,18 @@ fn dust_section_covers_fee(
 /// (fixed-size proofs → the mock section's fee matches the real one exactly). The registration is
 /// finalized here; the proof-bearing spend is realized post-seam by
 /// [`MidnightCryptoProvider::authorize_dust`].
-pub(super) fn size_dust_fee(ctx: &DustFeeContext) -> Result<DustFeePlan, std::io::Error> {
+pub(super) fn size_dust_fee(
+    ctx: &DustFeeContext,
+) -> Result<(DustFeePlan, Timestamp), std::io::Error> {
     const MAX_FEE_ITERS: usize = 8;
-    let intent_ttl = chain_aligned_intent_ttl(ctx.dust_ctime);
+    // Re-read from the tip once the (possibly slow) dust sync has run — see [`reprice_after_sync`].
+    // The registration path returns before any sync, so there these stay as the caller read them.
+    let mut params = ctx.ledger_params.clone();
+    let mut dust_ctime = ctx.dust_ctime;
+    let mut intent_ttl = chain_aligned_intent_ttl(dust_ctime);
 
     // First pass: a zero-allowance registration only to size the fee.
-    let first = registration_dust_actions(ctx.dust_pk, ctx.night_vk.clone(), 0, ctx.dust_ctime);
+    let first = registration_dust_actions(ctx.dust_pk, ctx.night_vk.clone(), 0, dust_ctime);
     let tx_first = wrap_proven_standard(
         ctx.stx,
         ctx.seg_id,
@@ -294,10 +327,10 @@ pub(super) fn size_dust_fee(ctx: &DustFeeContext) -> Result<DustFeePlan, std::io
     );
     let mut fee_target = with_drift_margin(
         tx_first
-            .fees_with_margin(ctx.ledger_params, FEE_BLOCKS_MARGIN)
+            .fees_with_margin(&params, FEE_BLOCKS_MARGIN)
             .map_err(|e| err(format!("DUST fee estimate failed: {e:?}")))?,
         tx_first
-            .fees(ctx.ledger_params, false)
+            .fees(&params, false)
             .map_err(|e| err(format!("DUST fee estimate failed: {e:?}")))?,
     );
 
@@ -310,7 +343,7 @@ pub(super) fn size_dust_fee(ctx: &DustFeeContext) -> Result<DustFeePlan, std::io
             fee_target,
             ctx.dust_pk,
             ctx.night_vk.clone(),
-            ctx.dust_ctime,
+            dust_ctime,
         )? {
             let tx_check = wrap_proven_standard(
                 ctx.stx,
@@ -323,8 +356,8 @@ pub(super) fn size_dust_fee(ctx: &DustFeeContext) -> Result<DustFeePlan, std::io
                     intent_ttl,
                 ),
             );
-            if dust_section_covers_fee(&tx_check, ctx.ledger_params)? {
-                return Ok(DustFeePlan::Registration(reg));
+            if dust_section_covers_fee(&tx_check, &params)? {
+                return Ok((DustFeePlan::Registration(reg), intent_ttl));
             }
         }
 
@@ -334,11 +367,18 @@ pub(super) fn size_dust_fee(ctx: &DustFeeContext) -> Result<DustFeePlan, std::io
                 ctx.crypto_provider,
                 ctx.scope,
             )?);
+            // The sync just moved the chain on; re-price against where it actually is now. The loop
+            // is self-correcting from here — a fee target the fresher params outgrow simply fails the
+            // coverage check below and is raised on the next attempt.
+            let (fresh_params, fresh_ctime) = reprice_after_sync(ctx.indexer_url, dust_ctime)?;
+            params = fresh_params;
+            dust_ctime = fresh_ctime;
+            intent_ttl = chain_aligned_intent_ttl(dust_ctime);
         }
         let synced = dust_state.as_ref().expect("dust state synced above");
         let plan = DustSpendPlan {
             fee_dust: fee_target,
-            dust_ctime: ctx.dust_ctime,
+            dust_ctime,
             intent_ttl,
             seg_id: ctx.seg_id,
             binding_commitment: ctx.intent_in.binding_commitment,
@@ -358,12 +398,15 @@ pub(super) fn size_dust_fee(ctx: &DustFeeContext) -> Result<DustFeePlan, std::io
                 intent_ttl,
             ),
         );
-        if dust_section_covers_fee(&tx_check, ctx.ledger_params)? {
-            return Ok(DustFeePlan::Spend {
-                plan,
-                dust_state: Box::new(synced.clone()),
-                ledger_params: Box::new(ctx.ledger_params.clone()),
-            });
+        if dust_section_covers_fee(&tx_check, &params)? {
+            return Ok((
+                DustFeePlan::Spend {
+                    plan,
+                    dust_state: Box::new(synced.clone()),
+                    ledger_params: Box::new(params.clone()),
+                },
+                intent_ttl,
+            ));
         }
 
         // Re-estimate against the section we just built — margined, and via `fees_with_margin`'s
@@ -372,10 +415,10 @@ pub(super) fn size_dust_fee(ctx: &DustFeeContext) -> Result<DustFeePlan, std::io
         // not-covered for `OutsideTimeToDismiss` asks the loop to do).
         let actual_fee = with_drift_margin(
             tx_check
-                .fees_with_margin(ctx.ledger_params, FEE_BLOCKS_MARGIN)
+                .fees_with_margin(&params, FEE_BLOCKS_MARGIN)
                 .map_err(|e| err(format!("DUST fee re-estimate failed: {e:?}")))?,
             tx_check
-                .fees(ctx.ledger_params, false)
+                .fees(&params, false)
                 .map_err(|e| err(format!("DUST fee re-estimate failed: {e:?}")))?,
         );
         let dust_paid = sum_dust_v_fee(dust_actions.spends.iter_deref());
@@ -425,6 +468,17 @@ fn merged_with_taker_dust(
         .map_err(|e| err(format!("merge taker and maker for DUST sizing: {e:?}")))
 }
 
+/// The taker's sized DUST fee for a sealed-offer merge: the converged spend plan, the dust state it was
+/// sized against, and — crucially — the ledger parameters it was *priced* against. Sizing re-reads the
+/// tip after its dust sync (see [`reprice_after_sync`]), so those are fresher than whatever the caller
+/// held; proving the real spend against the caller's staler set would price it differently from the
+/// section that was just sized. Naming them here makes that pairing explicit rather than positional.
+pub(crate) struct MergeDustFee {
+    pub(crate) plan: DustSpendPlan,
+    pub(crate) dust_state: Box<DustLocalState<InMemoryDB>>,
+    pub(crate) ledger_params: LedgerParameters,
+}
+
 /// Size the taker's DUST fee for a sealed-offer MERGE. Unlike [`size_dust_fee`] (which sizes against the
 /// wallet's own balancing tx), the fee here must cover the **merged** transaction — the maker's sealed
 /// bytes plus the taker's sealed half — because the fee covers the whole tx and the maker contributes
@@ -448,24 +502,30 @@ pub(crate) fn size_merge_dust_fee(
     ledger_params: &LedgerParameters,
     indexer_url: &str,
     scope: &SyncCacheScope,
-) -> Result<(DustSpendPlan, Box<DustLocalState<InMemoryDB>>), std::io::Error> {
+) -> Result<MergeDustFee, std::io::Error> {
     const MAX_FEE_ITERS: usize = 8;
+
+    // Syncing the spendable dust state is expensive; the merge always needs it (spend path), so pull
+    // it once up front — then re-price, since the sync moved the chain on (see `reprice_after_sync`).
+    // Doing this before the first estimate keeps every number below on the same, fresher tip.
+    let dust_state = sync_spendable_dust_state(indexer_url, crypto_provider, scope)?;
+    let (ledger_params, dust_ctime) = match reprice_after_sync(indexer_url, dust_ctime) {
+        Ok(fresh) => fresh,
+        // A re-price failure is not worth losing the sync over: fall back to the tip the caller read.
+        Err(_) => (ledger_params.clone(), dust_ctime),
+    };
     let intent_ttl = chain_aligned_intent_ttl(dust_ctime);
 
     // First estimate: the merged fee with no DUST section yet.
     let merged0 = merged_with_taker_dust(maker, taker_base, dust_seg, None, intent_ttl)?;
     let mut fee_target = with_drift_margin(
         merged0
-            .fees_with_margin(ledger_params, FEE_BLOCKS_MARGIN)
+            .fees_with_margin(&ledger_params, FEE_BLOCKS_MARGIN)
             .map_err(|e| err(format!("merged DUST fee estimate failed: {e:?}")))?,
         merged0
-            .fees(ledger_params, false)
+            .fees(&ledger_params, false)
             .map_err(|e| err(format!("merged DUST fee estimate failed: {e:?}")))?,
     );
-
-    // Syncing the spendable dust state is expensive; the merge always needs it (spend path), so pull
-    // it once up front.
-    let dust_state = sync_spendable_dust_state(indexer_url, crypto_provider, scope)?;
 
     for attempt in 0..MAX_FEE_ITERS {
         let plan = DustSpendPlan {
@@ -486,7 +546,7 @@ pub(crate) fn size_merge_dust_fee(
             intent_ttl,
         )?;
         // Charge the node's real fee, enforcing the time-to-dismiss bound as `well_formed` does.
-        let fee = match merged.fees(ledger_params, true) {
+        let fee = match merged.fees(&ledger_params, true) {
             Ok(fee) => fee,
             // `OutsideTimeToDismiss` is a size-vs-compute bound, not a fee shortfall: the merged tx's
             // proof-validation cost exceeds what its serialized size allows the node to spend dismissing
@@ -506,17 +566,21 @@ pub(crate) fn size_merge_dust_fee(
             .balance(Some(fee))
             .map_err(|e| err(format!("merged balance check failed: {e:?}")))?;
         if balances.into_iter().all(|(_, bal)| bal >= 0) {
-            return Ok((plan, Box::new(dust_state)));
+            return Ok(MergeDustFee {
+                plan,
+                dust_state: Box::new(dust_state),
+                ledger_params,
+            });
         }
 
         // The DUST section under-covers the fee: grow the target — to the *margined* fee of the tx we
         // just measured, so the next round's section survives the price drift too — and re-size.
         let margin_fee = with_drift_margin(
             merged
-                .fees_with_margin(ledger_params, FEE_BLOCKS_MARGIN)
+                .fees_with_margin(&ledger_params, FEE_BLOCKS_MARGIN)
                 .map_err(|e| err(format!("merged DUST fee re-estimate failed: {e:?}")))?,
             merged
-                .fees(ledger_params, false)
+                .fees(&ledger_params, false)
                 .map_err(|e| err(format!("merged DUST fee re-estimate failed: {e:?}")))?,
         );
         let dust_paid = sum_dust_v_fee(dust_actions.spends.iter_deref());

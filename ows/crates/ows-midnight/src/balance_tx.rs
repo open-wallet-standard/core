@@ -1516,7 +1516,7 @@ fn plan_unsealed_proven_standard_tx(
             .dust_public_key()
             .map_err(|e| err(e.to_string()))?;
         let night_vk = sender_vk.clone();
-        let dust = fee_sizing::size_dust_fee(&DustFeeContext {
+        fee_sizing::size_dust_fee(&DustFeeContext {
             stx: &stx_for_sizing,
             seg_id,
             intent_in: &intent_in,
@@ -1530,8 +1530,7 @@ fn plan_unsealed_proven_standard_tx(
             ledger_params: &ledger_params,
             indexer_url,
             scope,
-        })?;
-        (dust, chain_aligned_intent_ttl(dust_ctime))
+        })?
     } else {
         (DustFeePlan::None, intent_in.ttl)
     };

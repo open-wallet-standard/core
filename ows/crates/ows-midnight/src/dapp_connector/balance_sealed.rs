@@ -428,8 +428,9 @@ pub(super) fn merge_segment_effects(
         crate::block_on(crate::ledger_params::fetch_indexer_tip(&indexer_url))?;
     let dust_ctime = Timestamp::from_secs(tip_secs);
 
-    // Discard the synced dust state — that is only needed to prove the real, submittable spend post-seam.
-    let (plan, _dust_state) = crate::balance_tx::size_merge_dust_fee(
+    // Only the fee is reported as an effect here; nothing downstream proves or submits, so the synced
+    // dust state and re-priced parameters are dropped.
+    let sized = crate::balance_tx::size_merge_dust_fee(
         &maker,
         &taker_base,
         taker_seg,
@@ -444,7 +445,9 @@ pub(super) fn merge_segment_effects(
     let addresses = crypto_provider
         .addresses(&MidnightNetwork::from_chain_id(chain_id))
         .map_err(|e| std::io::Error::other(e.to_string()))?;
-    if let Some(effect) = crate::balance_tx::dust_outflow_effect(addresses.dust, plan.fee_dust) {
+    if let Some(effect) =
+        crate::balance_tx::dust_outflow_effect(addresses.dust, sized.plan.fee_dust)
+    {
         effects.push(effect);
     }
     Ok(crate::balance_tx::single_segment(
@@ -482,7 +485,9 @@ fn attach_merge_dust_fee(
         .binding_commitment;
 
     // Size against the merged tx (offline, mock-proved), then prove the real, submittable spend.
-    let (plan, dust_state) = crate::balance_tx::size_merge_dust_fee(
+    // `size_merge_dust_fee` re-prices against the tip after its dust sync, so it hands back the
+    // parameters it actually sized against — proving must use those, not the staler ones read above.
+    let sized = crate::balance_tx::size_merge_dust_fee(
         maker,
         taker_base,
         dust_seg,
@@ -494,9 +499,13 @@ fn attach_merge_dust_fee(
         scope,
     )?;
     let prover = crate::balance_tx::midnight_prover(chain_id)?;
-    let dust_actions =
-        crate::block_on(crypto_provider.authorize_dust(&dust_state, &plan, &ledger_params, prover))
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let dust_actions = crate::block_on(crypto_provider.authorize_dust(
+        &sized.dust_state,
+        &sized.plan,
+        &sized.ledger_params,
+        prover,
+    ))
+    .map_err(|e| std::io::Error::other(e.to_string()))?;
 
     // Splice the proven DUST section into the taker's complement intent, aligning its TTL to the tip
     // (the section's fee window is anchored at `dust_ctime`).
@@ -507,7 +516,7 @@ fn attach_merge_dust_fee(
         .deref()
         .clone();
     intent.dust_actions = Some(Sp::new(dust_actions));
-    intent.ttl = plan.intent_ttl;
+    intent.ttl = sized.plan.intent_ttl;
     taker_base.intents = taker_base.intents.insert(dust_seg, intent);
     Ok(())
 }
