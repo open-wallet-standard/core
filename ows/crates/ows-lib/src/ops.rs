@@ -937,6 +937,7 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
 }
 
 fn broadcast_cardano(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
+    let expected_tx_hash = ows_signer::chains::CardanoSigner::transaction_id(signed_bytes)?;
     let url = format!("{}/submittx", rpc_url.trim_end_matches('/'));
 
     // `--data-binary @-` tells curl to read the request body verbatim from stdin
@@ -998,14 +999,29 @@ fn broadcast_cardano(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLi
         )));
     }
 
-    let tx_hash = body.trim_matches('"').to_string();
-    if tx_hash.len() != 64 {
+    let body = body.trim();
+    let invalid_hash = || {
+        OwsLibError::BroadcastFailed(format!(
+            "Cardano broadcast: invalid transaction hash in response for {expected_tx_hash}: {body}"
+        ))
+    };
+    // Koios returns a JSON string. Preserve support for providers returning bare
+    // hex, but do not accept malformed quoting or a merely 64-character string.
+    let tx_hash = if body.starts_with('"') {
+        serde_json::from_str::<String>(body).map_err(|_| invalid_hash())?
+    } else {
+        body.to_string()
+    };
+    let mut hash_bytes = [0u8; 32];
+    hex::decode_to_slice(&tx_hash, &mut hash_bytes).map_err(|_| invalid_hash())?;
+    let tx_hash = hex::encode(hash_bytes);
+    if tx_hash != expected_tx_hash {
         return Err(OwsLibError::BroadcastFailed(format!(
-            "Cardano broadcast: invalid transaction hash in response: {tx_hash}"
+            "Cardano broadcast: transaction hash mismatch: expected {expected_tx_hash}, got {tx_hash}"
         )));
     }
 
-    Ok(tx_hash)
+    Ok(expected_tx_hash)
 }
 
 fn broadcast_xrpl(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
@@ -1271,6 +1287,10 @@ fn extract_json_field(json_str: &str, field: &str) -> Result<String, OwsLibError
             OwsLibError::BroadcastFailed(format!("no '{field}' in response: {json_str}"))
         })
 }
+
+#[cfg(test)]
+#[path = "cardano_broadcast_tests.rs"]
+mod cardano_broadcast_tests;
 
 #[cfg(test)]
 mod tests {

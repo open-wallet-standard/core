@@ -81,6 +81,16 @@ struct KoiosTxCborRow {
 }
 
 impl CardanoSigner {
+    /// Return the BLAKE2b-256 hash of the original transaction body, excluding
+    /// witnesses and auxiliary data. Preserve the CBOR bytes rather than hashing
+    /// a re-serialized body: equivalent encodings can have different IDs.
+    pub fn transaction_id(tx_bytes: &[u8]) -> Result<String, SignerError> {
+        check_tx_cbor(tx_bytes).map_err(SignerError::InvalidTransaction)?;
+        let tx = FixedTransaction::from_bytes(tx_bytes.to_vec())
+            .map_err(|e| SignerError::InvalidTransaction(e.to_string()))?;
+        Ok(tx.transaction_hash().to_hex())
+    }
+
     pub fn mainnet() -> Self {
         Self {
             network_id: NetworkInfo::mainnet().network_id(),
@@ -1208,6 +1218,56 @@ mod tests {
         )
         .unwrap();
         signer.encode_keys(&keys).unwrap()
+    }
+
+    #[test]
+    fn transaction_id_preserves_original_body_encoding() {
+        // Same empty-input/output body and zero fee, encoded two different ways.
+        // IDs independently calculated as BLAKE2b-256 of the exact body bytes.
+        let cases = [
+            (
+                "a3008001800200",
+                "36fdff68dfe3660f1ceea60f018a0fd7a83da13def229108794c397a879b0436",
+            ),
+            (
+                "a300800180021800",
+                "63ffc1d1549843b64a70ffaaa75ae11239da276263da3e6545b9836ab2b41a11",
+            ),
+        ];
+        for (body, expected) in cases {
+            let tx = hex::decode(format!("84{body}a0f5f6")).unwrap();
+            assert_eq!(CardanoSigner::transaction_id(&tx).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn transaction_id_does_not_change_when_witnesses_are_added() {
+        let signer = CardanoSigner::mainnet();
+        let mnemonic = Mnemonic::from_phrase(
+            "jelly wolf grass equip diagram mixed bottom speed luggage venture stool end",
+        )
+        .unwrap();
+        let key = derive_key_material(&signer, &mnemonic, 0);
+        let tx = hex::decode("84a3008001800200a0f5f6").unwrap();
+        let witness = signer.sign_transaction(key.expose(), &tx).unwrap();
+        let signed = signer.encode_signed_transaction(&tx, &witness).unwrap();
+        assert_ne!(tx, signed);
+        assert_eq!(
+            CardanoSigner::transaction_id(&signed).unwrap(),
+            "36fdff68dfe3660f1ceea60f018a0fd7a83da13def229108794c397a879b0436"
+        );
+    }
+
+    #[test]
+    fn transaction_id_guards_untrusted_cbor_before_parsing() {
+        let mut nested = vec![0x81; MAX_CBOR_DEPTH + 1];
+        nested.push(0x00);
+        for input in [vec![0x80], vec![0x00; MAX_TX_BYTES + 1], nested] {
+            assert!(matches!(
+                CardanoSigner::transaction_id(&input),
+                Err(SignerError::InvalidTransaction(_))
+            ));
+        }
     }
 
     #[test]
