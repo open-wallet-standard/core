@@ -31,6 +31,7 @@ tokio = { version = "1", features = ["rt"] }
 ed25519-bip32 = "0.4.1"
 
 [dev-dependencies]
+mockito = "1"
 tempfile = "3"
 sha3 = "0.10"
 k256 = { version = "0.13", features = ["ecdsa"] }
