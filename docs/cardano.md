@@ -385,8 +385,17 @@ extended (`ows/crates/ows-lib/src/ops.rs`):
 
 `broadcast` dispatches `ChainType::Cardano` to `broadcast_cardano`, which POSTs the
 raw CBOR transaction to Koios `{rpc}/submittx` (`Content-Type: application/cbor`),
-expects HTTP `202`, and returns the 64-hex-character transaction hash. The fully
-signed CBOR produced by `encode_signed_transaction` (see [§3.4](#34-transaction-signing)) is
+expects HTTP `202`, and validates the returned 32-byte hexadecimal transaction ID
+against the BLAKE2b-256 hash of the original transaction body being submitted.
+`CardanoSigner::transaction_id` computes that ID from the preserved CBOR body,
+excluding witnesses and auxiliary data, after applying the CBOR parser guards.
+The response may be a JSON string or bare hex; surrounding whitespace and hex case
+are normalized. Malformed and mismatched IDs return `BroadcastFailed` instead of a
+successful result. This is response validation, not confirmation: the provider may
+already have submitted the transaction before returning an invalid response. Check
+the locally computed expected ID (included in the validation error) before retrying.
+The fully signed CBOR produced by `encode_signed_transaction`
+(see [§3.4](#34-transaction-signing)) is
 what feeds this path.
 
 ### 3. Transaction and message signing (Chain Plugin Interface)

@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+- Validate Cardano submission responses against the locally computed transaction
+  ID instead of accepting any 64-character response. Reject malformed or mismatched
+  hashes, and accept matching JSON/bare hashes with surrounding whitespace or uppercase hex.
+
 ### Added
 - Cardano support across mainnet, preprod and preview (`cip34:` CAIP-2 namespace):
   Ed25519-BIP32 curve with CIP-3 Icarus master-key derivation, CIP-1852 payment and
