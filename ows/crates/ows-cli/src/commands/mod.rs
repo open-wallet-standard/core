@@ -9,6 +9,7 @@ pub mod policy;
 pub mod send_transaction;
 pub mod sign_message;
 pub mod sign_transaction;
+pub mod swap;
 pub mod uninstall;
 pub mod update;
 pub mod wallet;
