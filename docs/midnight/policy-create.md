@@ -135,6 +135,51 @@ print(json.dumps({"allow": not unknown,
                   "reason": f"unapproved contracts: {sorted(unknown)}"}))
 ```
 
+## What the DApp asks the wallet to register — `chain_extra.dust_registrations`
+
+A DUST registration points a NIGHT key's DUST generation at a dust address or, with no
+address, stops it. The wallet signs every registration keyed by its own NIGHT key, so one
+the DApp put in the transaction redirects or ends the wallet's DUST generation once signed —
+and neither `segment_effects` nor `contracts` shows it. The third sibling key,
+**`transaction.chain_extra.dust_registrations`**, lists every registration the DApp's
+transaction carries:
+
+```json
+{ "intent": 7,
+  "night_key": "3f9a…",
+  "dust_address": "mn_dust_preprod1…",
+  "allow_fee_payment": "100000",
+  "wallet_key": true,
+  "to_wallet": false }
+```
+
+- **`intent`** — the id of the intent carrying the registration.
+- **`night_key`** — the NIGHT verifying key whose generation it directs, hex-encoded.
+- **`dust_address`** — where the generation goes, or `null` for a deregistration.
+- **`allow_fee_payment`** — the most of that generation's DUST the transaction may spend on
+  its fee, as a decimal string.
+- **`wallet_key`** — the key is this wallet's own NIGHT key, so the wallet signs it.
+- **`to_wallet`** — the target is this wallet's own dust address.
+
+Only the `balance*` methods can carry one, and the wallet's own fee registration is never
+listed. The flags let a policy protect the wallet without knowing its keys — allow a DApp to
+register the wallet to itself, deny anything that redirects or stops it:
+
+```python
+#!/usr/bin/env python3
+import sys, json
+ctx = json.load(sys.stdin)
+extra = (ctx.get("transaction") or {}).get("chain_extra") or {}
+bad = [r for r in extra.get("dust_registrations", [])
+       if r["wallet_key"] and not r["to_wallet"]]
+print(json.dumps({"allow": not bad,
+                  "reason": f"dust registrations redirecting this wallet: {bad}"}))
+```
+
+> **⚠ With no such policy, the registration is signed.** Owner mode has no policy pass,
+> and an agent key without an executable policy reading this list signs whatever the DApp's
+> transaction registers for the wallet's key.
+
 ## Why the design consumes an executable policy rather than a built-in rule
 
 An earlier iteration added a built-in `MovementLimits` rule to the core policy set. That
@@ -163,7 +208,8 @@ knowable at the first pass, so there is nothing to re-evaluate.
   programs consume `transaction.chain_extra.segment_effects`; `plan_segment_effects` cases in
   `ows-midnight/src/balance_tx.rs` cover the per-segment effect derivation, and
   `contract_interactions` cases in `ows-midnight/src/contracts.rs` cover the per-segment
-  `contracts` derivation.
+  `contracts` derivation, and `requested_dust_registrations` cases in
+  `ows-midnight/src/dust_registrations.rs` cover how each registration is flagged.
 - **Real chain bytes:** `a_real_preprod_contract_call_is_read_from_the_chain_bytes`
   (`ows-midnight/src/contracts.rs`) extracts `contracts` from a settled preprod
   `addUnshieldedLiquidity` call and cross-checks the address and entry point against what the

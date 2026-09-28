@@ -8,6 +8,7 @@ mod balance_tx;
 mod cache_io;
 mod contracts;
 mod dapp_connector;
+mod dust_registrations;
 mod fund_balance;
 mod indexer_ws;
 mod ledger_params;

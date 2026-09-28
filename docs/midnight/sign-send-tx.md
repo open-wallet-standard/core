@@ -37,9 +37,13 @@ The request is routed by its JSON `method` field:
   a proven-hex offer, a bare `zswapoffer` bech32 (**MIP-0005**), or a **MIP-0006** offer-file JSON
   object.
 
-An out-of-spec request (a proof-preimage input, a pre-existing dust registration, a `ClaimRewards`
-mint claim, or a not-yet-supported sealed-maker encoding) is rejected with a **precise** error rather
-than a generic "unsupported".
+An out-of-spec request (a proof-preimage input, a pre-existing dust registration when the wallet pays
+the fee, a `ClaimRewards` mint claim, or a not-yet-supported sealed-maker encoding) is rejected with a
+**precise** error rather than a generic "unsupported".
+
+With `payFees: false` a dust registration the DApp's transaction carries passes through, and the wallet
+signs it if it is keyed by the wallet's NIGHT key. On the agent path a policy sees it first, under
+`chain_extra.dust_registrations` — see [policy-create.md](./policy-create.md).
 
 `ows sign tx` returns the fully sealed, proven Midnight transaction on `SignResult.transaction`
 (`None` for other chains) — the seal-*without*-broadcast capability: the same bytes `send-tx`

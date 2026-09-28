@@ -394,11 +394,15 @@ impl MidnightSigner {
             ))
         })?;
         let dsk = DustSecretKey::derive_secret_key(&seed_arr);
-        let dpk = DustPublicKey::from(dsk);
+        self.dust_address(&DustPublicKey::from(dsk))
+    }
 
+    /// A dust public key as its address on this signer's network — for the wallet's own key, or for
+    /// one a transaction names (a dust registration's target).
+    pub fn dust_address(&self, dust_pk: &DustPublicKey) -> Result<String, SignerError> {
         // JS `fr_to_bigint`: little-endian bytes reversed, interpreted as big-endian
         // hex. The numeric value is the same; we build it from big-endian bytes.
-        let mut be = dpk.0.as_le_bytes();
+        let mut be = dust_pk.0.as_le_bytes();
         be.reverse();
         let dust_pk = BigUint::from_bytes_be(&be);
 

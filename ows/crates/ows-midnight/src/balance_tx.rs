@@ -46,6 +46,9 @@ use ows_core::policy::TransactionEffect;
 use ows_core::sync_cache::SyncCacheScope;
 
 use crate::contracts::{contract_interactions, ContractInteraction};
+use crate::dust_registrations::{
+    intent_registrations, requested_dust_registrations, RequestedDustRegistration, WalletDustKeys,
+};
 use crate::{TokenType, UnshieldedUtxo};
 
 mod fee_sizing;
@@ -680,6 +683,15 @@ impl BalancedPlan {
     /// action, so these are entirely the dapp's.
     pub(crate) fn contracts(&self) -> Vec<ContractInteraction> {
         contract_interactions(self.base.actions())
+    }
+
+    /// The DUST registrations the DApp's transaction carries. The wallet's own fee registration is added
+    /// only when the plan is authorized, so it is never among them.
+    pub(crate) fn dust_registrations(
+        &self,
+        wallet: &WalletDustKeys,
+    ) -> Result<Vec<RequestedDustRegistration>, std::io::Error> {
+        requested_dust_registrations(intent_registrations(&self.base), wallet)
     }
 }
 
@@ -1465,6 +1477,35 @@ mod tests {
         let mut out = Vec::new();
         tagged_serialize(&tx, &mut out).unwrap();
         out
+    }
+
+    /// A DApp's dust registrations are read off the intents of the transaction it handed over, each with
+    /// the id of the intent carrying it; a transaction with no dust section carries none.
+    #[test]
+    fn intent_registrations_reads_each_registration_with_its_intent() {
+        let vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+            .unwrap()
+            .verifying_key();
+        let standard = |tx_bytes: Vec<u8>| {
+            let mut r: &[u8] = tx_bytes.as_slice();
+            let Transaction::Standard(stx) = tagged_deserialize::<TxProven>(&mut r).unwrap() else {
+                panic!("standard");
+            };
+            stx
+        };
+
+        let with = standard(build_proven_unshielded_tx(
+            &vk,
+            Some(dust_fee_registration(&vk)),
+        ));
+        let regs = intent_registrations(&with);
+        assert_eq!(regs.len(), 1);
+        assert_eq!(regs[0].0, 0);
+        assert_eq!(regs[0].1.night_key, vk);
+        assert_eq!(regs[0].1.allow_fee_payment, 100_000);
+
+        let without = standard(build_proven_unshielded_tx(&vk, None));
+        assert!(intent_registrations(&without).is_empty());
     }
 
     #[test]

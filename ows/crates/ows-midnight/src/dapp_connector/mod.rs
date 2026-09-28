@@ -183,6 +183,30 @@ impl ConnectorPlan {
             }
         }
     }
+
+    /// The DUST registrations this plan's transaction carries that the DApp put there, each flagged by
+    /// whether it is keyed by the wallet's NIGHT key (and so signed by the wallet) and whether it
+    /// directs the generation to the wallet's own dust address. Handed to the policy seam next to the
+    /// effects and contracts, neither of which shows a registration.
+    ///
+    /// Like [`Self::contracts`], only the `balance*` methods can carry any: the `make*` methods build the
+    /// wallet's own transfer, and the wallet's own fee registration is never listed.
+    pub fn dust_registrations(
+        &self,
+        chain_id: &str,
+        crypto_provider: &MidnightCryptoProvider,
+    ) -> Result<Vec<crate::dust_registrations::RequestedDustRegistration>, std::io::Error> {
+        let wallet = crate::dust_registrations::WalletDustKeys::new(chain_id, crypto_provider)?;
+        match self {
+            ConnectorPlan::BalanceUnsealed(plan) | ConnectorPlan::BalanceSealed(plan) => {
+                plan.dust_registrations(&wallet)
+            }
+            ConnectorPlan::MakeTransfer(_) | ConnectorPlan::MakeIntent(_) => Ok(Vec::new()),
+            ConnectorPlan::BalanceSealedMerge { maker_tx, .. } => {
+                balance_sealed::maker_dust_registrations(maker_tx, &wallet)
+            }
+        }
+    }
 }
 
 /// Parse a stringified connector request and plan it (inert) into a [`ConnectorPlan`], ready for the

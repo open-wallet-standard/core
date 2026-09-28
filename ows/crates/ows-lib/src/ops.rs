@@ -672,10 +672,17 @@ pub fn prepare_signable_tx(
     let contracts = plan
         .contracts()
         .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
+    // A third view neither of those gives: the DUST registrations the DApp asks the wallet to sign,
+    // which redirect or stop the wallet's DUST generation.
+    let dust_registrations = plan
+        .dust_registrations(chain.chain_id, &crypto_provider)
+        .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
     let chain_extra = serde_json::json!({
         "segment_effects": serde_json::to_value(&segment_effects)
             .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?,
         "contracts": serde_json::to_value(&contracts)
+            .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?,
+        "dust_registrations": serde_json::to_value(&dust_registrations)
             .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?,
     });
     gate(chain_extra)?;

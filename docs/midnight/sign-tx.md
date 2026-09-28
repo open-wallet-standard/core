@@ -232,8 +232,9 @@ wallet's true net. Recognizing a receipt needs no spend key.
 There is deliberately **no flat, segment-summed view**. Summing the segments discards the
 guaranteed-versus-fallible distinction, which is the whole point of what the seam hands a
 policy: a fallible inflow must never be allowed to offset a guaranteed outflow. See
-[policy-create.md](./policy-create.md) for how a policy is expected to read this, and for
-the sibling `chain_extra.contracts` list that answers *who* the transaction talks to.
+[policy-create.md](./policy-create.md) for how a policy is expected to read this, for
+the sibling `chain_extra.contracts` list that answers *who* the transaction talks to, and for
+`chain_extra.dust_registrations`, the DUST registrations the DApp asks the wallet to sign.
 
 So a `makeTransfer` of `V` NIGHT to someone else nets to `-V` in NIGHT plus the DUST fee it
 burns — the NIGHT matching the recipient's on-chain credit `+V` (change returns to self).

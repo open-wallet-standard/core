@@ -279,6 +279,26 @@ pub(super) fn maker_contracts(
     Ok(crate::contracts::contract_interactions(base.actions()))
 }
 
+/// The DUST registrations of a sealed maker, which survive the merge into the submitted transaction. The
+/// taker's complement is a plain `makeIntent` and carries none.
+pub(super) fn maker_dust_registrations(
+    maker_bytes: &[u8],
+    wallet: &crate::dust_registrations::WalletDustKeys,
+) -> Result<Vec<crate::dust_registrations::RequestedDustRegistration>, std::io::Error> {
+    let mut r: &[u8] = maker_bytes;
+    let tx: TxSealed = tagged_deserialize(&mut r)
+        .map_err(|e| std::io::Error::other(format!("failed to parse sealed maker tx: {e}")))?;
+    let Transaction::Standard(base) = &tx else {
+        return Err(std::io::Error::other(
+            "balanceSealedTransaction expects a Standard maker transaction",
+        ));
+    };
+    crate::dust_registrations::requested_dust_registrations(
+        crate::dust_registrations::intent_registrations(base),
+        wallet,
+    )
+}
+
 /// Authorize the sealed-maker merge: build the taker's complementary half from its own coins, fold in a
 /// DUST fee that covers the whole *merged* tx, and return a [merge envelope](ows_signer::chains::wrap_merge_envelope)
 /// of the (proven, unsealed) taker half plus the sealed maker. The sign pipeline then signs the taker's
