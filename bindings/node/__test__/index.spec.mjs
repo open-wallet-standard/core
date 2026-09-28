@@ -60,12 +60,36 @@ describe('@open-wallet-standard/core', () => {
     }
   });
 
+  it('routes Midnight through the binding: derive + message sign + SignResult shape', () => {
+    const phrase = generateMnemonic(12);
+
+    // Address derivation reaches the Midnight signer and re-encodes per network HRP.
+    const preview = deriveAddress(phrase, 'midnight:preview');
+    assert.ok(preview.startsWith('mn_addr_preview1'), `expected preview HRP, got ${preview}`);
+    const mainnet = deriveAddress(phrase, 'midnight:mainnet');
+    assert.ok(mainnet.startsWith('mn_addr1'), `expected mainnet HRP, got ${mainnet}`);
+
+    // Owner-mode message signing works through the binding (BIP-340, x-only pubkey prefixed
+    // to the signature → 96 bytes → 192 hex chars), and the SignResult now carries the
+    // Midnight-only `transaction` field — undefined for a message (only `sign tx` seals a tx).
+    // Uses an isolated vault so it doesn't perturb the shared-vault wallet-count assertions.
+    const mnVault = mkdtempSync(join(tmpdir(), 'ows-node-mn-'));
+    try {
+      importWalletMnemonic('mn-node', phrase, undefined, undefined, mnVault);
+      const result = signMessage('mn-node', 'midnight:preview', 'hello midnight', '', undefined, undefined, mnVault);
+      assert.equal(result.signature.length, 192, 'midnight signature = pubkey(32)+sig(64) as hex');
+      assert.equal(result.transaction, undefined, 'a message seals no transaction');
+    } finally {
+      rmSync(mnVault, { recursive: true, force: true });
+    }
+  });
+
   // ---- Universal wallet lifecycle ----
 
-  it('creates a universal wallet with 15 accounts', () => {
+  it('creates a universal wallet with 16 accounts', () => {
     const wallet = createWallet('lifecycle-test', undefined, 12, vaultDir);
     assert.equal(wallet.name, 'lifecycle-test');
-    assert.equal(wallet.accounts.length, 15);
+    assert.equal(wallet.accounts.length, 16);
 
     const chainIds = wallet.accounts.map((a) => a.chainId);
     assert.ok(chainIds.some((c) => c.startsWith('eip155:')));
@@ -81,6 +105,7 @@ describe('@open-wallet-standard/core', () => {
     assert.ok(chainIds.some((c) => c.startsWith('nano:')));
     assert.ok(chainIds.some((c) => c.startsWith('near:')));
     assert.ok(chainIds.some((c) => c.startsWith('cip34:')));
+    assert.ok(chainIds.some((c) => c.startsWith('midnight:')));
 
     // List
     const wallets = listWallets(vaultDir);
@@ -114,7 +139,7 @@ describe('@open-wallet-standard/core', () => {
 
     const wallet = importWalletMnemonic('mn-import', phrase, undefined, undefined, vaultDir);
     assert.equal(wallet.name, 'mn-import');
-    assert.equal(wallet.accounts.length, 15);
+    assert.equal(wallet.accounts.length, 16);
 
     const evmAcct = wallet.accounts.find((a) => a.chainId.startsWith('eip155:'));
     assert.equal(evmAcct.address, expectedEvm);
