@@ -1,6 +1,5 @@
-use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use zeroize::Zeroizing;
 
 use ows_core::{
@@ -937,75 +936,14 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
 }
 
 fn broadcast_cardano(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
-    let url = format!("{}/submittx", rpc_url.trim_end_matches('/'));
-
-    // `--data-binary @-` tells curl to read the request body verbatim from stdin
-    let mut child = Command::new("curl")
-        .args([
-            "-sSL",
-            "-X",
-            "POST",
-            "-H",
-            "Content-Type: application/cbor",
-            "--data-binary",
-            "@-",
-            "-w",
-            "\n%{http_code}",
-            &url,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            OwsLibError::BroadcastFailed(format!("Cardano broadcast: failed to run curl: {e}"))
-        })?;
-
-    {
-        let stdin = child.stdin.as_mut().ok_or_else(|| {
-            OwsLibError::BroadcastFailed("Cardano broadcast: failed to open curl stdin".into())
-        })?;
-        stdin.write_all(signed_bytes).map_err(|e| {
-            OwsLibError::BroadcastFailed(format!(
-                "Cardano broadcast: failed to write request body to curl stdin: {e}"
-            ))
-        })?;
-    }
-
-    let output = child.wait_with_output().map_err(|e| {
-        OwsLibError::BroadcastFailed(format!("Cardano broadcast: failed to wait for curl: {e}"))
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(OwsLibError::BroadcastFailed(format!(
-            "Cardano broadcast failed: {stderr}"
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let (body, status_raw) = stdout.rsplit_once('\n').unwrap_or(("", stdout.as_str()));
-
-    let status: u16 = status_raw.parse().map_err(|_| {
-        OwsLibError::BroadcastFailed(format!(
-            "Cardano broadcast: could not parse HTTP status from curl output: {stdout}"
-        ))
-    })?;
-
-    if status != 202 {
-        return Err(OwsLibError::BroadcastFailed(format!(
-            "Cardano broadcast: failed to broadcast transaction: {body}"
-        )));
-    }
-
-    let tx_hash = body.trim_matches('"').to_string();
-    if tx_hash.len() != 64 {
-        return Err(OwsLibError::BroadcastFailed(format!(
-            "Cardano broadcast: invalid transaction hash in response: {tx_hash}"
-        )));
-    }
-
-    Ok(tx_hash)
+    // Computed before the request so the provider's answer is checked against the
+    // transaction we submitted, not merely against its own shape.
+    let expected_tx_id = ows_signer::chains::CardanoSigner::transaction_id(signed_bytes)?;
+    let provider = ows_core::resolve_cardano_provider(rpc_url)
+        .map_err(|e| OwsLibError::BroadcastFailed(e.to_string()))?;
+    provider
+        .broadcast_tx(signed_bytes, &expected_tx_id)
+        .map_err(|e| OwsLibError::BroadcastFailed(e.to_string()))
 }
 
 fn broadcast_xrpl(rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
@@ -1270,6 +1208,58 @@ fn extract_json_field(json_str: &str, field: &str) -> Result<String, OwsLibError
         .ok_or_else(|| {
             OwsLibError::BroadcastFailed(format!("no '{field}' in response: {json_str}"))
         })
+}
+
+#[cfg(test)]
+mod cardano_broadcast_tests {
+    use super::*;
+    use mockito::Server;
+
+    // A signed transaction and the ID of the body it carries — the ID hashes the body,
+    // not the witnessed CBOR that goes over the wire.
+    const SIGNED_TX: &str = "84a300d9010281825820cafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe00018182581d6106094a93d88f9d832697898a387d44ecf2265570a6c92718d8ed03031a001e8480021a000f4240a100d901028182582065a7f55e5fb6964610d0e220c37aadd502041e8f90a86b82c46e531a69612128584081a1235ccc8c96203f379891da1041af709f532f97a73d220eb081f444622701ce5660044f8fe90ec74d3d4ad7c1c0aece569a106f08a298566c51b139285500f5f6";
+    const TX_ID: &str = "6c84b1c9ac839cad80b37ff528e7c6f9991de7d1b9b16055a6d8f7df0a7fa7ee";
+
+    fn submit_to_mock(body: &str) -> Result<String, OwsLibError> {
+        let signed = hex::decode(SIGNED_TX).unwrap();
+        let mut server = Server::new();
+        let mock = server
+            .mock("POST", "/submittx")
+            .match_header("content-type", "application/cbor")
+            .match_body(signed.clone())
+            .with_status(202)
+            .with_body(body)
+            .create();
+
+        let result = broadcast_cardano(&format!("koios|{}", server.url()), &signed);
+
+        mock.assert();
+        result
+    }
+
+    #[test]
+    fn cardano_broadcast_accepts_the_id_of_the_submitted_transaction() {
+        assert_eq!(submit_to_mock(&format!("\"{TX_ID}\"")).unwrap(), TX_ID);
+    }
+
+    #[test]
+    fn cardano_broadcast_rejects_a_malformed_or_unrelated_id() {
+        for body in [
+            "",
+            "z".repeat(64).as_str(),
+            &format!("\"{}\"", "00".repeat(32)),
+        ] {
+            let err = submit_to_mock(body).unwrap_err();
+            assert!(matches!(err, OwsLibError::BroadcastFailed(_)), "{err}");
+            assert!(err.to_string().contains(TX_ID), "{body:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn cardano_broadcast_rejects_an_invalid_transaction_before_any_request() {
+        let err = broadcast_cardano("koios|http://127.0.0.1:1/api/v1", &[0x80]).unwrap_err();
+        assert!(err.to_string().contains("invalid transaction"), "{err}");
+    }
 }
 
 #[cfg(test)]
