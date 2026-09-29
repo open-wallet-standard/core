@@ -1,3 +1,4 @@
+use crate::cose;
 use crate::curve::Curve;
 use crate::traits::{ChainSigner, SignOutput, SignerError};
 use crate::{DerivedKey, SecretBytes};
@@ -7,12 +8,6 @@ use cardano_serialization_lib::{
     TransactionBody, TransactionHash, TransactionOutput, Vkey, Vkeywitness, Vkeywitnesses,
 };
 use ed25519_bip32::XPrv;
-use emurgo_cardano_message_signing::builders::{AlgorithmId, COSESign1Builder, EdDSA25519Key};
-use emurgo_cardano_message_signing::cbor::CBORValue;
-use emurgo_cardano_message_signing::utils::ToBytes as EmurgoToBytes;
-use emurgo_cardano_message_signing::{
-    HeaderMap, Headers, Label, ProtectedHeaderMap, SignedMessage,
-};
 use ows_core::policy::{TransactionContext, TransactionEffect};
 use ows_core::ChainType;
 use serde::{Deserialize, Serialize};
@@ -725,33 +720,13 @@ impl ChainSigner for CardanoSigner {
             }
         };
 
-        let mut protected_headers = HeaderMap::new();
-        protected_headers.set_algorithm_id(&AlgorithmId::EdDSA.into());
-        protected_headers
-            .set_header(
-                &Label::new_text(String::from("address")),
-                &CBORValue::new_bytes(address_bytes),
-            )
-            .map_err(|e| SignerError::SigningFailed(e.to_string()))?;
-
-        let protected_headers_serialized = ProtectedHeaderMap::new(&protected_headers);
-        let headers: Headers = Headers::new(&protected_headers_serialized, &HeaderMap::new());
-
-        let builder = COSESign1Builder::new(&headers, message.to_vec(), false);
-        let sig_structure = builder.make_data_to_sign();
-        let sig_bytes = EmurgoToBytes::to_bytes(&sig_structure);
-
-        let sig = sk.sign::<Vec<u8>>(&sig_bytes);
-
-        let cose = builder.build(sig.to_bytes().to_vec());
-        let signed = SignedMessage::new_cose_sign1(&cose);
-        let signature = EmurgoToBytes::to_bytes(&signed);
-        let cose_key = EdDSA25519Key::new(sk.public().public_key_slice().to_vec()).build();
+        let builder = cose::Sign1Builder::new(&address_bytes, message);
+        let sig = sk.sign::<Vec<u8>>(&builder.data_to_sign());
 
         Ok(SignOutput {
-            signature,
+            signature: builder.build(sig.to_bytes()),
             recovery_id: None,
-            public_key: Some(EmurgoToBytes::to_bytes(&cose_key)),
+            public_key: Some(cose::ed25519_public_key(sk.public().public_key_slice())),
         })
     }
 

@@ -188,6 +188,9 @@ fn derive_all_accounts_from_keys(keys: &KeyPair) -> Result<Vec<WalletAccount>, O
     let mut accounts = Vec::with_capacity(UNIVERSAL_WALLET_ACCOUNT_COUNT);
     for chain in universal_wallet_chains() {
         let signer = signer_for_chain(&chain)?;
+        if !signer.supports_private_key_import() {
+            continue;
+        }
         let key = keys.key_for_curve(signer.curve());
         let address = signer.derive_address(key)?;
         accounts.push(WalletAccount {
@@ -933,6 +936,9 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         ChainType::Nano => broadcast_nano(rpc_url, signed_bytes),
         ChainType::Near => crate::near_rpc::broadcast_tx_commit(rpc_url, signed_bytes),
         ChainType::Cardano => broadcast_cardano(rpc_url, signed_bytes),
+        ChainType::Midnight => Err(OwsLibError::InvalidInput(
+            "Midnight send is not wired until transaction signing is integrated".into(),
+        )),
     }
 }
 
@@ -1791,10 +1797,25 @@ mod tests {
         )
         .unwrap();
 
+        let importable = universal_wallet_chains()
+            .iter()
+            .filter(|c| {
+                signer_for_chain(c)
+                    .expect("universal wallet chains resolve")
+                    .supports_private_key_import()
+            })
+            .count();
         assert_eq!(
             info.accounts.len(),
-            UNIVERSAL_WALLET_ACCOUNT_COUNT,
-            "should have one account per chain type plus Cardano testnets"
+            importable,
+            "one account per private-key-importable chain (Midnight is skipped)"
+        );
+        assert!(
+            !info
+                .accounts
+                .iter()
+                .any(|a| a.chain_id.starts_with("midnight:")),
+            "Midnight has no raw private-key import"
         );
 
         // Sign on EVM (secp256k1)
@@ -2733,6 +2754,25 @@ mod tests {
             OwsLibError::WalletNotFound(name) => assert_eq!(name, "del-me-char"),
             other => panic!("expected WalletNotFound, got: {other}"),
         }
+    }
+
+    #[test]
+    fn mnemonic_wallet_includes_midnight_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        let info =
+            import_wallet_mnemonic("mn-midnight", phrase, None, None, Some(dir.path())).unwrap();
+
+        let midnight = info
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "midnight:mainnet")
+            .expect("mnemonic wallet should derive a Midnight account");
+        assert_eq!(
+            midnight.address,
+            "mn_addr1dwv2rta0a2skyhrvukaw2q9r2sq6yc4jhj63rf7afxpkrrv6g35qw3dyt6"
+        );
     }
 
     #[test]
