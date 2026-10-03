@@ -35,6 +35,22 @@ pub trait ChainSigner: Send + Sync {
     /// (e.g. Cardano's payment + staking), which decode it here.
     fn derive_address(&self, private_key: &[u8]) -> Result<String, SignerError>;
 
+    /// Derive the raw public key bytes from a private key.
+    ///
+    /// Returns the canonical public key encoding for this chain's curve:
+    /// - secp256k1 chains: 33-byte compressed public key (SEC1)
+    /// - Ed25519 chains: 32-byte public key
+    ///
+    /// Public keys are not secret — exposing them does not weaken the security model.
+    ///
+    /// Chain implementations SHOULD override this. The default returns an error
+    /// so that newly added chains fail clearly at runtime rather than at compile time.
+    fn derive_public_key(&self, _private_key: &[u8]) -> Result<Vec<u8>, SignerError> {
+        Err(SignerError::InvalidPrivateKey(
+            format!("derive_public_key not implemented for {:?}", self.chain_type())
+        ))
+    }
+
     /// Sign a pre-hashed message (32 bytes for secp256k1, raw message for ed25519).
     fn sign(&self, private_key: &[u8], message: &[u8]) -> Result<SignOutput, SignerError>;
 

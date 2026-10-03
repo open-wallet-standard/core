@@ -478,6 +478,24 @@ fn wallet_info_to_dict_inner<'py>(
 }
 
 /// Python module definition.
+#[pyfunction]
+fn get_public_key(
+    wallet: &str,
+    chain: &str,
+    index: Option<u32>,
+    passphrase: Option<&str>,
+    vault_path_opt: Option<String>,
+) -> PyResult<String> {
+    ows_lib::get_public_key(
+        wallet,
+        chain,
+        index,
+        passphrase,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map_err(map_err)
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(generate_mnemonic, m)?)?;
@@ -502,6 +520,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(delete_policy, m)?)?;
     m.add_function(wrap_pyfunction!(create_api_key, m)?)?;
     m.add_function(wrap_pyfunction!(list_api_keys, m)?)?;
+    m.add_function(wrap_pyfunction!(get_public_key, m)?)?;
     m.add_function(wrap_pyfunction!(revoke_api_key, m)?)?;
     Ok(())
 }

@@ -639,6 +639,11 @@ impl ChainSigner for CardanoSigner {
             None => self.enterprise_address_bech32(&pay),
         }
     }
+    fn derive_public_key(&self, private_key: &[u8]) -> Result<Vec<u8>, SignerError> {
+        let (pay, _) = Self::decode_keys(private_key)?;
+        Ok(pay.public().public_key_slice().to_vec())
+    }
+
 
     fn sign(&self, private_key: &[u8], message: &[u8]) -> Result<SignOutput, SignerError> {
         let (pay, _) = Self::decode_keys(private_key)?;
