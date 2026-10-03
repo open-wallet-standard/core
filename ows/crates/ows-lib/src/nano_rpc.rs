@@ -121,15 +121,23 @@ fn work_generate_single(
         .ok_or_else(|| OwsLibError::BroadcastFailed("no work in work_generate response".into()))
 }
 
-/// Default PoW fallback endpoint, tried when the primary RPC fails work_generate.
-const FALLBACK_WORK_URL: &str = "https://rpc.nano.to";
+/// Public PoW fallback endpoints tried when the primary RPC and NANO_WORK_URL fail.
+///
+/// All listed nodes support `work_generate` for unauthenticated clients.
+/// `https://rpc.nano.to` was removed because it requires a free API key.
+/// Source: https://publicnodes.somenano.com/
+const FALLBACK_WORK_URLS: &[&str] = &[
+    "https://nano.mehl.no/node",
+    "https://proxy.powernode.cc/proxy",
+    "https://rainstorm.city/api",
+];
 
 /// Request proof-of-work with multi-endpoint fallback.
 ///
 /// Tries endpoints in order:
 /// 1. The primary `rpc_url`
 /// 2. URLs from `NANO_WORK_URL` env var (semicolon-separated URLs)
-/// 3. Built-in fallback endpoint
+/// 3. Built-in public fallback endpoints (all support unauthenticated work_generate)
 ///
 /// All remote errors are collected and logged to stderr. If every remote fails
 /// and `NANO_CPU_POW=1` is set, a future CPU fallback would go here.
@@ -145,8 +153,10 @@ pub fn work_generate(rpc_url: &str, hash: &str, difficulty: &str) -> Result<Stri
         }
     }
 
-    if !endpoints.iter().any(|e| e == FALLBACK_WORK_URL) {
-        endpoints.push(FALLBACK_WORK_URL.to_string());
+    for fallback in FALLBACK_WORK_URLS {
+        if !endpoints.iter().any(|e| e == *fallback) {
+            endpoints.push(fallback.to_string());
+        }
     }
 
     let mut last_error = None;
