@@ -221,6 +221,11 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_type: ChainType::Evm,
         chain_id: "eip155:999",
     },
+    Chain {
+        name: "arc",
+        chain_type: ChainType::Evm,
+        chain_id: "eip155:5042",
+    },
 ];
 
 /// Parse a chain string into a `Chain`. Accepts:
@@ -711,6 +716,22 @@ mod tests {
         assert_eq!(chain.name, "hyperliquid");
         assert_eq!(chain.chain_type, ChainType::Evm);
         assert_eq!(chain.chain_id, "eip155:999");
+    }
+
+    #[test]
+    fn test_parse_chain_arc_alias() {
+        let chain = parse_chain("arc").unwrap();
+        assert_eq!(chain.name, "arc");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+        assert_eq!(chain.chain_id, "eip155:5042");
+    }
+
+    #[test]
+    fn test_parse_chain_arc_caip2() {
+        let chain = parse_chain("eip155:5042").unwrap();
+        assert_eq!(chain.name, "arc");
+        assert_eq!(chain.chain_type, ChainType::Evm);
+        assert_eq!(chain.chain_id, "eip155:5042");
     }
 
     #[test]

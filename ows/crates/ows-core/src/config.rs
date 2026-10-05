@@ -81,6 +81,7 @@ impl Config {
             "eip155:999".into(),
             "https://rpc.hyperliquid.xyz/evm".into(),
         );
+        rpc.insert("eip155:5042".into(), "https://rpc.mainnet.arc.io".into());
         // Cardano mainnet
         rpc.insert(
             "cip34:1-764824073".into(),
@@ -238,6 +239,10 @@ mod tests {
             Some("https://rpc.hyperliquid.xyz/evm")
         );
         assert_eq!(
+            config.rpc_url("eip155:5042"),
+            Some("https://rpc.mainnet.arc.io")
+        );
+        assert_eq!(
             config.rpc_url("cip34:1-764824073"),
             Some("https://api.koios.rest/api/v1")
         );
@@ -291,7 +296,7 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 26);
+        assert_eq!(config.rpc.len(), 27);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
         assert_eq!(
             config.rpc_url("near:mainnet"),

@@ -62,6 +62,7 @@ Each network has a canonical chain identifier. Endpoint discovery and transport 
 | Etherlink | `eip155:42793` |
 | Tempo | `eip155:4217` |
 | Hyperliquid | `eip155:999` |
+| Arc | `eip155:5042` |
 
 ### Non-EVM Networks
 
@@ -100,6 +101,7 @@ avalanche → eip155:43114
 etherlink → eip155:42793
 tempo       → eip155:4217
 hyperliquid → eip155:999
+arc         → eip155:5042
 solana    → solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp
 bitcoin   → bip122:000000000019d6689c085ae165831e93
 cosmos    → cosmos:cosmoshub-4
