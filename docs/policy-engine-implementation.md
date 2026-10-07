@@ -106,7 +106,7 @@ Reference it in the policy file:
 | chain_id | CAIP-2 chain ID (e.g. eip155:8453) |
 | wallet_id | Wallet UUID |
 | api_key_id | API key UUID |
-| request_type | sign_transaction, sign_message, sign_hash or sign_typed_data; always present |
+| request_type | sign_transaction, sign_message, sign_hash, sign_typed_data or read_balance; always present |
 | transaction | Absent for sign_typed_data; branch on request_type, not on this field's absence |
 | transaction.effects | Per-address asset movement; empty unless the chain's signer implements flow analysis (Cardano today) |
 | transaction.effects[].diff | [asset, amount] pairs; amount is a signed decimal string in the smallest unit |

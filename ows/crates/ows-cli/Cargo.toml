@@ -15,6 +15,7 @@ path = "src/main.rs"
 ows-core = { path = "../ows-core", version = "=1.4.3" }
 ows-signer = { path = "../ows-signer", version = "=1.4.3" }
 ows-lib = { path = "../ows-lib", version = "=1.4.3" }
+ows-midnight = { path = "../ows-midnight", version = "=1.4.3" }
 clap = { version = "4", features = ["derive", "env"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }

@@ -50,7 +50,7 @@ raw Ed25519 signing; CIP-8 message signing (COSE `COSE_Sign1` structures); and
 transaction signing that produces and CBOR-encodes the `Vkeywitness`es required to
 make a transaction submittable. Address encoding, transaction (de)serialization,
 and witness construction use `cardano-serialization-lib` (CSL), while the COSE
-message structures use Emurgo's `cardano-message-signing` companion library.
+message structures are encoded in-tree by `ows/crates/ows-signer/src/cose.rs`.
 Finally, it wires Cardano into the OWS Policy Engine: `make_transaction_context`
 parses an unsigned transaction (CBOR) and, because UTxO inputs carry no value,
 resolves them through the configured Koios RPC provider to compute per-address ADA
@@ -107,7 +107,7 @@ Cardano introduces two additional, Cardano-specific dependencies:
   **and** non-hardened children, and `normalize_bytes_force3rd` for valid root
   keys. Chosen so derivation stays in the generic `HdDeriver`, rather than pulling
   a full chain SDK into the key path.
-- **`cardano-serialization-lib` (CSL, 14.1.2)** — the canonical Cardano library
+- **`cardano-serialization-lib` (CSL, 15.0.3)** — the canonical Cardano library
   for network parameters (`NetworkInfo`), address construction
   (`BaseAddress`/`EnterpriseAddress`/`RewardAddress`, `Credential`), public-key
   hashing (`PublicKey`), witness construction (`Vkey`, `Ed25519Signature`,
@@ -118,11 +118,15 @@ Cardano introduces two additional, Cardano-specific dependencies:
   [Security Considerations](#security-considerations)).
   Note CSL also pulls in `pbkdf2`, which we use directly for the Icarus master-key
   step.
-- **`emurgo-cardano-message-signing` (1.1.0)** — Emurgo's COSE companion to CSL,
-  used exclusively for CIP-8 message signing. It provides the `COSESign1Builder`,
-  `HeaderMap`/`Headers`/`ProtectedHeaderMap`/`Label`, `AlgorithmId::EdDSA`, and
-  `SignedMessage`/CBOR helpers needed to build and serialize the COSE `Sig_structure`
-  and `COSE_Sign1` payload that Cardano wallets expect.
+- **No dependency for CIP-8 message signing.** The COSE `Sig_structure`,
+  `COSE_Sign1` and `COSE_Key` that Cardano wallets exchange are encoded in-tree by
+  `ows/crates/ows-signer/src/cose.rs`, next to the existing `rlp.rs`. Emurgo's
+  `emurgo-cardano-message-signing` filled this role until its `wasm-bindgen` pin
+  made it unresolvable alongside Midnight (see
+  [Security Considerations](#security-considerations)); the encoder reproduces its output
+  byte for byte, and the signing tests assert the vectors it produced. The format is
+  small and frozen — four definite-length CBOR maps and arrays, no parsing, since
+  OWS only ever emits COSE and never reads it.
 
 ### Peculiarities of Cardano vs. other OWS chains
 
@@ -394,8 +398,8 @@ what feeds this path.
 This deliverable implements the `ChainSigner` plugin surface for Cardano:
 address encoding, raw signing, CIP-8 message signing, and transaction
 signing/witness encoding. Address construction, transaction (de)serialization, and
-witness encoding use `cardano-serialization-lib` (CSL); COSE message structures use
-Emurgo's `cardano-message-signing` companion crate.
+witness encoding use `cardano-serialization-lib` (CSL); COSE message structures are
+encoded in-tree by `ows/crates/ows-signer/src/cose.rs`.
 
 All signer methods accept the **key material** layout described in
 [§2.5](#25-chainsigner-integration): either a 192-byte payment `XPrv` ‖ stake
@@ -759,13 +763,20 @@ status → `HttpStatus`, and an undecodable response body or amount → the new
   transaction/witness encoding). This avoids leaking a chain-specific library into
   the generic key path while still using the canonical library for the parts that
   must match the ecosystem byte-for-byte.
-- **CSL + `cardano-message-signing` for the chain plugin, per IOHK.** As recorded
-  in the deliverable description (IOHK agreed on 8.4.2026 to use
+- **CSL for the chain plugin, per IOHK; COSE encoded in-tree.** As recorded in the
+  deliverable description (IOHK agreed on 8.4.2026 to use
   `cardano-serialization-lib`), address encoding and transaction signing go through
-  CSL, and CIP-8 message signing uses Emurgo's `cardano-message-signing` COSE
-  helpers rather than a hand-rolled COSE encoder. This keeps the produced
-  addresses, witnesses, and signed messages compatible with mainstream Cardano
-  wallets and tooling.
+  CSL, which keeps the produced addresses and witnesses compatible with mainstream
+  Cardano wallets and tooling. CIP-8 message signing originally used Emurgo's
+  `cardano-message-signing` COSE helpers for the same reason, in preference to a
+  hand-rolled encoder. That crate has had exactly one release, which pins
+  `wasm-bindgen` to `=0.2.92`, and Midnight's ledger stack floors the same crate at
+  `=0.2.100`; since both pins sit on one semver-compatible line, Cargo must resolve
+  a single version and no version satisfies both, so the two chains could not share
+  a lockfile. The COSE encoder in `ows/crates/ows-signer/src/cose.rs` replaces it
+  and is held to the stricter bar the original preference implies: it reproduces
+  `cardano-message-signing`'s output byte for byte, and the signing tests assert the
+  exact vectors that crate produced.
 - **Base address with payment + stake.** Per agreement with IOHK, the initial
   implementation targets exactly one base address per account at address index 0,
   combining a payment credential (role 0) and a stake credential (role 2). This
@@ -1051,16 +1062,12 @@ providers (e.g. Blockfrost).
   that inference as sensitive should point `rpc` config at a provider it operates
   (see [§1.4](#14-rpc-configuration-koios-keyless)); the keyless Koios default
   trades this for needing no account and storing no credential.
-- **Unmaintained transitive dependencies.** The two Emurgo crates bring in five
-  crates carrying RUSTSEC *unmaintained* advisories. Four come from
-  `cardano-serialization-lib`: `clear_on_drop`, and `rand_os` with `cloudabi` and
-  `fuchsia-cprng` under it. The fifth, `nodrop`, comes from
-  `emurgo-cardano-message-signing` instead, four levels down
-  (`pruefung` → `digest 0.6` → `generic-array 0.8` → `nodrop`); CSL does not depend
-  on `generic-array` at all. These are warn-level "no longer maintained" notices,
-  not known vulnerabilities, and OWS accepts them knowingly rather than silently,
-  since CSL is the only maintained Rust implementation of Cardano's wire formats.
-  None of the five is reachable from OWS:
+- **Unmaintained transitive dependencies.** `cardano-serialization-lib` brings in
+  four crates carrying RUSTSEC *unmaintained* advisories: `clear_on_drop`, and
+  `rand_os` with `cloudabi` and `fuchsia-cprng` under it. These are warn-level "no
+  longer maintained" notices, not known vulnerabilities, and OWS accepts them
+  knowingly rather than silently, since CSL is the only maintained Rust
+  implementation of Cardano's wire formats. None of the four is reachable from OWS:
   - `rand_os`, and `cloudabi`/`fuchsia-cprng` under it, back CSL's *key generation*
     (`Bip32PrivateKey::generate_ed25519_bip32`, `PrivateKey::generate_*`), which OWS
     never calls — the signer constructs no CSL private key at all, and every
@@ -1084,13 +1091,12 @@ providers (e.g. Blockfrost).
     [§3](#3-transaction-and-message-signing-chain-plugin-interface)). The
     `SecretBytes`/`Zeroizing` buffer it decodes from is wiped on drop (see
     [§2.6](#26-multi-credential-key-storage)).
-  - `nodrop` is a pre-1.0 `ManuallyDrop` polyfill under `generic-array 0.8`, which
-    `pruefung` needs for the FNV-32a checksum in `emurgo-cardano-message-signing`.
-    That checksum only serves `SignedMessage::{to,from}_user_facing_encoding` (the
-    `cms_…` string format); OWS signs through `COSESign1Builder` and never calls
-    either, so the code path is not reached.
+  A fifth, `nodrop`, used to reach the lockfile four levels under
+  `emurgo-cardano-message-signing` (`pruefung` → `digest 0.6` → `generic-array 0.8`
+  → `nodrop`). Encoding COSE in-tree removed that crate and the whole `pruefung`
+  chain beneath it, `generic-array 0.8` included; CSL never depended on it.
 
-  The revisit trigger is a CSL or message-signing release that drops them, or a
+  The revisit trigger is a CSL release that drops the remaining four, or a
   maintained fork; that would be a dependency bump with no change to OWS code.
 
 ## Implementation
@@ -1108,6 +1114,9 @@ Components modified or added:
 - `ows/crates/ows-signer/src/hd.rs` — Icarus master-key generation and V2 child derivation;
   a single shared path parser (`parse_path_components`) that bounds every index
   below 2³¹.
+- `ows/crates/ows-signer/src/cose.rs` — COSE encoding for CIP-8: the `Sig_structure`
+  a message signature is computed over, the `COSE_Sign1` that carries it, and the
+  `COSE_Key` publishing the Ed25519 verifying key.
 - `ows/crates/ows-signer/src/chains/cardano.rs` — `CardanoSigner`, CIP-1852 path helpers,
   network selection, and the full `ChainSigner` impl: base/enterprise/reward
   address encoding, `sign`, CIP-8 `sign_message`, `sign_transaction`,
@@ -1151,10 +1160,8 @@ Dependencies added:
   (`ows/crates/ows-signer/Cargo.toml`, `ows/crates/ows-lib/Cargo.toml`).
 - `pbkdf2 = "0.12"` — Icarus master-key derivation
   (`ows/crates/ows-signer/Cargo.toml`).
-- `cardano-serialization-lib = "14.1.1"` (lockfile resolves 14.1.2) — Cardano
-  network parameters (`NetworkInfo`), Shelley address encoding, and
-  transaction/witness encoding (`ows/crates/ows-signer/Cargo.toml`).
-- `emurgo-cardano-message-signing = "1.1.0"` — CIP-8 COSE message-signing helpers
+- `cardano-serialization-lib = "15.0.3"` — Cardano network parameters
+  (`NetworkInfo`), Shelley address encoding, and transaction/witness encoding
   (`ows/crates/ows-signer/Cargo.toml`).
 - `reqwest = "0.12"` (blocking, `json`, `rustls-tls`, no default features) — Koios
   `tx_cbor` HTTP client used to resolve transaction inputs for the policy context
@@ -1247,7 +1254,8 @@ Implemented and passing for these deliverables:
 - [BIP32-Ed25519 (Khovratovich & Law)](https://input-output-hk.github.io/adrestia/static/Ed25519_BIP.pdf)
 - [`ed25519-bip32` crate](https://docs.rs/ed25519-bip32/0.4.1/)
 - [`cardano-serialization-lib`](https://github.com/Emurgo/cardano-serialization-lib)
-- [`cardano-message-signing`](https://github.com/Emurgo/message-signing)
+- [`cardano-message-signing`](https://github.com/Emurgo/message-signing) — the
+  reference encoding `cose.rs` is tested against
 - [RFC 8152: CBOR Object Signing and Encryption (COSE)](https://www.rfc-editor.org/rfc/rfc8152)
 - [Koios API](https://api.koios.rest/)
 - [CAIP-2](https://chainagnostic.org/CAIPs/caip-2) and [CAIP-10](https://chainagnostic.org/CAIPs/caip-10)
