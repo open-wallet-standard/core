@@ -41,6 +41,7 @@ OWS groups chains into families that share a cryptographic curve and address der
 | Filecoin | secp256k1 | 461 | `m/44'/461'/0'/0/{index}` | `f1` + base32(blake2b-160) | `fil` |
 | NEAR | ed25519 | 397 | `m/44'/397'/{index}'` | 64-char lowercase hex of pubkey (implicit account) | `near` |
 | Cardano | Ed25519-BIP32 (CIP-1852) | 1815 | Payment `m/1852'/1815'/{index}'/0/0` + stake `m/1852'/1815'/{index}'/2/0` | Shelley Bech32 base (`addr1…` mainnet; `addr_test1…` testnets) | `cip34` |
+| Midnight (unshielded/Night) | secp256k1 (Schnorr) | [2400](https://github.com/satoshilabs/slips/blob/master/slip-0044.md) (BIP-44) | `m/44'/2400'/0'/0/{index}` (unshielded); shielded `.../3/{index}`; dust `.../2/{index}` | Bech32m `mn_addr1...` (mainnet), `mn_addr_<network>1...` otherwise, e.g. `mn_addr_preview1...` (SHA-256 of x-only pubkey) | `midnight` |
 
 
 ## Known Networks
@@ -81,6 +82,11 @@ Each network has a canonical chain identifier. Endpoint discovery and transport 
 | Cardano (mainnet) | `cip34:1-764824073` |
 | Cardano Pre-production | `cip34:0-1` |
 | Cardano Preview | `cip34:0-2` |
+| Midnight | `midnight:mainnet` |
+| Midnight Preview | `midnight:preview` |
+| Midnight Preprod | `midnight:preprod` |
+
+Midnight is not limited to these three networks: **any `midnight:<network>` chain id is addressable**, so ad-hoc feature testnets and private deployments work without registering anything. The `<network>` reference is carried verbatim into the Bech32m HRP of every Midnight address — mainnet uses the bare HRP (`mn_addr`, `mn_shield-addr`, `mn_dust`) while every other network appends `_<network>` (`mn_addr_preview`, `mn_addr_my-feature`, …), so an address on one network can never be mistaken for one on another. The reference MUST be a valid Bech32m HRP fragment that the Midnight SDK also accepts: lowercase letters, digits 1-9, and hyphens only (no `0`), not starting or ending with a hyphen, and at most 32 characters (the CAIP-2 reference limit). A malformed or mixed-case reference is rejected — never coerced to lowercase and never cast to mainnet.
 
 Implementations MAY ship convenience endpoint defaults, but those defaults are deployment choices rather than OWS interoperability requirements.
 
@@ -117,6 +123,9 @@ near-testnet  → near:testnet
 cardano          → cip34:1-764824073
 cardano-preprod  → cip34:0-1
 cardano-preview  → cip34:0-2
+midnight         → midnight:mainnet
+midnight-preview → midnight:preview
+midnight-preprod → midnight:preprod
 ```
 
 Aliases MUST be resolved to full CAIP-2 identifiers before any processing. They MUST NOT appear in wallet files, policy files, or audit logs.
@@ -142,7 +151,8 @@ Master Seed (512 bits via PBKDF2)
     ├── m/84'/0'/0'/0/0     → Spark Account 0
     ├── m/44'/461'/0'/0/0   → Filecoin Account 0
     ├── m/44'/397'/0'       → NEAR Account 0
-    └── m/1852'/1815'/0'/0/0 → Cardano payment key 0 (base address combines stake key `m/1852'/1815'/0'/2/0`)
+    ├── m/1852'/1815'/0'/0/0 → Cardano payment key 0 (base address combines stake key `m/1852'/1815'/0'/2/0`)
+    └── m/44'/2400'/0'/0/0  → Midnight Account 0 (unshielded/Night; shielded …/3/0, dust …/2/0)
 ```
 
 For mnemonic-based wallets, a single mnemonic derives accounts across all supported chains. Those wallet files store the encrypted mnemonic, and the signer derives the appropriate private key using each chain's coin type and derivation path. Wallets imported from raw private keys instead store encrypted curve-key material directly.
