@@ -19,10 +19,11 @@ pub enum ChainType {
     Nano,
     Near,
     Cardano,
+    Midnight,
 }
 
 /// All supported chain families, used for universal wallet derivation.
-pub const ALL_CHAIN_TYPES: [ChainType; 13] = [
+pub const ALL_CHAIN_TYPES: [ChainType; 14] = [
     ChainType::Evm,
     ChainType::Solana,
     ChainType::Bitcoin,
@@ -36,6 +37,7 @@ pub const ALL_CHAIN_TYPES: [ChainType; 13] = [
     ChainType::Nano,
     ChainType::Near,
     ChainType::Cardano,
+    ChainType::Midnight,
 ];
 
 /// A specific chain (e.g. "ethereum", "arbitrum") with its family type and CAIP-2 ID.
@@ -212,6 +214,21 @@ pub const KNOWN_CHAINS: &[Chain] = &[
         chain_id: "near:testnet",
     },
     Chain {
+        name: "midnight",
+        chain_type: ChainType::Midnight,
+        chain_id: "midnight:mainnet",
+    },
+    Chain {
+        name: "midnight-preview",
+        chain_type: ChainType::Midnight,
+        chain_id: "midnight:preview",
+    },
+    Chain {
+        name: "midnight-preprod",
+        chain_type: ChainType::Midnight,
+        chain_id: "midnight:preprod",
+    },
+    Chain {
         name: "tempo",
         chain_type: ChainType::Evm,
         chain_id: "eip155:4217",
@@ -285,7 +302,7 @@ pub fn parse_chain(s: &str) -> Result<Chain, String> {
            EVM:     ethereum, base, arbitrum, optimism, polygon, bsc, avalanche, plasma, etherlink\n  \
            Solana:  solana\n  \
            Bitcoin: bitcoin\n  \
-           Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl, nano, near, cardano, cardano-preprod, cardano-preview\n\n\
+           Other:   cosmos, tron, ton, sui, filecoin, spark, xrpl, nano, near, cardano, cardano-preprod, cardano-preview, midnight\n\n\
          Or use a CAIP-2 ID (eip155:8453) or bare EVM chain ID (8453)"
     ))
 }
@@ -304,20 +321,26 @@ pub const UNIVERSAL_WALLET_ACCOUNT_COUNT: usize =
     ALL_CHAIN_TYPES.len() + UNIVERSAL_WALLET_EXTRA_CHAIN_NAMES.len();
 
 /// Ordered [`Chain`] rows for universal-wallet derivation and multi-network CLI output.
+///
+/// Each chain type's default chain is followed by its own extra networks, so a chain type appended
+/// to [`ALL_CHAIN_TYPES`] adds rows after the existing ones instead of shifting their positions.
 pub fn universal_wallet_chains() -> Vec<Chain> {
+    let extras: Vec<Chain> = UNIVERSAL_WALLET_EXTRA_CHAIN_NAMES
+        .iter()
+        .map(|name| {
+            KNOWN_CHAINS
+                .iter()
+                .copied()
+                .find(|c| c.name == *name)
+                .unwrap_or_else(|| {
+                    panic!("KNOWN_CHAINS must define `{name}` (universal wallet extras)")
+                })
+        })
+        .collect();
     let mut out = Vec::with_capacity(UNIVERSAL_WALLET_ACCOUNT_COUNT);
     for ct in &ALL_CHAIN_TYPES {
         out.push(default_chain_for_type(*ct));
-    }
-    for name in UNIVERSAL_WALLET_EXTRA_CHAIN_NAMES {
-        let chain = KNOWN_CHAINS
-            .iter()
-            .copied()
-            .find(|c| c.name == *name)
-            .unwrap_or_else(|| {
-                panic!("KNOWN_CHAINS must define `{name}` (universal wallet extras)")
-            });
-        out.push(chain);
+        out.extend(extras.iter().copied().filter(|c| c.chain_type == *ct));
     }
     out
 }
@@ -339,6 +362,7 @@ impl ChainType {
             ChainType::Nano => "nano",
             ChainType::Near => "near",
             ChainType::Cardano => "cip34",
+            ChainType::Midnight => "midnight",
         }
     }
 
@@ -358,6 +382,7 @@ impl ChainType {
             ChainType::Nano => 165,
             ChainType::Near => 397,
             ChainType::Cardano => 1815,
+            ChainType::Midnight => 2400,
         }
     }
 
@@ -377,6 +402,7 @@ impl ChainType {
             "nano" => Some(ChainType::Nano),
             "near" => Some(ChainType::Near),
             "cip34" => Some(ChainType::Cardano),
+            "midnight" => Some(ChainType::Midnight),
             _ => None,
         }
     }
@@ -398,6 +424,7 @@ impl fmt::Display for ChainType {
             ChainType::Nano => "nano",
             ChainType::Near => "near",
             ChainType::Cardano => "cardano",
+            ChainType::Midnight => "midnight",
         };
         write!(f, "{}", s)
     }
@@ -421,6 +448,7 @@ impl FromStr for ChainType {
             "nano" => Ok(ChainType::Nano),
             "near" => Ok(ChainType::Near),
             "cardano" => Ok(ChainType::Cardano),
+            "midnight" => Ok(ChainType::Midnight),
             _ => Err(format!("unknown chain type: {}", s)),
         }
     }
@@ -455,6 +483,7 @@ mod tests {
             (ChainType::Nano, "\"nano\""),
             (ChainType::Near, "\"near\""),
             (ChainType::Cardano, "\"cardano\""),
+            (ChainType::Midnight, "\"midnight\""),
         ] {
             let json = serde_json::to_string(&chain).unwrap();
             assert_eq!(json, expected);
@@ -478,6 +507,7 @@ mod tests {
         assert_eq!(ChainType::Nano.namespace(), "nano");
         assert_eq!(ChainType::Near.namespace(), "near");
         assert_eq!(ChainType::Cardano.namespace(), "cip34");
+        assert_eq!(ChainType::Midnight.namespace(), "midnight");
     }
 
     #[test]
@@ -495,6 +525,7 @@ mod tests {
         assert_eq!(ChainType::Nano.default_coin_type(), 165);
         assert_eq!(ChainType::Near.default_coin_type(), 397);
         assert_eq!(ChainType::Cardano.default_coin_type(), 1815);
+        assert_eq!(ChainType::Midnight.default_coin_type(), 2400);
     }
 
     #[test]
@@ -515,6 +546,10 @@ mod tests {
         assert_eq!(ChainType::from_namespace("nano"), Some(ChainType::Nano));
         assert_eq!(ChainType::from_namespace("near"), Some(ChainType::Near));
         assert_eq!(ChainType::from_namespace("cip34"), Some(ChainType::Cardano));
+        assert_eq!(
+            ChainType::from_namespace("midnight"),
+            Some(ChainType::Midnight)
+        );
         assert_eq!(ChainType::from_namespace("unknown"), None);
     }
 
@@ -653,6 +688,29 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_chain_midnight() {
+        let chain = parse_chain("midnight").unwrap();
+        assert_eq!(chain.chain_type, ChainType::Midnight);
+        assert_eq!(chain.chain_id, "midnight:mainnet");
+
+        let preview = parse_chain("midnight:preview").unwrap();
+        assert_eq!(preview.chain_type, ChainType::Midnight);
+        assert_eq!(preview.chain_id, "midnight:preview");
+
+        let preview_alias = parse_chain("midnight-preview").unwrap();
+        assert_eq!(preview_alias.chain_type, ChainType::Midnight);
+        assert_eq!(preview_alias.chain_id, "midnight:preview");
+
+        let preprod = parse_chain("midnight:preprod").unwrap();
+        assert_eq!(preprod.chain_type, ChainType::Midnight);
+        assert_eq!(preprod.chain_id, "midnight:preprod");
+
+        let preprod_alias = parse_chain("midnight-preprod").unwrap();
+        assert_eq!(preprod_alias.chain_type, ChainType::Midnight);
+        assert_eq!(preprod_alias.chain_id, "midnight:preprod");
+    }
+
+    #[test]
     fn test_parse_chain_bare_numeric_known() {
         // "8453" → Base (eip155:8453)
         let chain = parse_chain("8453").unwrap();
@@ -715,7 +773,7 @@ mod tests {
 
     #[test]
     fn test_all_chain_types() {
-        assert_eq!(ALL_CHAIN_TYPES.len(), 13);
+        assert_eq!(ALL_CHAIN_TYPES.len(), 14);
     }
 
     #[test]
@@ -758,5 +816,6 @@ mod tests {
         assert_eq!(chains[12].name, "cardano");
         assert_eq!(chains[13].name, "cardano-preprod");
         assert_eq!(chains[14].name, "cardano-preview");
+        assert_eq!(chains[15].chain_type, ChainType::Midnight);
     }
 }

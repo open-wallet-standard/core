@@ -94,6 +94,34 @@ impl Config {
             "cip34:0-2".into(),
             "https://preview.koios.rest/api/v1".into(),
         );
+        // Midnight uses a public indexer (GraphQL HTTP endpoint) for balance queries.
+        // WebSocket URL is derived automatically as `.../graphql/ws`.
+        rpc.insert(
+            "midnight:mainnet".into(),
+            "https://indexer.mainnet.midnight.network/api/v4/graphql".into(),
+        );
+        rpc.insert(
+            "midnight:preview".into(),
+            "https://indexer.preview.midnight.network/api/v4/graphql".into(),
+        );
+        rpc.insert(
+            "midnight:preprod".into(),
+            "https://indexer.preprod.midnight.network/api/v4/graphql".into(),
+        );
+        // Substrate node RPC, keyed `{chain_id}:node`, used for transaction submission — distinct
+        // from the indexer above, which only answers balance queries.
+        rpc.insert(
+            "midnight:mainnet:node".into(),
+            "https://rpc.mainnet.midnight.network/".into(),
+        );
+        rpc.insert(
+            "midnight:preview:node".into(),
+            "https://rpc.preview.midnight.network/".into(),
+        );
+        rpc.insert(
+            "midnight:preprod:node".into(),
+            "https://rpc.preprod.midnight.network/".into(),
+        );
         rpc
     }
 }
@@ -249,6 +277,10 @@ mod tests {
             config.rpc_url("cip34:0-2"),
             Some("https://preview.koios.rest/api/v1")
         );
+        assert_eq!(
+            config.rpc_url("midnight:preview"),
+            Some("https://indexer.preview.midnight.network/api/v4/graphql")
+        );
     }
 
     #[test]
@@ -291,7 +323,7 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 26);
+        assert_eq!(config.rpc.len(), 32);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
         assert_eq!(
             config.rpc_url("near:mainnet"),
@@ -300,6 +332,11 @@ mod tests {
         assert_eq!(
             config.rpc_url("near:testnet"),
             Some("https://rpc.testnet.near.org")
+        );
+        // The Midnight node RPC (tx submission) is a distinct default from the indexer.
+        assert_eq!(
+            config.rpc_url("midnight:preview:node"),
+            Some("https://rpc.preview.midnight.network/")
         );
     }
 
