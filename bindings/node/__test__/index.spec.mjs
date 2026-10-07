@@ -62,10 +62,10 @@ describe('@open-wallet-standard/core', () => {
 
   // ---- Universal wallet lifecycle ----
 
-  it('creates a universal wallet with 15 accounts', () => {
+  it('creates a universal wallet with 16 accounts', () => {
     const wallet = createWallet('lifecycle-test', undefined, 12, vaultDir);
     assert.equal(wallet.name, 'lifecycle-test');
-    assert.equal(wallet.accounts.length, 15);
+    assert.equal(wallet.accounts.length, 16);
 
     const chainIds = wallet.accounts.map((a) => a.chainId);
     assert.ok(chainIds.some((c) => c.startsWith('eip155:')));
@@ -114,7 +114,7 @@ describe('@open-wallet-standard/core', () => {
 
     const wallet = importWalletMnemonic('mn-import', phrase, undefined, undefined, vaultDir);
     assert.equal(wallet.name, 'mn-import');
-    assert.equal(wallet.accounts.length, 15);
+    assert.equal(wallet.accounts.length, 16);
 
     const evmAcct = wallet.accounts.find((a) => a.chainId.startsWith('eip155:'));
     assert.equal(evmAcct.address, expectedEvm);

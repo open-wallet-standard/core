@@ -1,4 +1,5 @@
 pub mod chains;
+pub mod cose;
 pub mod crypto;
 pub mod curve;
 pub mod eip712;

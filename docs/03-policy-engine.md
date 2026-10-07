@@ -246,7 +246,7 @@ The base JSON object available to policy evaluation:
 | `chain_id` | string | yes | CAIP-2 chain identifier |
 | `wallet_id` | string | yes | Wallet ID in scope for this request |
 | `api_key_id` | string | yes | The ID of the API key making this request |
-| `request_type` | string | yes | Which operation is being authorized: `sign_transaction`, `sign_message`, `sign_hash`, or `sign_typed_data`. **Branch on this**, not on which optional fields are populated. |
+| `request_type` | string | yes | Which operation is being authorized: `sign_transaction`, `sign_message`, `sign_hash`, `sign_typed_data`, or `read_balance` (unsealing an account key to read balances, which produces no signature). **Branch on this**, not on which optional fields are populated. |
 | `transaction` | object | no | The signing payload. Present for `sign_transaction`, `sign_message`, and `sign_hash`; omitted for `sign_typed_data`, which exposes its payload via `typed_data.raw_json` instead. See below. |
 | `spending` | object | yes | Lightweight spending metadata currently exposed by the engine |
 | `timestamp` | string | yes | ISO 8601 timestamp of the signing request |
