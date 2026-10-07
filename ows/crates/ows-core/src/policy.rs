@@ -39,9 +39,10 @@ pub struct Policy {
     pub action: PolicyAction,
 }
 
-/// Which signing operation a [`PolicyContext`] was built for. Always present in the
-/// serialized context, so a policy can branch on the operation rather than infer it
-/// from which optional fields happen to be populated.
+/// Which operation a [`PolicyContext`] was built for. Always present in the serialized
+/// context, so a policy can branch on the operation rather than infer it from which
+/// optional fields happen to be populated. Not every operation signs: unsealing an
+/// account key to read balances is gated by the same policies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyRequestType {
@@ -49,6 +50,8 @@ pub enum PolicyRequestType {
     SignMessage,
     SignHash,
     SignTypedData,
+    /// Unseal an account key to read balances — no signature is produced.
+    ReadBalance,
 }
 
 /// Context passed to policy evaluation (and to executable policies via stdin).
@@ -417,6 +420,7 @@ mod tests {
             (PolicyRequestType::SignMessage, "sign_message"),
             (PolicyRequestType::SignHash, "sign_hash"),
             (PolicyRequestType::SignTypedData, "sign_typed_data"),
+            (PolicyRequestType::ReadBalance, "read_balance"),
         ] {
             assert_eq!(serde_json::to_value(variant).unwrap(), expected);
             assert_eq!(

@@ -1,5 +1,5 @@
 use crate::CliError;
-use ows_core::parse_chain;
+use ows_core::{parse_chain, ChainType};
 use ows_lib::ops::resolve_rpc_url;
 use ows_lib::types::AccountInfo;
 
@@ -11,9 +11,24 @@ fn find_account_for_chain<'a>(
     let parsed_chain =
         parse_chain(chain).map_err(|e| CliError::InvalidArgs(format!("unknown chain: {e}")))?;
 
+    // Prefer the account derived for this exact chain, then the family's: an EVM address is the
+    // same on every EVM chain and the stored Midnight address is re-encoded per network, so one
+    // account answers for the whole family. No other family falls back: Cardano, Cosmos and Bitcoin
+    // encode the network into the address, so another network's account would be the wrong answer.
+    let family_shares_account = matches!(
+        parsed_chain.chain_type,
+        ChainType::Evm | ChainType::Midnight
+    );
+    let namespace = format!("{}:", parsed_chain.chain_type.namespace());
+
     accounts
         .iter()
         .find(|a| a.chain_id == parsed_chain.chain_id)
+        .or_else(|| {
+            family_shares_account
+                .then(|| accounts.iter().find(|a| a.chain_id.starts_with(&namespace)))
+                .flatten()
+        })
         .ok_or_else(|| {
             CliError::InvalidArgs(format!("wallet has no account for chain \"{chain}\""))
         })
@@ -86,6 +101,63 @@ pub fn balance(wallet_name: &str, chain: Option<&str>) -> Result<(), CliError> {
     let wallet = ows_lib::get_wallet(wallet_name, None)?;
     let chain_name = chain.unwrap_or("base");
 
+    // Midnight balances come from the Midnight indexer, not MoonPay.
+    if let Ok(parsed) = crate::parse_chain(chain_name) {
+        if parsed.chain_type == ows_core::ChainType::Midnight {
+            let account = find_account_for_chain(&wallet.accounts, chain_name)?;
+
+            // OWS_PASSPHRASE is either an api-key token (→ policy-enforcing channel, as in
+            // sign-message/-transaction) or the owner envelope passphrase (→ packed role seeds).
+            // The resolved credential builds the crypto provider; without either, unshielded only.
+            let passphrase = crate::commands::peek_passphrase();
+            let credential = match passphrase.as_deref() {
+                Some(p) if p.starts_with(ows_lib::key_store::TOKEN_PREFIX) => {
+                    let (key_file, wallet) =
+                        ows_lib::key_ops::load_authorized_wallet(p, wallet_name, None)?;
+                    let (key, _) = ows_lib::key_ops::enforce_policies_and_decrypt_key(
+                        p,
+                        key_file,
+                        wallet,
+                        &parsed,
+                        ows_core::PolicyRequestType::ReadBalance,
+                        None,
+                        None,
+                        Some(0),
+                        None,
+                    )?;
+                    Some(key)
+                }
+                Some(p) => Some(ows_lib::decrypt_signing_key(
+                    wallet_name,
+                    ows_core::ChainType::Midnight,
+                    p,
+                    Some(0),
+                    None,
+                )?),
+                None => {
+                    eprintln!("note: set OWS_PASSPHRASE to read Midnight shielded/dust balances");
+                    None
+                }
+            };
+            // A raw imported key carries no packed Midnight roles: degrade to no provider
+            // (shielded/dust show as unavailable) rather than erroring.
+            let crypto_provider = credential.as_ref().and_then(|cred| {
+                ows_signer::chains::MidnightSigner::from_chain_id(parsed.chain_id)
+                    .crypto_provider(cred)
+                    .ok()
+            });
+
+            let config = ows_core::Config::load_or_default();
+            return Ok(ows_midnight::print_fund_balance(
+                &wallet.id,
+                &account.address,
+                &parsed,
+                Some(config.vault_path.as_path()),
+                crypto_provider.as_ref(),
+            )?);
+        }
+    }
+
     let account = find_account_for_chain(&wallet.accounts, chain_name)?;
     let address = &account.address;
 
@@ -119,4 +191,40 @@ pub fn balance(wallet_name: &str, chain: Option<&str>) -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account(chain_id: &str, address: &str) -> AccountInfo {
+        AccountInfo {
+            chain_id: chain_id.to_string(),
+            address: address.to_string(),
+            derivation_path: String::new(),
+        }
+    }
+
+    fn address_for<'a>(accounts: &'a [AccountInfo], chain: &str) -> Option<&'a str> {
+        find_account_for_chain(accounts, chain)
+            .ok()
+            .map(|a| a.address.as_str())
+    }
+
+    #[test]
+    fn evm_and_midnight_fall_back_to_the_family_account() {
+        let accounts = [
+            account("eip155:1", "0xevm"),
+            account("midnight:mainnet", "mn_addr"),
+        ];
+        assert_eq!(address_for(&accounts, "base"), Some("0xevm"));
+        assert_eq!(address_for(&accounts, "midnight:preprod"), Some("mn_addr"));
+    }
+
+    #[test]
+    fn cardano_never_falls_back_to_another_network() {
+        let accounts = [account("cip34:1-764824073", "addr1mainnet")];
+        assert_eq!(address_for(&accounts, "cardano"), Some("addr1mainnet"));
+        assert_eq!(address_for(&accounts, "cardano-preprod"), None);
+    }
 }

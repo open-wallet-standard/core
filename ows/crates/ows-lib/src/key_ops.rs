@@ -88,6 +88,7 @@ pub fn sign_with_api_key(
     vault_path: Option<&Path>,
 ) -> Result<crate::types::SignResult, OwsLibError> {
     let (key_file, wallet) = load_authorized_wallet(token, wallet_name_or_id, vault_path)?;
+    let wallet_id = wallet.id.clone();
 
     let signer = signer_for_chain(chain)?;
     let rpc_url = if signer.transaction_context_needs_rpc() {
@@ -99,27 +100,42 @@ pub fn sign_with_api_key(
     } else {
         None
     };
-    let transaction = signer.make_transaction_context(tx_bytes, rpc_url.as_deref())?;
+    let policy_tx = signer.make_transaction_context(tx_bytes, rpc_url.as_deref())?;
 
-    let (key, _) = enforce_policies_and_decrypt_key(
+    let (key, key_file) = enforce_policies_and_decrypt_key(
         token,
         key_file,
         wallet,
         chain,
         PolicyRequestType::SignTransaction,
-        Some(transaction),
+        Some(policy_tx.clone()),
         None,
         index,
         vault_path,
     )?;
 
-    // 7. Sign (extract signable portion first — e.g. strips Solana sig-slot headers)
-    let signable = signer.extract_signable_bytes(tx_bytes)?;
+    // Second, effect-aware policy pass at the plan→authorize seam: a denial drops the key unused, so a
+    // transaction the policy rejects is never proved.
+    let signable_tx =
+        crate::ops::prepare_signable_tx(chain, tx_bytes.to_vec(), &key, |chain_extra| {
+            enforce_effect_policies(
+                &key_file,
+                &wallet_id,
+                chain,
+                policy_tx,
+                chain_extra,
+                vault_path,
+            )
+        })?;
+    let signable = signer.extract_signable_bytes(&signable_tx)?;
     let output = signer.sign_transaction(key.expose(), signable)?;
+    let transaction =
+        crate::ops::signed_transaction_hex(chain, signer.as_ref(), &signable_tx, &output)?;
 
     Ok(crate::types::SignResult {
         signature: hex::encode(&output.signature),
         recovery_id: output.recovery_id,
+        transaction,
     })
 }
 
@@ -154,10 +170,7 @@ pub fn sign_message_with_api_key(
     let signer = signer_for_chain(chain)?;
     let output = signer.sign_message(key.expose(), msg_bytes, address)?;
 
-    Ok(crate::types::SignResult {
-        signature: hex::encode(&output.signature),
-        recovery_id: output.recovery_id,
-    })
+    crate::types::sign_result_from_message_output(chain.chain_type, &output)
 }
 
 /// Sign a raw 32-byte hash using an API token (agent mode).
@@ -195,6 +208,7 @@ pub fn sign_hash_with_api_key(
     Ok(crate::types::SignResult {
         signature: hex::encode(&output.signature),
         recovery_id: output.recovery_id,
+        transaction: None,
     })
 }
 
@@ -282,6 +296,7 @@ pub fn sign_typed_data_with_api_key(
     Ok(crate::types::SignResult {
         signature: hex::encode(&output.signature),
         recovery_id: output.recovery_id,
+        transaction: None,
     })
 }
 
@@ -350,6 +365,45 @@ pub fn enforce_policies_and_decrypt_key(
 
     let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
     Ok((key, key_file))
+}
+
+/// The connector seam's second policy pass, as a gate: re-evaluate the key's **executable** policies
+/// with the transaction's key-derived `chain_extra` context filled in — after the balancing plan is
+/// built, before it is authorized. A denial returns an error, so no bearer spend witness is ever built
+/// for a transaction the policy rejects. The declarative rules already gated the transaction's shape in
+/// the first pass ([`enforce_policies_and_decrypt_key`]); only the executable programs read `chain_extra`
+/// (Midnight's per-segment wallet effects), so only they run here
+/// ([`policy_engine::evaluate_executable_policies`]).
+pub(crate) fn enforce_effect_policies(
+    key_file: &ApiKeyFile,
+    wallet_id: &str,
+    chain: &ows_core::Chain,
+    mut transaction: ows_core::policy::TransactionContext,
+    chain_extra: serde_json::Value,
+    vault_path: Option<&Path>,
+) -> Result<(), OwsLibError> {
+    let policies = load_policies_for_key(key_file, vault_path)?;
+    let now = chrono::Utc::now();
+    let date = now.format("%Y-%m-%d").to_string();
+    transaction.chain_extra = Some(chain_extra);
+    let context = ows_core::PolicyContext {
+        chain_id: chain.chain_id.to_string(),
+        wallet_id: wallet_id.to_string(),
+        api_key_id: key_file.id.clone(),
+        request_type: PolicyRequestType::SignTransaction,
+        transaction: Some(transaction),
+        spending: noop_spending_context(&date),
+        timestamp: now.to_rfc3339(),
+        typed_data: None,
+    };
+    let result = policy_engine::evaluate_executable_policies(&policies, &context);
+    if !result.allow {
+        return Err(OwsLibError::Core(OwsError::PolicyDenied {
+            policy_id: result.policy_id.unwrap_or_default(),
+            reason: result.reason.unwrap_or_else(|| "denied".into()),
+        }));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1367,6 +1421,110 @@ else:
             allowed.is_ok(),
             "message signing should still be allowed: {:?}",
             allowed.err()
+        );
+    }
+
+    /// The connector seam's second, effect-aware pass denies a signing request whose wallet-relative
+    /// movement exceeds an executable policy's cap, and allows one within it — driving
+    /// `enforce_effect_policies` (the gate `prepare_signable_tx` runs between planning and authorizing)
+    /// over constructed effects, the way the executable programs consume `transaction.effects`.
+    #[test]
+    fn effect_policy_pass_gates_via_executable_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+
+        // An executable policy that denies when the summed absolute movement across the transaction's
+        // per-segment `chain_extra` effects exceeds 1000 — the kind of cap a real deployment expresses as
+        // a custom program, now reading the Midnight per-segment effects rather than the empty `effects`.
+        let script = dir.path().join("cap.py");
+        std::fs::write(
+            &script,
+            "#!/usr/bin/env python3\n\
+             import sys, json\n\
+             ctx = json.load(sys.stdin)\n\
+             extra = (ctx.get('transaction') or {}).get('chain_extra') or {}\n\
+             segs = extra.get('segment_effects', [])\n\
+             total = sum(abs(int(d)) for s in segs for e in s.get('effects', []) for _, d in e.get('diff', []))\n\
+             print(json.dumps({'allow': total <= 1000, 'reason': f'moved {total}'}))\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let policy = ows_core::Policy {
+            id: "effect-cap".to_string(),
+            name: "Effect Cap".to_string(),
+            version: 1,
+            created_at: "2026-03-22T10:00:00Z".to_string(),
+            rules: vec![],
+            executable: Some(script.to_str().unwrap().to_string()),
+            config: None,
+            action: PolicyAction::Deny,
+        };
+        policy_store::save_policy(&policy, Some(&vault)).unwrap();
+
+        let (_token, key_file) = create_api_key(
+            "agent",
+            std::slice::from_ref(&wallet_id),
+            std::slice::from_ref(&policy.id),
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+
+        let chain = ows_core::parse_chain("midnight:mainnet").unwrap();
+        let tx = || ows_core::policy::TransactionContext {
+            effects: vec![],
+            raw_hex: "00".into(),
+            data: None,
+            chain_extra: None,
+        };
+        // The per-segment `chain_extra` a Midnight plan hands to the seam: one guaranteed-segment native
+        // movement of `amount`.
+        let chain_extra = |amount: i64| {
+            serde_json::json!({
+                "segment_effects": [{
+                    "segment": 0,
+                    "effects": [{
+                        "address": "mn_addr_wallet",
+                        "diff": [["0".repeat(64), amount.to_string()]],
+                    }],
+                }],
+            })
+        };
+
+        // Over the cap → denied at the seam (in the real path the key drops unused, nothing is proved).
+        let denied = enforce_effect_policies(
+            &key_file,
+            &wallet_id,
+            &chain,
+            tx(),
+            chain_extra(-5_000),
+            Some(&vault),
+        );
+        assert!(matches!(
+            denied,
+            Err(OwsLibError::Core(OwsError::PolicyDenied { .. }))
+        ));
+
+        // Within the cap → allowed.
+        let allowed = enforce_effect_policies(
+            &key_file,
+            &wallet_id,
+            &chain,
+            tx(),
+            chain_extra(-500),
+            Some(&vault),
+        );
+        assert!(
+            allowed.is_ok(),
+            "within-cap movement should pass: {allowed:?}"
         );
     }
 }

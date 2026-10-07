@@ -99,10 +99,14 @@ Implementations MUST NOT provide a fallback path that bypasses token-attached po
 
 Audit logs MUST be append-only from the point of view of the OWS implementation.
 
+Every operation that releases a bearer artifact (a signature, a signed transaction, an exported secret) or changes what a credential may do (minting or revoking an API key, registering or deleting a policy) MUST be recorded. Signing MUST be recorded independently of broadcasting: the two are separable, so recording only broadcasts leaves signatures that were handed out and submitted elsewhere untraced.
+
+A policy denial MUST be recorded under the same operation as an allow, so that a refused attempt is a record rather than an absence. Recording only successes hides exactly the activity an audit trail exists to surface — a credential repeatedly attempting what its policy forbids.
+
 Audit records SHOULD include:
 
 - operation type
-- wallet identifier
+- wallet identifier, for wallet-scoped operations
 - chain identifier
 - API key identifier when applicable
 - allow or deny outcome

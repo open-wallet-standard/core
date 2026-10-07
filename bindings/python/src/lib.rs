@@ -172,6 +172,8 @@ fn sign_transaction(
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("signature", &result.signature)?;
         dict.set_item("recovery_id", result.recovery_id)?;
+        // Populated only for Midnight (the sealed, submit-ready transaction); None otherwise.
+        dict.set_item("transaction", result.transaction.as_deref())?;
         Ok(dict.unbind().into())
     })
 }
@@ -205,6 +207,8 @@ fn sign_message(
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("signature", &result.signature)?;
         dict.set_item("recovery_id", result.recovery_id)?;
+        // Populated only for Midnight (the sealed, submit-ready transaction); None otherwise.
+        dict.set_item("transaction", result.transaction.as_deref())?;
         Ok(dict.unbind().into())
     })
 }
@@ -236,6 +240,8 @@ fn sign_typed_data(
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("signature", &result.signature)?;
         dict.set_item("recovery_id", result.recovery_id)?;
+        // Populated only for Midnight (the sealed, submit-ready transaction); None otherwise.
+        dict.set_item("transaction", result.transaction.as_deref())?;
         Ok(dict.unbind().into())
     })
 }
@@ -265,6 +271,8 @@ fn sign_hash(
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("signature", &result.signature)?;
         dict.set_item("recovery_id", result.recovery_id)?;
+        // Populated only for Midnight (the sealed, submit-ready transaction); None otherwise.
+        dict.set_item("transaction", result.transaction.as_deref())?;
         Ok(dict.unbind().into())
     })
 }
@@ -296,6 +304,8 @@ fn sign_authorization(
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("signature", &result.signature)?;
         dict.set_item("recovery_id", result.recovery_id)?;
+        // Populated only for Midnight (the sealed, submit-ready transaction); None otherwise.
+        dict.set_item("transaction", result.transaction.as_deref())?;
         Ok(dict.unbind().into())
     })
 }

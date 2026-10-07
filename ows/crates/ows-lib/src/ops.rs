@@ -7,9 +7,10 @@ use ows_core::{
     universal_wallet_chains, ChainType, Config, EncryptedWallet, KeyType, WalletAccount,
     UNIVERSAL_WALLET_ACCOUNT_COUNT,
 };
+use ows_signer::chains::MidnightSigner;
 use ows_signer::{
-    decrypt, encrypt, signer_for_chain, signer_for_chain_type, CryptoEnvelope, Curve, HdDeriver,
-    Mnemonic, MnemonicStrength, SecretBytes,
+    decrypt, encrypt, signer_for_chain, signer_for_chain_type, ChainSigner, CryptoEnvelope, Curve,
+    HdDeriver, Mnemonic, MnemonicStrength, SecretBytes, SignOutput,
 };
 
 use crate::error::OwsLibError;
@@ -188,6 +189,9 @@ fn derive_all_accounts_from_keys(keys: &KeyPair) -> Result<Vec<WalletAccount>, O
     let mut accounts = Vec::with_capacity(UNIVERSAL_WALLET_ACCOUNT_COUNT);
     for chain in universal_wallet_chains() {
         let signer = signer_for_chain(&chain)?;
+        if !signer.supports_private_key_import() {
+            continue;
+        }
         let key = keys.key_for_curve(signer.curve());
         let address = signer.derive_address(key)?;
         accounts.push(WalletAccount {
@@ -386,7 +390,17 @@ pub fn import_wallet_private_key(
         .transpose()?;
 
     let source_curve = match chain {
-        Some(c) => signer_for_chain(&parse_chain(c)?)?.curve(),
+        Some(c) => {
+            let signer = signer_for_chain(&parse_chain(c)?)?;
+            // Such a chain gets no account from raw keys, so importing one would succeed without
+            // the account the caller asked for.
+            if !signer.supports_private_key_import() {
+                return Err(OwsLibError::InvalidInput(format!(
+                    "{c} wallets can only be created from a mnemonic"
+                )));
+            }
+            signer.curve()
+        }
         None => ows_signer::Curve::Secp256k1,
     };
 
@@ -564,6 +578,7 @@ fn sign_hash_with_credential(
     Ok(SignResult {
         signature: hex::encode(&output.signature),
         recovery_id: output.recovery_id,
+        transaction: None,
     })
 }
 
@@ -581,30 +596,127 @@ pub fn sign_transaction(
     vault_path: Option<&Path>,
 ) -> Result<SignResult, OwsLibError> {
     let credential = passphrase.unwrap_or("");
-
-    let tx_hex_clean = tx_hex.strip_prefix("0x").unwrap_or(tx_hex);
-    let tx_bytes = hex::decode(tx_hex_clean)
-        .map_err(|e| OwsLibError::InvalidInput(format!("invalid hex transaction: {e}")))?;
+    let chain = parse_chain(chain)?;
+    let tx_bytes = decode_tx_input(&chain, tx_hex)?;
 
     // Agent mode: token-based signing with policy enforcement
     if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
-        let chain = parse_chain(chain)?;
         return crate::key_ops::sign_with_api_key(
             credential, wallet, &chain, &tx_bytes, index, vault_path,
         );
     }
 
-    // Owner mode: existing passphrase-based signing (unchanged)
-    let chain = parse_chain(chain)?;
+    // Owner mode: passphrase-based signing — full authority, no policy gate.
     let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
+    let signable_tx = prepare_signable_tx(&chain, tx_bytes, &key, |_| Ok(()))?;
     let signer = signer_for_chain(&chain)?;
-    let signable = signer.extract_signable_bytes(&tx_bytes)?;
+    let signable = signer.extract_signable_bytes(&signable_tx)?;
     let output = signer.sign_transaction(key.expose(), signable)?;
+    let transaction = signed_transaction_hex(&chain, signer.as_ref(), &signable_tx, &output)?;
 
     Ok(SignResult {
         signature: hex::encode(&output.signature),
         recovery_id: output.recovery_id,
+        transaction,
     })
+}
+
+/// Decode the `--tx` input into transaction bytes. A hex decode for every chain; Midnight's input is
+/// a DApp Connector request, normalized here into canonical request JSON — a bare `zswapoffer` bech32
+/// or a bare hex transaction is wrapped into the request that carries it, so a caller can hand over an
+/// offer or a proven transaction without writing the envelope. Normalizing before the key-aware step
+/// also lets the agent path's policy pass classify the request. Needs no signing key.
+pub fn decode_tx_input(chain: &ows_core::Chain, tx_input: &str) -> Result<Vec<u8>, OwsLibError> {
+    if chain.chain_type == ChainType::Midnight {
+        let request = ows_midnight::normalize_connector_request(tx_input)
+            .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
+        return Ok(request.into_bytes());
+    }
+    let clean = tx_input.strip_prefix("0x").unwrap_or(tx_input);
+    hex::decode(clean)
+        .map_err(|e| OwsLibError::InvalidInput(format!("invalid hex transaction: {e}")))
+}
+
+/// Second, key-aware step of preparing a signable transaction. A no-op for every chain except
+/// Midnight, where the DApp Connector request carried through by `decode_tx_input` is parsed and
+/// balanced — using `key` to pull in the wallet's own inputs — into the transaction to sign. Every
+/// caller resolves the key first (the agent path only after the first policy pass). `gate` is the
+/// second, effect-aware policy pass, run at the plan→authorize seam over the plan's per-segment
+/// wallet-relative effects, handed in as the `chain_extra` policy context; owner callers pass a gate
+/// that always allows.
+pub fn prepare_signable_tx(
+    chain: &ows_core::Chain,
+    tx_bytes: Vec<u8>,
+    key: &SecretBytes,
+    gate: impl FnOnce(serde_json::Value) -> Result<(), OwsLibError>,
+) -> Result<Vec<u8>, OwsLibError> {
+    if chain.chain_type != ChainType::Midnight {
+        return Ok(tx_bytes);
+    }
+    // decode_tx_input carried the DApp Connector request through as UTF-8; parse it and plan the
+    // balancing inertly. `plan_connector_tx` routes by the connector `method` (absent `method`
+    // resolves to balanceUnsealed) and returns a plan that carries no bearer instrument.
+    let json = std::str::from_utf8(&tx_bytes)
+        .map_err(|e| OwsLibError::InvalidInput(format!("Midnight tx input is not UTF-8: {e}")))?;
+
+    // ows-lib holds the credential; ows-midnight never sees it. Build the Midnight crypto provider once
+    // here (it owns all the wallet's key material), then hand only `&crypto_provider` across the crate
+    // boundary to plan and authorize the tx.
+    let crypto_provider = MidnightSigner::from_chain_id(chain.chain_id)
+        .crypto_provider(key)
+        .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
+
+    let plan = ows_midnight::plan_connector_tx(chain.chain_id, &crypto_provider, json)
+        .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
+
+    // ── POLICY SEAM ── the second, effect-aware policy pass. The plan is inert (no bearer instrument),
+    // so its per-segment wallet-relative effects can be derived and handed to `gate` — as the chain's
+    // `chain_extra` context — to veto here, before `authorize` builds and proves any spend witness. A
+    // denial returns and nothing is proved; owner callers pass a gate that always allows. Only Midnight
+    // reaches this: every other chain returned above, its effects already known at the first pass.
+    let segment_effects = plan
+        .segment_effects(chain.chain_id, &crypto_provider)
+        .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
+    // The two halves of the seam's view, kept disjoint: `segment_effects` is how much the *wallet*
+    // moves, `contracts` is *who* the transaction talks to and how much value each contract declares.
+    let contracts = plan
+        .contracts()
+        .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
+    // A third view neither of those gives: the DUST registrations the DApp asks the wallet to sign,
+    // which redirect or stop the wallet's DUST generation.
+    let dust_registrations = plan
+        .dust_registrations(chain.chain_id, &crypto_provider)
+        .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
+    let chain_extra = serde_json::json!({
+        "segment_effects": serde_json::to_value(&segment_effects)
+            .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?,
+        "contracts": serde_json::to_value(&contracts)
+            .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?,
+        "dust_registrations": serde_json::to_value(&dust_registrations)
+            .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?,
+    });
+    gate(chain_extra)?;
+
+    plan.authorize(chain.chain_id, &crypto_provider)
+        .map_err(|e| OwsLibError::InvalidInput(e.to_string()))
+}
+
+/// The fully signed, sealed transaction hex — populated only for chains that assemble a complete
+/// broadcastable artifact at sign time. Midnight does: [`ChainSigner::encode_signed_transaction`]
+/// reattaches the intent signature to the proven transaction and seals it (keyless), so signing
+/// yields a submit-ready tx. Every other chain's signing product is the bare signature, so this is
+/// `None`.
+pub fn signed_transaction_hex(
+    chain: &ows_core::Chain,
+    signer: &dyn ChainSigner,
+    signable_tx: &[u8],
+    output: &SignOutput,
+) -> Result<Option<String>, OwsLibError> {
+    if chain.chain_type != ChainType::Midnight {
+        return Ok(None);
+    }
+    let sealed = signer.encode_signed_transaction(signable_tx, output)?;
+    Ok(Some(hex::encode(sealed)))
 }
 
 /// Sign a raw 32-byte hash using the secp256k1 key for the selected chain.
@@ -707,10 +819,7 @@ pub fn sign_message(
     let signer = signer_for_chain(&chain)?;
     let output = signer.sign_message(key.expose(), &msg_bytes, address)?;
 
-    Ok(SignResult {
-        signature: hex::encode(&output.signature),
-        recovery_id: output.recovery_id,
-    })
+    crate::types::sign_result_from_message_output(chain.chain_type, &output)
 }
 
 /// Sign EIP-712 typed structured data. Returns hex-encoded signature.
@@ -757,6 +866,7 @@ pub fn sign_typed_data(
     Ok(SignResult {
         signature: hex::encode(&output.signature),
         recovery_id: output.recovery_id,
+        transaction: None,
     })
 }
 
@@ -776,15 +886,18 @@ pub fn sign_and_send(
 ) -> Result<SendResult, OwsLibError> {
     let credential = passphrase.unwrap_or("");
 
-    let tx_hex_clean = tx_hex.strip_prefix("0x").unwrap_or(tx_hex);
-    let tx_bytes = hex::decode(tx_hex_clean)
-        .map_err(|e| OwsLibError::InvalidInput(format!("invalid hex transaction: {e}")))?;
+    let chain_info = parse_chain(chain)?;
+    // `decode_tx_input` carries a Midnight DApp Connector request through as UTF-8; every other chain
+    // hex-decodes. `prepare_signable_tx` then authorizes it (for Midnight: parse, balance, prove, seal;
+    // a no-op passthrough elsewhere) so the bytes handed to broadcast are the wallet's real transaction.
+    let tx_bytes = decode_tx_input(&chain_info, tx_hex)?;
 
-    // Agent mode: enforce policies, decrypt key, then sign + broadcast
+    // Agent mode: first policy pass + key decryption, then authorize the balancing behind the second
+    // (effect-aware) policy pass, then sign + broadcast.
     if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
-        let chain_info = parse_chain(chain)?;
         let (key_file, wallet_obj) =
             crate::key_ops::load_authorized_wallet(credential, wallet, vault_path)?;
+        let wallet_id = wallet_obj.id.clone();
         let signer = signer_for_chain(&chain_info)?;
 
         // An explicit URL wins; otherwise resolve the configured one for the chains whose
@@ -800,26 +913,37 @@ pub fn sign_and_send(
         };
         let rpc_url = resolved_rpc_url.as_deref();
 
-        let transaction = signer.make_transaction_context(&tx_bytes, rpc_url)?;
-        let (key, _) = crate::key_ops::enforce_policies_and_decrypt_key(
+        let policy_tx = signer.make_transaction_context(&tx_bytes, rpc_url)?;
+        let (key, key_file) = crate::key_ops::enforce_policies_and_decrypt_key(
             credential,
             key_file,
             wallet_obj,
             &chain_info,
             ows_core::PolicyRequestType::SignTransaction,
-            Some(transaction),
+            Some(policy_tx.clone()),
             None,
             index,
             vault_path,
         )?;
-        return sign_encode_and_broadcast(key.expose(), chain, &tx_bytes, rpc_url);
+        // Second, effect-aware policy pass at the plan→authorize seam: a denial drops the key unused,
+        // so a transaction the policy rejects is never proved.
+        let signable_tx = prepare_signable_tx(&chain_info, tx_bytes, &key, |chain_extra| {
+            crate::key_ops::enforce_effect_policies(
+                &key_file,
+                &wallet_id,
+                &chain_info,
+                policy_tx,
+                chain_extra,
+                vault_path,
+            )
+        })?;
+        return sign_encode_and_broadcast(key.expose(), chain, &signable_tx, rpc_url);
     }
 
-    // Owner mode
-    let chain_info = parse_chain(chain)?;
+    // Owner mode — full authority, no policy gate.
     let key = decrypt_signing_key(wallet, chain_info.chain_type, credential, index, vault_path)?;
-
-    sign_encode_and_broadcast(key.expose(), chain, &tx_bytes, rpc_url)
+    let signable_tx = prepare_signable_tx(&chain_info, tx_bytes, &key, |_| Ok(()))?;
+    sign_encode_and_broadcast(key.expose(), chain, &signable_tx, rpc_url)
 }
 
 /// Sign, encode, and broadcast a transaction using an already-resolved private key.
@@ -846,8 +970,13 @@ pub fn sign_encode_and_broadcast(
     // 3. Encode the full signed transaction
     let signed_tx = signer.encode_signed_transaction(tx_bytes, &output)?;
 
-    // 4. Resolve RPC URL using exact chain_id
-    let rpc = resolve_rpc_url(chain.chain_id, chain.chain_type, rpc_url)?;
+    // 4. Resolve the RPC URL. Midnight submits to a Substrate node, which is a different endpoint
+    //    than the GraphQL indexer that `resolve_rpc_url` returns for balance queries.
+    let rpc = if chain.chain_type == ChainType::Midnight {
+        resolve_midnight_node_rpc_url(chain.chain_id, rpc_url)?
+    } else {
+        resolve_rpc_url(chain.chain_id, chain.chain_type, rpc_url)?
+    };
 
     // 5. Broadcast the full signed transaction
     let tx_hash = broadcast(chain.chain_type, &rpc, &signed_tx)?;
@@ -913,6 +1042,30 @@ pub fn resolve_rpc_url(
     )))
 }
 
+/// Resolve the Midnight node (Substrate) RPC URL for transaction submission — the endpoint that
+/// accepts `Midnight::send_mn_transaction`, distinct from the GraphQL indexer used for balance
+/// queries. Looks up the `{chain_id}:node` key (e.g. `midnight:preview:node`); an explicit `--rpc`
+/// override wins. There is deliberately no namespace fallback, so a missing entry errors instead of
+/// silently returning the indexer URL.
+fn resolve_midnight_node_rpc_url(
+    chain_id: &str,
+    explicit: Option<&str>,
+) -> Result<String, OwsLibError> {
+    if let Some(url) = explicit {
+        return Ok(url.to_string());
+    }
+    let key = format!("{chain_id}:node");
+    if let Some(url) = Config::load_or_default().rpc.get(&key) {
+        return Ok(url.clone());
+    }
+    if let Some(url) = Config::default_rpc().get(&key) {
+        return Ok(url.clone());
+    }
+    Err(OwsLibError::InvalidInput(format!(
+        "no Midnight node RPC URL configured for '{chain_id}' (pass --rpc <node-url> or set rpc.{key})"
+    )))
+}
+
 /// Broadcast a signed transaction via curl, dispatching per chain type.
 fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<String, OwsLibError> {
     match chain {
@@ -933,6 +1086,8 @@ fn broadcast(chain: ChainType, rpc_url: &str, signed_bytes: &[u8]) -> Result<Str
         ChainType::Nano => broadcast_nano(rpc_url, signed_bytes),
         ChainType::Near => crate::near_rpc::broadcast_tx_commit(rpc_url, signed_bytes),
         ChainType::Cardano => broadcast_cardano(rpc_url, signed_bytes),
+        ChainType::Midnight => ows_midnight::broadcast_sealed(rpc_url, signed_bytes)
+            .map_err(|e| OwsLibError::BroadcastFailed(e.to_string())),
     }
 }
 
@@ -1277,6 +1432,15 @@ mod tests {
     use super::*;
     use ows_core::OwsError;
 
+    #[test]
+    fn decode_tx_input_wraps_a_bare_midnight_offer_as_a_connector_request() {
+        let chain = parse_chain("midnight:preview").unwrap();
+        let bytes = decode_tx_input(&chain, "zswapoffer1qqqmakeroffer").unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["method"], "balanceSealedTransaction");
+        assert_eq!(json["makerTx"], "zswapoffer1qqqmakeroffer");
+    }
+
     // ---- helpers ----
 
     /// Build a private-key wallet directly in the vault, bypassing
@@ -1329,6 +1493,32 @@ mod tests {
         };
 
         crate::policy_store::save_policy(&policy, Some(vault)).unwrap();
+    }
+
+    #[test]
+    fn signed_transaction_hex_is_none_for_non_midnight_chains() {
+        use ows_core::{default_chain_for_type, ALL_CHAIN_TYPES};
+
+        // The sealed-transaction artifact is Midnight-only; every other chain's signing product is
+        // the bare signature, so the field stays `None` regardless of the (here unused) output.
+        let output = SignOutput {
+            signature: vec![],
+            recovery_id: None,
+            public_key: None,
+        };
+        for ct in ALL_CHAIN_TYPES
+            .iter()
+            .filter(|ct| **ct != ChainType::Midnight)
+        {
+            let chain = default_chain_for_type(*ct);
+            let signer = signer_for_chain(&chain).unwrap();
+            let sealed = signed_transaction_hex(&chain, signer.as_ref(), &[], &output).unwrap();
+            assert!(
+                sealed.is_none(),
+                "expected no sealed transaction for {}",
+                chain.chain_id
+            );
+        }
     }
 
     // ================================================================
@@ -1791,10 +1981,25 @@ mod tests {
         )
         .unwrap();
 
+        let importable = universal_wallet_chains()
+            .iter()
+            .filter(|c| {
+                signer_for_chain(c)
+                    .expect("universal wallet chains resolve")
+                    .supports_private_key_import()
+            })
+            .count();
         assert_eq!(
             info.accounts.len(),
-            UNIVERSAL_WALLET_ACCOUNT_COUNT,
-            "should have one account per chain type plus Cardano testnets"
+            importable,
+            "one account per private-key-importable chain (Midnight is skipped)"
+        );
+        assert!(
+            !info
+                .accounts
+                .iter()
+                .any(|a| a.chain_id.starts_with("midnight:")),
+            "Midnight has no raw private-key import"
         );
 
         // Sign on EVM (secp256k1)
@@ -2733,6 +2938,49 @@ mod tests {
             OwsLibError::WalletNotFound(name) => assert_eq!(name, "del-me-char"),
             other => panic!("expected WalletNotFound, got: {other}"),
         }
+    }
+
+    #[test]
+    fn mnemonic_wallet_includes_midnight_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        let info =
+            import_wallet_mnemonic("mn-midnight", phrase, None, None, Some(dir.path())).unwrap();
+
+        let midnight = info
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "midnight:mainnet")
+            .expect("mnemonic wallet should derive a Midnight account");
+        assert_eq!(
+            midnight.address,
+            "mn_addr1dwv2rta0a2skyhrvukaw2q9r2sq6yc4jhj63rf7afxpkrrv6g35qw3dyt6"
+        );
+    }
+
+    #[test]
+    fn privkey_wallet_import_rejects_a_mnemonic_only_chain() {
+        let dir = tempfile::tempdir().unwrap();
+
+        for chain in ["midnight", "midnight:preview", "midnight:Preview"] {
+            let err = import_wallet_private_key(
+                "pk-midnight",
+                TEST_PRIVKEY,
+                Some(chain),
+                None,
+                Some(dir.path()),
+                None,
+                None,
+                None,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&err, OwsLibError::InvalidInput(msg) if msg.contains("mnemonic")),
+                "{chain}: {err:?}"
+            );
+        }
+        assert!(list_wallets(Some(dir.path())).unwrap().is_empty());
     }
 
     #[test]
