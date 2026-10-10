@@ -317,7 +317,7 @@ echo "word1 word2 ..." | ows mnemonic derive --chain ethereum
 
 ### `ows pay request`
 
-Make an HTTP request with automatic x402 payment handling. If the server returns 402, the CLI detects the payment requirements, signs an EIP-3009 `TransferWithAuthorization` for USDC, and retries with the payment header.
+Make an HTTP request with automatic x402 payment handling. If the server returns 402, the CLI detects the payment requirements, picks the first `exact` offer the wallet can pay, and retries with the payment header. On EVM chains it signs an EIP-3009 `TransferWithAuthorization` for USDC; on `nano:mainnet` it publishes a send of `amount` raw to `payTo` and sends the block hash. Offers the wallet cannot pay (other chains, or a Nano account without enough balance) are skipped in favour of the next one.
 
 ```bash
 ows pay request "https://api.example.com/data" --wallet "my-wallet"
