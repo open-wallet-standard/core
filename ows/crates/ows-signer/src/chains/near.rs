@@ -58,6 +58,11 @@ impl ChainSigner for NearSigner {
         let verifying_key: VerifyingKey = signing_key.verifying_key();
         Ok(hex::encode(verifying_key.as_bytes()))
     }
+    fn derive_public_key(&self, private_key: &[u8]) -> Result<Vec<u8>, SignerError> {
+        let signing_key = Self::signing_key(private_key)?;
+        Ok(signing_key.verifying_key().as_bytes().to_vec())
+    }
+
 
     fn sign(&self, private_key: &[u8], message: &[u8]) -> Result<SignOutput, SignerError> {
         let signing_key = Self::signing_key(private_key)?;
