@@ -7,6 +7,7 @@ use crate::types::{
     PaymentPayloadV2, PaymentRequirements, Protocol, X402Response,
 };
 use crate::wallet::WalletAccess;
+use ows_core::ChainType;
 
 const HEADER_PAYMENT_REQUIRED: &str = "x-payment-required";
 const HEADER_PAYMENT_REQUIRED_V2: &str = "payment-required";
@@ -22,11 +23,26 @@ pub(crate) async fn handle_x402(
     resp_headers: &reqwest::header::HeaderMap,
     body_402: &str,
 ) -> Result<PayResult, PayError> {
-    let (x402_version, resource, requirements) = parse_requirements(resp_headers, body_402)?;
-    let (req, network) = pick_payment_option(wallet, &requirements)?;
+    let (x402_version, resource, mut requirements) = parse_requirements(resp_headers, body_402)?;
 
-    let (payload, payment_info) =
-        build_signed_payment(wallet, req, &network, x402_version, resource)?;
+    // Try offers in preference order. An offer the wallet cannot pay with
+    // (`UnsupportedChain`, returned before anything is signed or sent) drops
+    // its network and we fall back to the next payable one.
+    let mut skipped: Option<PayError> = None;
+    let (payload, payment_info) = loop {
+        let (req, network) = match pick_payment_option(wallet, &requirements) {
+            Ok(picked) => picked,
+            Err(err) => return Err(skipped.unwrap_or(err)),
+        };
+        match build_signed_payment(wallet, req, &network, x402_version, resource.clone()) {
+            Ok(built) => break built,
+            Err(err) if err.code == PayErrorCode::UnsupportedChain => {
+                requirements.retain(|r| resolve_network(&r.network) != network);
+                skipped = Some(err);
+            }
+            Err(err) => return Err(err),
+        }
+    };
 
     let payload_json = serde_json::to_string(&payload)?;
     let payload_b64 = B64.encode(payload_json.as_bytes());
@@ -60,11 +76,42 @@ fn build_signed_payment(
     resource: Option<serde_json::Value>,
 ) -> Result<(PaymentPayload, PaymentInfo), PayError> {
     match req.scheme.as_str() {
-        "exact" => build_evm_exact(wallet, req, network, x402_version, resource),
+        "exact" => match chains::resolve_chain_type(network) {
+            Some(ChainType::Evm) => build_evm_exact(wallet, req, network, x402_version, resource),
+            Some(ChainType::Nano) => build_nano_exact(wallet, req, network, x402_version, resource),
+            _ => Err(PayError::new(
+                PayErrorCode::UnsupportedChain,
+                format!("\"exact\" payments are not supported on {network}"),
+            )),
+        },
         scheme => Err(PayError::new(
             PayErrorCode::ProtocolUnknown,
             format!("unsupported payment scheme: {scheme}"),
         )),
+    }
+}
+
+/// Wrap a scheme-specific payload in the v1 or v2 envelope.
+fn wrap_payload(
+    req: &PaymentRequirements,
+    x402_version: u32,
+    resource: Option<serde_json::Value>,
+    inner: serde_json::Value,
+) -> PaymentPayload {
+    if x402_version >= 2 {
+        PaymentPayload::V2(PaymentPayloadV2 {
+            x402_version,
+            accepted: req.clone(),
+            resource,
+            payload: inner,
+        })
+    } else {
+        PaymentPayload::V1(PaymentPayloadV1 {
+            x402_version,
+            scheme: req.scheme.clone(),
+            network: req.network.clone(),
+            payload: inner,
+        })
     }
 }
 
@@ -156,27 +203,47 @@ fn build_evm_exact(
     };
 
     let inner = serde_json::to_value(eip3009)?;
-    let payload = if x402_version >= 2 {
-        PaymentPayload::V2(PaymentPayloadV2 {
-            x402_version,
-            accepted: req.clone(),
-            resource,
-            payload: inner,
-        })
-    } else {
-        PaymentPayload::V1(PaymentPayloadV1 {
-            x402_version,
-            scheme: req.scheme.clone(),
-            network: req.network.clone(),
-            payload: inner,
-        })
-    };
+    let payload = wrap_payload(req, x402_version, resource, inner);
 
     let amount_display = crate::discovery::format_usdc(&req.amount);
     let payment_info = PaymentInfo {
         amount: amount_display,
         network: chains::display_name(network).to_string(),
         token: "USDC".to_string(),
+    };
+
+    Ok((payload, payment_info))
+}
+
+/// Build a Nano "exact" payment.
+///
+/// Nano has no transfer authorization to sign, so the wallet publishes a send
+/// block of `amount` raw (10^30 raw = 1 XNO) to `payTo` and the payload
+/// carries its hash for the server to verify: `{ "blockHash": "<hex>" }`.
+fn build_nano_exact(
+    wallet: &dyn WalletAccess,
+    req: &PaymentRequirements,
+    network: &str,
+    x402_version: u32,
+    resource: Option<serde_json::Value>,
+) -> Result<(PaymentPayload, PaymentInfo), PayError> {
+    // Reject a bad amount before anything is sent.
+    if !matches!(parsed_amount(req), Some(raw) if raw > 0) {
+        return Err(PayError::new(
+            PayErrorCode::ProtocolMalformed,
+            format!("invalid nano amount: {:?}", req.amount),
+        ));
+    }
+
+    let block_hash = wallet.send_native(network, &req.pay_to, &req.amount)?;
+
+    let inner = serde_json::json!({ "blockHash": block_hash });
+    let payload = wrap_payload(req, x402_version, resource, inner);
+
+    let payment_info = PaymentInfo {
+        amount: crate::discovery::format_nano(&req.amount),
+        network: chains::display_name(network).to_string(),
+        token: "XNO".to_string(),
     };
 
     Ok((payload, payment_info))
@@ -244,6 +311,14 @@ fn parsed_amount(req: &PaymentRequirements) -> Option<u128> {
     req.amount.parse().ok()
 }
 
+/// Resolve to CAIP-2 if the server sent a human name.
+fn resolve_network(network: &str) -> String {
+    match ows_core::parse_chain(network) {
+        Ok(c) => c.chain_id.to_string(),
+        Err(_) => network.to_string(), // Already CAIP-2 (unknown to registry but namespace matched).
+    }
+}
+
 /// Pick the first payment option whose scheme we support and whose
 /// network the wallet supports. Returns the requirement and its
 /// resolved CAIP-2 network string.
@@ -274,13 +349,7 @@ fn pick_payment_option<'a>(
             continue;
         }
 
-        // Resolve to CAIP-2 if the server sent a human name.
-        let network = match ows_core::parse_chain(&req.network) {
-            Ok(c) => c.chain_id.to_string(),
-            Err(_) => req.network.clone(), // Already CAIP-2 (unknown to registry but namespace matched).
-        };
-
-        candidates.push((req, network));
+        candidates.push((req, resolve_network(&req.network)));
     }
 
     if let Some((_, first_network)) = candidates.first() {
@@ -515,6 +584,82 @@ mod tests {
             _payload: &str,
         ) -> Result<String, PayError> {
             Ok("0xdeadbeef".into())
+        }
+    }
+
+    /// Reports EVM and Nano accounts but keeps the default `send_native`,
+    /// like a wallet that holds a Nano address without a way to send.
+    struct EvmAndNanoAccountWallet;
+    impl WalletAccess for EvmAndNanoAccountWallet {
+        fn supported_chains(&self) -> Vec<ChainType> {
+            vec![ChainType::Evm, ChainType::Nano]
+        }
+        fn account(&self, _network: &str) -> Result<crate::wallet::Account, PayError> {
+            Ok(crate::wallet::Account {
+                address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266".into(),
+            })
+        }
+        fn sign_payload(
+            &self,
+            _scheme: &str,
+            _network: &str,
+            _payload: &str,
+        ) -> Result<String, PayError> {
+            Ok("0xdeadbeef".into())
+        }
+    }
+
+    const NANO_PAY_TO: &str = "nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3";
+    const NANO_BLOCK_HASH: &str =
+        "991CF190094C00F0B68E2E5F75F6BEE95A2E0BD93CEAA4A6734DB9F19B728948";
+
+    /// EVM + Nano wallet whose `send_native` records the call instead of
+    /// publishing a block, or fails with `send_error` if set.
+    #[derive(Default)]
+    struct NanoWallet {
+        sent: std::sync::Mutex<Vec<(String, String, String)>>,
+        send_error: Option<PayErrorCode>,
+    }
+    impl WalletAccess for NanoWallet {
+        fn supported_chains(&self) -> Vec<ChainType> {
+            vec![ChainType::Nano, ChainType::Evm]
+        }
+        fn account(&self, _network: &str) -> Result<crate::wallet::Account, PayError> {
+            Ok(crate::wallet::Account {
+                address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266".into(),
+            })
+        }
+        fn sign_payload(
+            &self,
+            _scheme: &str,
+            _network: &str,
+            _payload: &str,
+        ) -> Result<String, PayError> {
+            Ok("0xdeadbeef".into())
+        }
+        fn send_native(&self, network: &str, to: &str, amount: &str) -> Result<String, PayError> {
+            if let Some(code) = self.send_error {
+                return Err(PayError::new(code, "send failed"));
+            }
+            self.sent
+                .lock()
+                .unwrap()
+                .push((network.into(), to.into(), amount.into()));
+            Ok(NANO_BLOCK_HASH.into())
+        }
+    }
+
+    fn nano_requirement() -> PaymentRequirements {
+        PaymentRequirements {
+            scheme: "exact".into(),
+            network: "nano:mainnet".into(),
+            amount: "1000000000000000000000000000".into(), // 0.001 XNO
+            asset: "XNO".into(),
+            pay_to: NANO_PAY_TO.into(),
+            max_timeout_seconds: 60,
+            extra: serde_json::Value::Null,
+            description: None,
+            resource: None,
         }
     }
 
@@ -962,6 +1107,79 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // build_nano_exact
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn build_nano_exact_sends_and_returns_block_hash() {
+        let wallet = NanoWallet::default();
+        let req = nano_requirement();
+        let (payload, info) = build_nano_exact(&wallet, &req, "nano:mainnet", 1, None).unwrap();
+
+        assert_eq!(
+            *wallet.sent.lock().unwrap(),
+            vec![(
+                "nano:mainnet".to_string(),
+                NANO_PAY_TO.to_string(),
+                "1000000000000000000000000000".to_string()
+            )]
+        );
+        let v1 = match &payload {
+            PaymentPayload::V1(p) => p,
+            PaymentPayload::V2(_) => panic!("expected V1"),
+        };
+        assert_eq!(v1.scheme, "exact");
+        assert_eq!(v1.network, "nano:mainnet");
+        assert_eq!(
+            v1.payload,
+            serde_json::json!({ "blockHash": NANO_BLOCK_HASH })
+        );
+        assert_eq!(info.amount, "0.001 XNO");
+        assert_eq!(info.network, "nano");
+        assert_eq!(info.token, "XNO");
+    }
+
+    #[test]
+    fn build_nano_exact_v2_payload() {
+        let req = nano_requirement();
+        let (payload, _) =
+            build_nano_exact(&NanoWallet::default(), &req, "nano:mainnet", 2, None).unwrap();
+        let encoded = serde_json::to_value(payload).unwrap();
+        assert_eq!(encoded["x402Version"], 2);
+        assert_eq!(encoded["accepted"]["network"], "nano:mainnet");
+        assert_eq!(encoded["accepted"]["payTo"], NANO_PAY_TO);
+        assert_eq!(encoded["payload"]["blockHash"], NANO_BLOCK_HASH);
+    }
+
+    #[test]
+    fn build_nano_exact_rejects_bad_amount_without_sending() {
+        let wallet = NanoWallet::default();
+        for amount in ["0", "", "1.5", "-1"] {
+            let mut req = nano_requirement();
+            req.amount = amount.into();
+            let err = build_nano_exact(&wallet, &req, "nano:mainnet", 1, None).unwrap_err();
+            assert_eq!(err.code, PayErrorCode::ProtocolMalformed);
+        }
+        assert!(wallet.sent.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn build_signed_payment_unsupported_exact_chain() {
+        let mut req = base_requirement();
+        req.network = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp".into();
+        let err = build_signed_payment(&SolanaWallet, &req, &req.network, 1, None).unwrap_err();
+        assert_eq!(err.code, PayErrorCode::UnsupportedChain);
+    }
+
+    #[test]
+    fn default_send_native_is_unsupported() {
+        let err = EvmWallet
+            .send_native("nano:mainnet", NANO_PAY_TO, "1")
+            .unwrap_err();
+        assert_eq!(err.code, PayErrorCode::UnsupportedChain);
+    }
+
+    // -----------------------------------------------------------------------
     // parse → pick roundtrip
     // -----------------------------------------------------------------------
 
@@ -1081,5 +1299,166 @@ mod tests {
             }
             PaymentPayload::V1(_) => panic!("expected v2 payload for payment-required flow"),
         }
+    }
+
+    #[tokio::test]
+    async fn pay_falls_back_to_evm_when_first_offer_is_nano() {
+        let x402 = serde_json::json!({
+            "accepts": [
+                {
+                    "scheme": "exact",
+                    "network": "nano:mainnet",
+                    "amount": "1000000000000000000000000",
+                    "asset": "XNO",
+                    "payTo": "nano_3t6k35gi95xu6tergt6p69ck76ogmitsa8mnijtpxm9fkcm736xtoncuohr3"
+                },
+                {
+                    "scheme": "exact",
+                    "network": "eip155:8453",
+                    "amount": "5000",
+                    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                    "payTo": "0xbase",
+                    "extra": {"name": "USD Coin", "version": "2"}
+                }
+            ]
+        });
+        let encoded = B64.encode(serde_json::to_string(&x402).unwrap().as_bytes());
+        let (url, rx, handle) = spawn_x402_flow_server("payment-required", encoded);
+
+        // Holds a Nano account but cannot send on Nano (default `send_native`).
+        let result = crate::pay(&EvmAndNanoAccountWallet, &url, "GET", None)
+            .await
+            .unwrap();
+        let retry_request = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(result.status, 200);
+        assert_eq!(result.payment.unwrap().network, "base");
+        match decode_payment_payload(&header_value(&retry_request, "payment-signature")) {
+            PaymentPayload::V2(v2) => {
+                assert_eq!(v2.accepted.network, "eip155:8453");
+                assert_eq!(v2.payload["authorization"]["to"], "0xbase");
+            }
+            PaymentPayload::V1(_) => panic!("expected v2 payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pay_falls_back_to_evm_when_first_offer_is_solana() {
+        let x402 = serde_json::json!({
+            "accepts": [
+                {
+                    "scheme": "exact",
+                    "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+                    "amount": "5000",
+                    "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                    "payTo": "So11111111111111111111111111111111111111112"
+                },
+                {
+                    "scheme": "exact",
+                    "network": "base",
+                    "amount": "5000",
+                    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                    "payTo": "0xbase",
+                    "extra": {"name": "USD Coin", "version": "2"}
+                }
+            ]
+        });
+        let encoded = B64.encode(serde_json::to_string(&x402).unwrap().as_bytes());
+        let (url, rx, handle) = spawn_x402_flow_server("x-payment-required", encoded);
+
+        let result = crate::pay(&MultiWallet, &url, "GET", None).await.unwrap();
+        let retry_request = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(result.status, 200);
+        match decode_payment_payload(&header_value(&retry_request, "X-PAYMENT")) {
+            PaymentPayload::V1(v1) => {
+                assert_eq!(v1.network, "base");
+                assert_eq!(v1.payload["authorization"]["to"], "0xbase");
+            }
+            PaymentPayload::V2(_) => panic!("expected v1 payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pay_nano_exact_sends_block_hash() {
+        let x402 = serde_json::json!({
+            "x402Version": 2,
+            "accepts": [
+                serde_json::to_value(nano_requirement()).unwrap(),
+                serde_json::to_value(base_requirement()).unwrap()
+            ]
+        });
+        let encoded = B64.encode(serde_json::to_string(&x402).unwrap().as_bytes());
+        let (url, rx, handle) = spawn_x402_flow_server("payment-required", encoded);
+
+        let wallet = NanoWallet::default();
+        let result = crate::pay(&wallet, &url, "GET", None).await.unwrap();
+        let retry_request = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(result.status, 200);
+        let payment = result.payment.unwrap();
+        assert_eq!(payment.token, "XNO");
+        assert_eq!(payment.amount, "0.001 XNO");
+        assert_eq!(wallet.sent.lock().unwrap().len(), 1);
+        match decode_payment_payload(&header_value(&retry_request, "payment-signature")) {
+            PaymentPayload::V2(v2) => {
+                assert_eq!(v2.accepted.network, "nano:mainnet");
+                assert_eq!(v2.payload["blockHash"], NANO_BLOCK_HASH);
+            }
+            PaymentPayload::V1(_) => panic!("expected v2 payload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_nano_send_does_not_fall_back() {
+        // A send that may have reached the network must not be followed by
+        // a second payment on another chain.
+        let body = serde_json::json!({
+            "accepts": [
+                serde_json::to_value(nano_requirement()).unwrap(),
+                serde_json::to_value(base_requirement()).unwrap()
+            ]
+        })
+        .to_string();
+        let wallet = NanoWallet {
+            send_error: Some(PayErrorCode::SigningFailed),
+            ..Default::default()
+        };
+
+        // Port 9 (discard) is never contacted: the error happens before the retry.
+        let err = handle_x402(
+            &wallet,
+            "http://127.0.0.1:9/",
+            "GET",
+            None,
+            &HeaderMap::new(),
+            &body,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, PayErrorCode::SigningFailed);
+    }
+
+    #[tokio::test]
+    async fn only_unbuildable_offers_reports_why() {
+        let mut sol = base_requirement();
+        sol.network = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp".into();
+        let body = serde_json::json!({ "accepts": [sol] }).to_string();
+
+        let err = handle_x402(
+            &SolanaWallet,
+            "http://127.0.0.1:9/",
+            "GET",
+            None,
+            &HeaderMap::new(),
+            &body,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, PayErrorCode::UnsupportedChain);
+        assert!(err.message.contains("solana:"), "{}", err.message);
     }
 }
