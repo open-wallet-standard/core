@@ -12,7 +12,7 @@ curl -fsSL https://docs.openwallet.sh/install.sh | bash
 
 This installs the `ows` CLI binary, plus Node.js and Python bindings if those runtimes are available.
 
-Or clone and build from source (requires [Rust](https://rustup.rs) 1.70+):
+Or clone and build from source using the repository's pinned Rust toolchain:
 
 ```bash
 git clone https://github.com/open-wallet-standard/core.git
@@ -70,6 +70,7 @@ console.log(sig.signature);
 | `ows-core` | Types, CAIP-2/10 parsing, errors, config. Zero crypto dependencies. |
 | `ows-signer` | ChainSigner trait, HD derivation, address derivation for EVM, Solana, XRPL, Sui, Bitcoin, Cosmos, Tron, TON, Spark, Filecoin, Nano, and NEAR. |
 | `ows-lib` | Library interface used by language bindings and the CLI. |
+| `ows-alloy` | OWS-backed Alloy `Signer` / `TxSigner` integration for Rust applications. See [the adapter documentation](https://github.com/open-wallet-standard/core/tree/main/ows/crates/ows-alloy). |
 | `ows-pay` | x402 payment flows, service discovery, and funding helpers. |
 | `ows-cli` | The `ows` command-line tool. |
 

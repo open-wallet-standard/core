@@ -85,15 +85,18 @@ pub fn parse_typed_data(json: &str) -> Result<TypedData, SignerError> {
     })
 }
 
-/// Compute the full EIP-712 hash: `keccak256("\x19\x01" || domainSeparator || structHash)`.
+/// Compute `keccak256("\x19\x01" || domainSeparator || structHash)`.
+/// Domain-only requests (`primaryType = EIP712Domain`) omit the message hash.
 pub fn hash_typed_data(data: &TypedData) -> Result<[u8; 32], SignerError> {
     let domain_hash = hash_struct("EIP712Domain", &data.domain, &data.types)?;
-    let message_hash = hash_struct(&data.primary_type, &data.message, &data.types)?;
 
     let mut buf = Vec::with_capacity(2 + 32 + 32);
     buf.extend_from_slice(&[0x19, 0x01]);
     buf.extend_from_slice(&domain_hash);
-    buf.extend_from_slice(&message_hash);
+    if data.primary_type != "EIP712Domain" {
+        let message_hash = hash_struct(&data.primary_type, &data.message, &data.types)?;
+        buf.extend_from_slice(&message_hash);
+    }
 
     Ok(Keccak256::digest(&buf).into())
 }
@@ -211,7 +214,11 @@ fn encode_value(
 ) -> Result<[u8; 32], SignerError> {
     // Array types
     if type_name.ends_with(']') {
-        let base = base_type(type_name);
+        // Remove one dimension at a time so nested arrays hash each inner
+        // array before its parent. base_type strips all dimensions for deps.
+        let (base, _) = type_name.rsplit_once('[').ok_or_else(|| {
+            SignerError::InvalidMessage(format!("invalid array type: {type_name}"))
+        })?;
         let arr = value.as_array().ok_or_else(|| {
             SignerError::InvalidMessage(format!("expected array for {type_name}"))
         })?;
@@ -493,6 +500,47 @@ mod tests {
             hex::encode(hash),
             "be609aee343fb3c4b28e1df9e632fca64fcfaede20f02e86244efddf30957bd2"
         );
+    }
+
+    #[test]
+    fn test_multidimensional_array_hash_matches_alloy() {
+        // Independently cross-checked with alloy_dyn_abi::TypedData.
+        let td = parse_typed_data(
+            r#"{
+            "types": {"EIP712Domain": [], "Value": [{"name":"matrix", "type":"uint256[][]"}]},
+            "domain": {}, "primaryType": "Value", "message": {"matrix": [["1", "2"], ["3"]]}
+        }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            hex::encode(hash_typed_data(&td).unwrap()),
+            "2f3940d11328c4e3241e24bb8dad785131f7c49c4003dd655ef2a75d6419fd6d"
+        );
+    }
+
+    #[test]
+    fn test_domain_only_hash_matches_alloy() {
+        // Domain-only requests omit the message struct hash, even when a
+        // nonempty domain has fields that are absent from the message.
+        for (fields, domain, expected) in [
+            (
+                serde_json::json!([]),
+                serde_json::json!({}),
+                "8d4a3f4082945b7879e2b55f181c31a77c8c0a464b70669458abbaaf99de4c38",
+            ),
+            (
+                serde_json::json!([{"name":"name", "type":"string"}]),
+                serde_json::json!({"name":"review"}),
+                "099fae6a5df6accb708790c9268d09abbee7abde58b1d508feb8ac10f059eb6c",
+            ),
+        ] {
+            let json = serde_json::json!({
+                "types": {"EIP712Domain": fields}, "primaryType": "EIP712Domain",
+                "domain": domain, "message": {}
+            });
+            let td = parse_typed_data(&json.to_string()).unwrap();
+            assert_eq!(hex::encode(hash_typed_data(&td).unwrap()), expected);
+        }
     }
 
     #[test]

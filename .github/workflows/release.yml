@@ -364,6 +364,11 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_REGISTRY_TOKEN }}
 
+      - name: Publish ows-alloy
+        run: cargo publish -p ows-alloy --allow-dirty
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_REGISTRY_TOKEN }}
+
       - name: Publish ows-pay
         run: cargo publish -p ows-pay --allow-dirty
         env:
