@@ -17,6 +17,7 @@ ows-core = { path = "../../ows/crates/ows-core" }
 serde_json = "1"
 napi = { version = "2", features = ["napi6", "serde-json"] }
 napi-derive = "2"
+zeroize = "1"
 
 [build-dependencies]
 napi-build = "2"

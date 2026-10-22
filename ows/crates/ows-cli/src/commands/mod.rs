@@ -87,12 +87,24 @@ pub fn read_passphrase() -> Zeroizing<String> {
     if stdin.is_terminal() {
         eprint!("Passphrase (empty for none): ");
         io::stderr().flush().ok();
-        let mut line = String::new();
-        stdin.lock().read_line(&mut line).unwrap_or(0);
-        Zeroizing::new(line.trim().to_string())
+        read_passphrase_line(&mut stdin.lock())
     } else {
         Zeroizing::new(String::new())
     }
+}
+
+// Remove only the terminal line ending. Spaces are part of the password, just
+// as they are in the bindings, environment variables and change-password prompt.
+fn read_passphrase_line(reader: &mut impl BufRead) -> Zeroizing<String> {
+    let mut line = Zeroizing::new(String::new());
+    reader.read_line(&mut line).unwrap_or(0);
+    if line.ends_with('\n') {
+        line.pop();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+    }
+    line
 }
 
 /// Peek at the passphrase value without consuming the env var.
@@ -131,4 +143,23 @@ pub fn resolve_signing_key(
         Some(index),
         None,
     )?)
+}
+
+#[cfg(test)]
+mod passphrase_tests {
+    use super::read_passphrase_line;
+
+    #[test]
+    fn passphrase_input_preserves_spaces_and_unicode() {
+        for (input, expected) in [
+            ("  café 🔒 密码  \n", "  café 🔒 密码  "),
+            ("  café 🔒 密码  \r\n", "  café 🔒 密码  "),
+            ("  \n", "  "),
+            ("\n", ""),
+            ("", ""),
+            (" password ", " password "),
+        ] {
+            assert_eq!(&*read_passphrase_line(&mut input.as_bytes()), expected);
+        }
+    }
 }

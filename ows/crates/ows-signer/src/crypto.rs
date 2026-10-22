@@ -84,6 +84,53 @@ const KDF_DKLEN: u32 = 32;
 /// Encrypt plaintext bytes using a passphrase (scrypt KDF + AES-256-GCM).
 /// Returns a CryptoEnvelope suitable for JSON serialization.
 pub fn encrypt(plaintext: &[u8], passphrase: &str) -> Result<CryptoEnvelope, CryptoError> {
+    encrypt_scrypt(plaintext, passphrase, KDF_N, KDF_R, KDF_P)
+}
+
+/// Re-encrypt an owner wallet with fresh randomness, preserving its scrypt cost.
+/// Decryption authenticates the old passphrase before a replacement is created.
+/// HKDF/API-token envelopes are not owner-password keystores.
+pub fn reencrypt_with_passphrase(
+    envelope: &CryptoEnvelope,
+    old_passphrase: &str,
+    new_passphrase: &str,
+) -> Result<CryptoEnvelope, CryptoError> {
+    if envelope.cipher != "aes-256-gcm" || envelope.kdf != "scrypt" {
+        return Err(CryptoError::InvalidParams(
+            "expected an AES-256-GCM/scrypt owner wallet".into(),
+        ));
+    }
+    let KdfParamsVariant::Scrypt(parameters) = &envelope.kdfparams else {
+        return Err(CryptoError::InvalidParams(
+            "expected scrypt parameters".into(),
+        ));
+    };
+    let iv = hex::decode(&envelope.cipherparams.iv)
+        .map_err(|e| CryptoError::InvalidParams(e.to_string()))?;
+    let tag =
+        hex::decode(&envelope.auth_tag).map_err(|e| CryptoError::InvalidParams(e.to_string()))?;
+    if iv.len() != 12 || tag.len() != 16 {
+        return Err(CryptoError::InvalidParams(
+            "invalid AES-GCM IV or authentication tag length".into(),
+        ));
+    }
+    let secret = decrypt(envelope, old_passphrase)?;
+    encrypt_scrypt(
+        secret.expose(),
+        new_passphrase,
+        parameters.n,
+        parameters.r,
+        parameters.p,
+    )
+}
+
+fn encrypt_scrypt(
+    plaintext: &[u8],
+    passphrase: &str,
+    n: u32,
+    r: u32,
+    p: u32,
+) -> Result<CryptoEnvelope, CryptoError> {
     let mut rng = rand::thread_rng();
 
     let mut salt = [0u8; 32];
@@ -92,7 +139,7 @@ pub fn encrypt(plaintext: &[u8], passphrase: &str) -> Result<CryptoEnvelope, Cry
     let mut iv = [0u8; 12];
     rng.fill_bytes(&mut iv);
 
-    let params = ScryptParams::new(KDF_LOG_N, KDF_R, KDF_P, KDF_DKLEN as usize)
+    let params = ScryptParams::new(n.trailing_zeros() as u8, r, p, KDF_DKLEN as usize)
         .map_err(|e| CryptoError::InvalidParams(e.to_string()))?;
     let mut derived_key = [0u8; 32];
     scrypt(passphrase.as_bytes(), &salt, &params, &mut derived_key)
@@ -120,9 +167,9 @@ pub fn encrypt(plaintext: &[u8], passphrase: &str) -> Result<CryptoEnvelope, Cry
         kdf: "scrypt".to_string(),
         kdfparams: KdfParamsVariant::Scrypt(KdfParams {
             dklen: KDF_DKLEN,
-            n: KDF_N,
-            r: KDF_R,
-            p: KDF_P,
+            n,
+            r,
+            p,
             salt: hex::encode(salt),
         }),
     })
@@ -314,6 +361,31 @@ fn decrypt_hkdf(envelope: &CryptoEnvelope, token: &str) -> Result<SecretBytes, C
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reencrypt_preserves_higher_scrypt_cost_and_changes_password() {
+        use super::*;
+        let original = encrypt_scrypt(b"fixture", "old", KDF_N * 2, KDF_R * 2, KDF_P * 2).unwrap();
+        let changed = reencrypt_with_passphrase(&original, "old", "new").unwrap();
+        let KdfParamsVariant::Scrypt(parameters) = &changed.kdfparams else {
+            panic!("expected scrypt")
+        };
+        assert_eq!(
+            (parameters.n, parameters.r, parameters.p),
+            (KDF_N * 2, KDF_R * 2, KDF_P * 2)
+        );
+        assert_eq!(decrypt(&changed, "new").unwrap().expose(), b"fixture");
+        assert!(decrypt(&changed, "old").is_err());
+    }
+
+    #[test]
+    fn reencrypt_rejects_malformed_and_token_envelopes() {
+        use super::*;
+        let mut envelope = encrypt(b"fixture", "old").unwrap();
+        envelope.cipherparams.iv = "00".into();
+        assert!(reencrypt_with_passphrase(&envelope, "old", "new").is_err());
+        let token_envelope = encrypt_with_hkdf(b"fixture", "ows_key_test").unwrap();
+        assert!(reencrypt_with_passphrase(&token_envelope, "ows_key_test", "new").is_err());
+    }
     use super::*;
 
     /// Extract mutable scrypt params from an envelope (for test tampering).

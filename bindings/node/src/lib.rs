@@ -179,6 +179,26 @@ pub fn export_wallet(
     .map_err(map_err)
 }
 
+/// Re-encrypt a wallet with a nonempty owner passphrase. API keys remain valid.
+#[napi]
+pub fn change_wallet_passphrase(
+    name_or_id: String,
+    old_passphrase: String,
+    new_passphrase: String,
+    vault_path_opt: Option<String>,
+) -> Result<WalletInfo> {
+    let old_passphrase = zeroize::Zeroizing::new(old_passphrase);
+    let new_passphrase = zeroize::Zeroizing::new(new_passphrase);
+    ows_lib::change_wallet_passphrase(
+        &name_or_id,
+        &old_passphrase,
+        &new_passphrase,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map(WalletInfo::from)
+    .map_err(map_err)
+}
+
 /// Rename a wallet.
 #[napi]
 pub fn rename_wallet(

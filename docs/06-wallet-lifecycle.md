@@ -216,6 +216,53 @@ Deletion:
 4. Removes the wallet ID from the `wallet_ids` array of all API keys that reference it
 5. Logs the deletion to the audit log
 
+## Changing an Encryption Passphrase
+
+The reference implementation can re-encrypt one existing wallet without exporting
+its mnemonic/private keys or restoring it. Wallet IDs, addresses, account paths,
+creation time, metadata and wallet-level extension fields remain unchanged.
+
+```bash
+ows wallet change-passphrase --wallet treasury
+```
+
+The CLI prompts for the current passphrase, then a new passphrase and confirmation
+with terminal echo disabled. For noninteractive use, supply `OWS_PASSPHRASE`
+(explicitly `""` for an initially empty passphrase) and `OWS_NEW_PASSPHRASE` through
+your secret-management environment. Password arguments are intentionally absent.
+The legacy `LWS_PASSPHRASE` is a fallback for the current password. Environment
+variables are consumed, and password values are never written to the audit log.
+
+The Rust API is `ows_lib::change_wallet_passphrase(name_or_id, old, new,
+vault_path)`. Node exposes `changeWalletPassphrase` and Python exposes
+`change_wallet_passphrase`. They return the unchanged public wallet information.
+Both password parameters are explicit; whitespace and Unicode are preserved.
+The new passphrase must be nonempty and cannot start with `ows_key_`, which the
+signing API reserves for API tokens. The old owner passphrase authenticates the
+operation; an API token is not a substitute.
+
+Re-encryption uses fresh salt/IV values and preserves the original scrypt cost
+parameters. Plaintext remains in zeroizing Rust memory; no plaintext backup is
+created. Caller-owned JavaScript/Python strings cannot be erased by the binding.
+Existing encrypted backups still use their original password. Changing this file
+does not revoke API keys, alter their policy associations, terminate already
+unlocked sessions, or change signing keys. Revoke API keys separately if access
+must be removed, and update your encrypted backups after a successful change.
+
+Stop other wallet writers while changing a password. Concurrent password changes
+use a nonblocking OS lock; a busy operation returns an error. The persistent
+`<wallet-file-stem>.passphrase.lock` file is not a backup and need not be removed;
+the OS releases its lock on close or process exit. Rename/delete/import writers
+do not share this lock. Changed snapshots are rejected before replacement, but
+this is not a general concurrent-wallet transaction mechanism.
+
+The replacement is written to a temporary file in the same directory, set to
+0600 on Unix, synced and atomically renamed. Wrong passwords, invalid input and
+pre-commit I/O failures leave the original wallet intact. Existing read-only
+permissions are respected. Directory-entry durability during a sudden power loss
+depends on the filesystem; this operation does not claim a power-loss recovery
+protocol or a multi-wallet/vault-wide transaction.
+
 ## Key Rotation
 
 OWS supports creating a new wallet and migrating assets from an old one:

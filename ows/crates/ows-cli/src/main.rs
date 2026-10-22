@@ -74,6 +74,12 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum WalletCommands {
+    /// Change one wallet's encryption passphrase (existing API keys remain valid)
+    ChangePassphrase {
+        /// Wallet name or ID
+        #[arg(long)]
+        wallet: String,
+    },
     /// Create a new universal wallet (generates mnemonic, derives all chain addresses)
     Create {
         /// Wallet name
@@ -401,6 +407,9 @@ fn main() {
 fn run(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         Commands::Wallet { subcommand } => match subcommand {
+            WalletCommands::ChangePassphrase { wallet } => {
+                commands::wallet::change_passphrase(&wallet)
+            }
             WalletCommands::Create {
                 name,
                 words,

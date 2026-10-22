@@ -164,6 +164,23 @@ Delete a wallet from the vault.
 deleteWallet("agent-treasury");
 ```
 
+#### `changeWalletPassphrase(nameOrId, oldPassphrase, newPassphrase, vaultPath?)`
+
+Authenticate with the current owner password and re-encrypt the wallet, returning
+its unchanged `WalletInfo`. Pass `""` as the old password for an initially empty
+password. The new password must be nonempty and cannot start with `ows_key_`.
+
+```javascript
+const info = changeWalletPassphrase(wallet.id, oldPassphrase, newPassphrase, vaultPath);
+```
+
+Keys, addresses, metadata, API keys and policy associations are preserved. Wrong
+passwords and pre-commit write failures leave the original intact. Existing
+backups retain their old password. Stop concurrent wallet writers; see the
+[storage guarantees and limitations](06-wallet-lifecycle.md#changing-an-encryption-passphrase).
+The binding clears its owned Rust password copies, but cannot erase caller-owned
+JavaScript strings. This is a synchronous operation and includes scrypt work.
+
 #### `renameWallet(nameOrId, newName, vaultPath?)`
 
 Rename a wallet.

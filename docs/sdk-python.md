@@ -134,6 +134,24 @@ Delete a wallet from the vault.
 delete_wallet("agent-treasury")
 ```
 
+#### `change_wallet_passphrase(name_or_id, old_passphrase, new_passphrase, vault_path_opt=None)`
+
+Authenticate with the current owner password and re-encrypt the wallet, returning
+its unchanged wallet-information dict. Both password arguments are required; use
+`""` as the old password for an initially empty password. The new password must be
+nonempty and cannot start with the API-token prefix `ows_key_`.
+
+```python
+info = change_wallet_passphrase(wallet["id"], old_passphrase, new_passphrase,
+                                vault_path_opt=vault_path)
+```
+
+Keys, addresses, metadata, API keys and policy associations are preserved. Wrong
+passwords and pre-commit write failures leave the original intact. Existing
+backups retain their old password. Stop concurrent wallet writers; see the
+[storage guarantees and limitations](06-wallet-lifecycle.md#changing-an-encryption-passphrase).
+Caller-owned Python strings cannot be erased by the binding.
+
 #### `rename_wallet(name_or_id, new_name, vault_path=None)`
 
 Rename a wallet.

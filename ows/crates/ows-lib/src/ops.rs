@@ -16,7 +16,7 @@ use crate::types::{AccountInfo, SendResult, SignResult, WalletInfo};
 use crate::vault;
 
 /// Convert an EncryptedWallet to the binding-friendly WalletInfo.
-fn wallet_to_info(w: &EncryptedWallet) -> WalletInfo {
+pub(crate) fn wallet_to_info(w: &EncryptedWallet) -> WalletInfo {
     WalletInfo {
         id: w.id.clone(),
         name: w.name.clone(),

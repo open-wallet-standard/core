@@ -139,6 +139,25 @@ fn export_wallet(
     .map_err(map_err)
 }
 
+/// Re-encrypt a wallet with a nonempty owner passphrase. API keys remain valid.
+#[pyfunction]
+#[pyo3(signature = (name_or_id, old_passphrase, new_passphrase, vault_path_opt=None))]
+fn change_wallet_passphrase(
+    name_or_id: &str,
+    old_passphrase: &str,
+    new_passphrase: &str,
+    vault_path_opt: Option<String>,
+) -> PyResult<PyObject> {
+    let info = ows_lib::change_wallet_passphrase(
+        name_or_id,
+        old_passphrase,
+        new_passphrase,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map_err(map_err)?;
+    Python::with_gil(|py| wallet_info_to_dict(py, &info))
+}
+
 /// Rename a wallet.
 #[pyfunction]
 #[pyo3(signature = (name_or_id, new_name, vault_path_opt=None))]
@@ -490,6 +509,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(delete_wallet, m)?)?;
     m.add_function(wrap_pyfunction!(export_wallet, m)?)?;
     m.add_function(wrap_pyfunction!(rename_wallet, m)?)?;
+    m.add_function(wrap_pyfunction!(change_wallet_passphrase, m)?)?;
     m.add_function(wrap_pyfunction!(sign_transaction, m)?)?;
     m.add_function(wrap_pyfunction!(sign_message, m)?)?;
     m.add_function(wrap_pyfunction!(sign_typed_data, m)?)?;

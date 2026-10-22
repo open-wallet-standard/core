@@ -29,10 +29,10 @@ prost = "0.13"
 tonic = { version = "0.12", features = ["transport"] }
 tokio = { version = "1", features = ["rt"] }
 ed25519-bip32 = "0.4.1"
+tempfile = "3"
 
 [dev-dependencies]
 mockito = "1"
-tempfile = "3"
 sha3 = "0.10"
 k256 = { version = "0.13", features = ["ecdsa"] }
 ed25519-dalek = "2"
