@@ -445,3 +445,121 @@ key keeps the snapshots, while switching to another indexer starts a fresh sync.
   `shielded/vk_hidden/sync_cache.rs`, `dust/sync_cache.rs`, `tip_verify.rs`; the unshielded
   snapshot code lives in `unshielded.rs`.
 - Fixed sync timeouts: `midnight_env.rs`.
+
+## Sign and send (`ows sign send-tx`)
+
+**Purpose:** take a DApp-connector request for a `midnight:<network>` wallet, balance it with the
+wallet's own inputs, sign and prove it, seal it, and broadcast it to the node — the full
+`sign → prove → seal → submit` pipeline behind one command.
+
+```sh
+OWS_PASSPHRASE="…" ows sign send-tx \
+  --wallet demo --chain midnight:preview \
+  --json --tx '<connector-request-json>'
+```
+
+On a `midnight:*` chain the `--tx` payload is a **DApp-connector request JSON** (not raw signed
+bytes). The wallet reads it, funds/balances it against its own state, and submits the result. On
+every other chain `send-tx` keeps its original meaning (sign hex bytes and broadcast).
+
+### The connector method
+
+The request is routed by its JSON `method` field; `balanceUnsealedTransaction` is the method
+supported so far.
+
+- **`balanceUnsealedTransaction`** (also the default when `method` is absent, for backward
+  compatibility) — the DApp hands over a proven, *unsealed* transaction with a deficit; the wallet
+  balances it with its own inputs across all three value domains, then seals and submits.
+
+An out-of-spec request (a proof-preimage input, a `ClaimRewards` mint claim, or a not-yet-supported
+maker encoding) is rejected with a **precise** error rather than a generic "unsupported". So is a
+dust registration the dapp put in the transaction, unless it registers the wallet's own NIGHT to the
+wallet's own dust address and the wallet adds no DUST of its own (`payFees: false`). A registration
+to any other dust address would hand the wallet's DUST generation to someone else, and a
+deregistration would switch it off, so the balancer and the signer both refuse them.
+
+`ows sign tx` returns the fully sealed, proven Midnight transaction on `SignResult.transaction`
+(`None` for other chains) — the seal-*without*-broadcast capability: the same bytes `send-tx`
+broadcasts, surfaced through a command that never submits.
+
+### What it does
+
+1. **Parse** the connector request and classify the method.
+2. **Plan (inert).** Select the wallet's own inputs to cover the deficit — per intent, across
+   unshielded Night, shielded Zswap, and dust — **without** building any spend witness. The
+   plan carries only public selection data; no bearer instrument exists yet. This is the point a
+   policy pass can gate on the plan's key-derived effects (the `prepare_signable_tx` seam).
+3. **Authorize (past the seam).** Inside `ows-signer`, build and prove the shielded/dust spend
+   preimages, sign the unshielded intent (detached BIP-340), and fold the proven sections back in.
+   The spend witness is born and consumed behind the key boundary and never reaches the balancer.
+4. **Seal** the proven, signed transaction.
+5. **Submit** the sealed bytes to the node over its Substrate RPC and print the resulting tx hash.
+
+### End-to-end on preview and preprod
+
+`e2e/midnight-sign-send-tx.sh` exercises this command against a live node, preview by default
+(`CHAIN=midnight:preprod` for preprod). It builds `ows` from the checkout, confirms the command is
+wired, and checks that a malformed request is rejected with a precise error (all offline); then it runs
+the live path in two steps — **seal** the request with `sign tx` (no broadcast, printing the sealed
+tx), then **submit** it with `sign send-tx`. A DApp normally supplies the proven (`proof,embedded-fr`)
+input; the checkout bundles one per network at `e2e/shielded-movement-cap/tx-proven-preview.hex` and
+`tx-proven-preprod.hex`, so the live run works out of the box (override it with `TX_JSON=<path>`). Each
+maker is input-free, so each run re-selects fresh wallet inputs and is reusable.
+
+Real round-trips landed on preprod at
+`0x379f10efcd2b82bac2c5e281d2d175b0367aef195b8845cdb75388737632fed3` (block 1762181) and on preview at
+`0xbb1753c3503c845881e998034138fa98817cc6f90a80cb9d62c2074ae9d63c3c` (block 1423263), crediting the
+wallet's own address with the balanced outputs.
+
+### The three value domains
+
+- **Unshielded (Night).** Balanced from the wallet's UTXO set; authorized with a detached BIP-340
+  intent signature.
+- **Shielded (Zswap).** Balanced from the wallet's own synced coins (whole-coin selection, self-change
+  to the wallet's keys); each spend witness is built and proved inside the signer via the crypto
+  provider.
+- **Dust (fees).** The fee is sized against the node's real fee gate. Whether a dust registration is
+  added is decided at run time by a `dust_ledger_is_live` probe against the indexer (see
+  [Fund balance](#fund-balance-ows-fund-balance)), not a compiled-in flag; fees are paid with a generationless
+  registration or a proof-bearing spend when NIGHT is fully registered. By default (`payFees: true`)
+  the wallet pays the fee; if the probe can't confirm the dust ledger is live it errors rather than
+  emit a fee-less tx the node would reject — pass `payFees: false` to opt out on a genuinely fee-less
+  network.
+
+### The credential
+
+`OWS_PASSPHRASE` carries either the **owner envelope passphrase** (decrypts the packed `MNK1` role
+seeds and builds the `MidnightCryptoProvider`) or an **api-key token**, which goes through the same
+policy check as on every other chain before the key is decrypted. That check sees the connector
+request, the dapp's transaction, but not what the wallet adds while balancing it: its own inputs and
+change, and the DUST fee. All bearer key material stays in `ows-signer`; `ows-midnight` holds none,
+not even while sizing the fee, where the signer hands it mock-proven sections rather than the
+key-bearing preimages (enforced by the `no_key_material_gate` workspace test).
+
+### Node RPC
+
+Submission talks to the Substrate node RPC, resolved **separately from the balance indexer**. Provide
+it with `--rpc-url <url>`, else it resolves from `~/.ows/config.json` under
+`rpc["midnight:<network>:node"]`. Only preview ships a default; for mainnet and preprod, set it
+yourself, to a hosted endpoint from the same networks guide or to your own node. A plaintext
+`http://` or `ws://` URL is accepted only for a loopback address, such as a local node; anything else
+needs `https://` or `wss://`. Credentials in the URL never appear in error messages. Each node call
+is bounded (connect 30s, request 60s), and a failed or timed-out submit names the transaction hash,
+since the node may have accepted it: check whether it landed before retrying.
+
+### Environment variables
+
+| Variable | Effect |
+|---|---|
+| `OWS_PASSPHRASE` | Owner passphrase **or** api-key token; required to build the provider that signs/proves. |
+| `OWS_WALLET` | Default for `--wallet`. |
+
+### The code path
+
+- CLI: `commands/send_transaction.rs` → `ows_lib::sign_and_send` (token) / `sign_encode_and_broadcast`
+  (owner); Midnight routes through `decode_tx_input` → `prepare_signable_tx` (the plan/authorize seam).
+- Balancing + seam: `ows-midnight/src/balance_tx.rs` (`plan_unsealed_proven_tx`, `authorize_proven_tx`),
+  `balance_tx/fee_sizing.rs`, `dapp_connector/{mod,balance_unsealed}.rs`, `prover.rs`.
+- Authorization (bearer instruments): `ows-signer/src/chains/midnight.rs`
+  (`authorize_shielded`, `authorize_dust`, `sign_proven_intent`, `seal_signed_proven`).
+- Submission: `ows-midnight/src/submit.rs`; node RPC config in `ows-core/src/config.rs`.
