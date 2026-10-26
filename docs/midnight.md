@@ -727,11 +727,13 @@ on the method:
 - **`balanceUnsealed` / `balanceSealed` / `makeTransfer`** → *plan-derived*, from an inert
   `BalancedPlan`: the wallet's inputs netted against its own change and outputs. This
   **includes the DUST fee** the transfer burns, so a `sum(|diff|)` cap sees the whole
-  movement. For `makeTransfer` the plan is sized on demand at the seam — the outputs are
+  movement. For `makeTransfer` the plan is built before the gate — the outputs are
   **mock-proven** (proofs are fixed-size, so the fee is exact) and the balancing is planned
-  against the wallet's synced UTXOs, so **no real proving happens before the gate**. It does
-  mean the seam **syncs the wallet and selects inputs** for a `makeTransfer`; a transfer the
-  wallet cannot fund fails at planning, before the gate ever runs.
+  against the wallet's synced UTXOs, so **no real proving happens before the gate**. After it,
+  `authorize` proves the same outputs for real, checks that the result is the planned
+  transaction apart from its proofs, and signs that plan: the coins and the fee the policy
+  saw are the ones spent. A transfer the wallet cannot fund fails at planning, before the
+  gate ever runs.
 - **`makeIntent`** → *request-derived*, from the declared inputs (outflow) and self-outputs
   (inflow). A maker offer is deliberately imbalanced and **pays no fee** (the taker does), so
   the request already is the complete movement — there is nothing to plan.
@@ -739,7 +741,9 @@ on the method:
   request-derived like `makeIntent`, **plus the DUST fee the merge burns** (when `payFees` on a
   live-DUST chain). The fee covers the whole merged tx and the maker never pays, so it is sized
   against a **mock-proven taker complement** — fixed-size proofs give the exact fee with no real
-  proving — and folded in as a dust outflow, so a `sum(|diff|)` cap sees the burn.
+  proving — and folded in as a dust outflow, so a `sum(|diff|)` cap sees the burn. The taker's
+  half (its coins) and that fee are decided before the gate, and `authorize` proves exactly
+  them, so nothing is re-synced or re-priced in between.
 
 Shielded value a dapp routes back to the wallet is netted in as well: the base offers'
 outputs are trial-decrypted with the shielded viewing key and each recognized receipt is

@@ -67,8 +67,8 @@ use transient_crypto::proofs::ProofPreimage;
 use super::build::{
     decode_shielded_recipient, decode_unshielded_recipient, default_intent_ttl, deserialize_u128,
     effects_from_movements, err, max_ttl_secs, mock_prove_unsealed, now_secs, prove_preimage,
-    prove_to_unsealed_bytes, wire_type_to_shielded, wire_type_to_unshielded, DesiredOutput,
-    Movement, PreimageTx, TransferKind,
+    wire_type_to_shielded, wire_type_to_unshielded, DesiredOutput, Movement, PreimageTx,
+    TransferKind,
 };
 use crate::parse_token_type;
 use ows_core::policy::TransactionEffect;
@@ -288,74 +288,36 @@ pub(super) fn request_segment_effects(
 }
 
 /// Build the maker's imbalanced offer, prove it, and return the signable bytes. Runs **after** the
-/// policy seam. No balancing: the imbalance is the offer. When the maker contributes shielded inputs,
-/// the frame (unshielded offer + shielded outputs) is proved first, then the signer builds and proves
-/// the shielded spend witnesses and the proved fragment is merged in.
+/// policy seam. No balancing: the imbalance is the offer.
 pub(super) fn authorize(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     req: MakeIntentRequest,
 ) -> Result<Vec<u8>, std::io::Error> {
-    let signer = MidnightSigner::from_chain_id(chain_id);
-
-    let (unshielded_in, shielded_in): (Vec<_>, Vec<_>) = req
-        .desired_inputs
-        .iter()
-        .partition(|d| d.kind == TransferKind::Unshielded);
-    let (unshielded_out, shielded_out): (Vec<_>, Vec<_>) = req
-        .desired_outputs
-        .iter()
-        .partition(|d| d.kind == TransferKind::Unshielded);
-
-    let frame = build_make_intent_frame(
-        chain_id,
-        &signer,
-        crypto_provider,
-        req.intent_segment,
-        &unshielded_in,
-        &unshielded_out,
-        &shielded_out,
-        !shielded_in.is_empty(),
-        req.ttl,
-    )?;
-
-    // No shielded inputs: the frame is the whole maker offer; prove and return it.
-    if shielded_in.is_empty() {
-        return prove_to_unsealed_bytes(chain_id, frame);
-    }
-
-    // Shielded inputs: prove the frame, then have the signer build + prove the maker's shielded spend
-    // witnesses (the bearer preimage is born and consumed there) and merge the proved fragment in.
-    let proven = prove_preimage(chain_id, frame)?;
-    let Transaction::Standard(mut base) = proven else {
-        return Err(err("makeIntent frame is not a Standard transaction"));
-    };
-    authorize_shielded_inputs(
-        chain_id,
-        crypto_provider,
-        GUARANTEED_SEGMENT,
-        &shielded_in,
-        &mut base,
-    )?;
-
+    let base = plan_offer(chain_id, crypto_provider, &req)?.realize(chain_id, crypto_provider)?;
     let mut out = Vec::new();
     tagged_serialize(&Transaction::Standard(base), &mut out)
         .map_err(|e| err(format!("serialize proven tx: {e}")))?;
     Ok(out)
 }
 
-/// Build the same maker offer as [`authorize`] — same frame, same real coin selection — but **mock-prove**
-/// it instead of really proving: the proofs are fixed-size, non-verifying stand-ins that serialize to the
-/// exact length of the real ones, so a transaction sized against this offer gets the real fee. No real
-/// proving happens, so it is safe to call **before** the policy seam. The sealed-merge effects path uses
-/// it to size the merged DUST fee against a mock-proven taker complement, leaving the real spend proving to
-/// [`authorize`] post-seam.
-pub(super) fn mock_authorize(
+/// A `makeIntent` offer decided but not yet proven: the frame's preimage (the unshielded inputs it
+/// picked, with change, and its outputs) and, when the offer spends shielded coins, the coins picked to
+/// fund them. [`mock_proven`](Self::mock_proven) stands in for it before the policy seam, and
+/// [`realize`](Self::realize) proves exactly this offer after it, so whatever was sized against the mock
+/// still holds.
+pub(super) struct OfferPlan {
+    frame: PreimageTx,
+    funding: Option<crate::balance_tx::ShieldedFundingPlan>,
+}
+
+/// Decide a maker offer: pick the unshielded coins and build the frame, and pick the shielded coins its
+/// shielded inputs spend. Inert: nothing is proven or signed.
+pub(super) fn plan_offer(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     req: &MakeIntentRequest,
-) -> Result<StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>, std::io::Error>
-{
+) -> Result<OfferPlan, std::io::Error> {
     let signer = MidnightSigner::from_chain_id(chain_id);
 
     let (unshielded_in, shielded_in): (Vec<_>, Vec<_>) = req
@@ -378,23 +340,64 @@ pub(super) fn mock_authorize(
         !shielded_in.is_empty(),
         req.ttl,
     )?;
-    // Mock-prove into the *unsealed* proven form: `mock_prove` would seal the taker, but the merge fee
-    // sizing seals the taker itself (once the DUST section is spliced in), so it needs the unsealed taker.
-    let unsealed = mock_prove_unsealed(frame)?;
-    let Transaction::Standard(base) = unsealed else {
-        return Err(err(
-            "mock-proven makeIntent frame is not a Standard transaction",
-        ));
+    let funding = if shielded_in.is_empty() {
+        None
+    } else {
+        Some(plan_shielded_input_funding(
+            chain_id,
+            crypto_provider,
+            GUARANTEED_SEGMENT,
+            &shielded_in,
+        )?)
     };
+    Ok(OfferPlan { frame, funding })
+}
 
-    // No shielded inputs: the mock-proven frame is the whole offer. Otherwise select the maker's shielded
-    // coins (the same selection the real path makes) and splice a mock-proven spend section in.
-    if shielded_in.is_empty() {
-        return Ok(base);
+impl OfferPlan {
+    /// The offer **mock-proven**: fixed-size, non-verifying proofs that serialize to the exact length of
+    /// the real ones, so a transaction sized against it gets the real fee. No real proving happens, so it
+    /// is safe **before** the policy seam; the sealed merge sizes its DUST fee against it.
+    pub(super) fn mock_proven(
+        &self,
+        crypto_provider: &MidnightCryptoProvider,
+    ) -> Result<
+        StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
+        std::io::Error,
+    > {
+        // Mock-prove into the *unsealed* proven form: `mock_prove` would seal it, but the merge fee
+        // sizing seals the taker itself (once the DUST section is spliced in).
+        let Transaction::Standard(base) = mock_prove_unsealed(self.frame.clone())? else {
+            return Err(err(
+                "mock-proven makeIntent frame is not a Standard transaction",
+            ));
+        };
+        match &self.funding {
+            None => Ok(base),
+            Some(funding) => {
+                crate::balance_tx::splice_mock_shielded_for_sizing(&base, crypto_provider, funding)
+            }
+        }
     }
-    let funding =
-        plan_shielded_input_funding(chain_id, crypto_provider, GUARANTEED_SEGMENT, &shielded_in)?;
-    crate::balance_tx::splice_mock_shielded_for_sizing(&base, crypto_provider, &funding)
+
+    /// Prove the offer for real. Runs **after** the policy seam: the frame (unshielded offer + shielded
+    /// outputs) is proved first, then the signer builds and proves the planned shielded spend witnesses
+    /// (the bearer preimage is born and consumed there) and the proved fragment is merged in.
+    pub(super) fn realize(
+        self,
+        chain_id: &str,
+        crypto_provider: &MidnightCryptoProvider,
+    ) -> Result<
+        StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
+        std::io::Error,
+    > {
+        let Transaction::Standard(mut base) = prove_preimage(chain_id, self.frame)? else {
+            return Err(err("makeIntent frame is not a Standard transaction"));
+        };
+        if let Some(funding) = &self.funding {
+            authorize_shielded_inputs(chain_id, crypto_provider, funding, &mut base)?;
+        }
+        Ok(base)
+    }
 }
 
 /// Construct the `proof-preimage` maker frame: the maker's unshielded inputs (with change back to the
@@ -461,8 +464,8 @@ fn build_make_intent_frame(
 
 /// Sync the wallet's shielded coins and select whole coins covering each declared shielded input,
 /// returning a fee-sizeable funding plan: the selected spend plan bound to `segment`, plus the synced,
-/// merkle-ready coin tree. Shared by [`authorize_shielded_inputs`] (which really proves the spend) and
-/// [`mock_authorize`] (which mock-proves it for effect sizing), so both select the same coins.
+/// merkle-ready coin tree. Picked once per [`OfferPlan`], so its mock and its real proofs spend the same
+/// coins.
 fn plan_shielded_input_funding(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
@@ -499,21 +502,17 @@ fn plan_shielded_input_funding(
     })
 }
 
-/// Authorize the maker's shielded inputs into the already-proved frame: select whole coins covering each
-/// token's declared amount (via [`plan_shielded_input_funding`]) and hand them to
-/// [`MidnightCryptoProvider::authorize_shielded`], which builds + proves the spend witnesses and the
-/// self-change, both in the guaranteed section (see [`GUARANTEED_SEGMENT`]). The proved fragment is merged
-/// into `base`'s guaranteed coins and its Pedersen binding delta folded in (a proved tx can't recompute
-/// its own).
+/// Authorize the maker's shielded inputs into the already-proved frame: hand the planned coins (from
+/// [`plan_shielded_input_funding`]) to [`MidnightCryptoProvider::authorize_shielded`], which builds +
+/// proves the spend witnesses and the self-change, both in the guaranteed section (see
+/// [`GUARANTEED_SEGMENT`]). The proved fragment is merged into `base`'s guaranteed coins and its Pedersen
+/// binding delta folded in (a proved tx can't recompute its own).
 fn authorize_shielded_inputs(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
-    segment: u16,
-    shielded_in: &[&DesiredInput],
+    funding: &crate::balance_tx::ShieldedFundingPlan,
     base: &mut StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
 ) -> Result<(), std::io::Error> {
-    let funding = plan_shielded_input_funding(chain_id, crypto_provider, segment, shielded_in)?;
-
     let prover = crate::balance_tx::midnight_prover(chain_id)?;
     let authorized =
         crate::block_on(crypto_provider.authorize_shielded(&funding.plans, &funding.tree, prover))

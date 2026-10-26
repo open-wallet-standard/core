@@ -16,7 +16,7 @@ use midnight_coin_structure::coin::{
 use midnight_ledger::structure::{
     ProofMarker, ProofPreimageMarker, Transaction, INITIAL_PARAMETERS,
 };
-use midnight_serialize::{tagged_serialize, Deserializable};
+use midnight_serialize::Deserializable;
 use midnight_storage::db::InMemoryDB;
 use ows_core::policy::TransactionEffect;
 use ows_signer::chains::midnight::MidnightAddresses;
@@ -220,8 +220,8 @@ pub(super) fn decode_shielded_recipient(
 }
 
 /// Prove a wallet-constructed preimage into a proven, still-unsealed (`proof,embedded-fr`)
-/// transaction. `makeIntent` keeps the proven transaction to merge authorized shielded-input
-/// fragments into it; the other methods serialize it straight away via [`prove_to_unsealed_bytes`].
+/// transaction. `makeIntent` merges authorized shielded-input fragments into it; `makeTransfer` swaps
+/// it into the plan built over its mock-proven twin.
 pub(super) fn prove_preimage(
     chain_id: &str,
     preimage: PreimageTx,
@@ -230,18 +230,6 @@ pub(super) fn prove_preimage(
     let cost_model = &INITIAL_PARAMETERS.cost_model.runtime_cost_model;
     crate::block_on(preimage.prove(prover, cost_model))
         .map_err(|e| err(format!("prove constructed outputs: {e}")))
-}
-
-/// Prove a wallet-constructed preimage and serialize it — the exact input shape
-/// `plan_unsealed_proven_tx` consumes.
-pub(super) fn prove_to_unsealed_bytes(
-    chain_id: &str,
-    preimage: PreimageTx,
-) -> Result<Vec<u8>, std::io::Error> {
-    let proven = prove_preimage(chain_id, preimage)?;
-    let mut out = Vec::new();
-    tagged_serialize(&proven, &mut out).map_err(|e| err(format!("serialize proven tx: {e}")))?;
-    Ok(out)
 }
 
 /// The builtin circuits a mock prover can size. A preimage for anything else (e.g. a contract call) has

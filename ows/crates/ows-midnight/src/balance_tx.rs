@@ -52,7 +52,7 @@ use crate::contracts::{contract_interactions, ContractInteraction};
 use crate::UnshieldedUtxo;
 
 mod fee_sizing;
-pub(crate) use fee_sizing::{size_merge_dust_fee, splice_mock_shielded_for_sizing};
+pub(crate) use fee_sizing::{size_merge_dust_fee, splice_mock_shielded_for_sizing, MergeDustFee};
 use fee_sizing::{DustFeeContext, DustFeePlan};
 
 type TxProven = Transaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>;
@@ -896,6 +896,39 @@ impl BalancedPlan {
     pub(crate) fn contracts(&self) -> Vec<ContractInteraction> {
         contract_interactions(self.base.actions())
     }
+
+    /// Put real proofs into a plan built over a mock-proven transaction, so the plan the policy seam
+    /// saw is the one that gets signed. `proven` must be that same transaction, proven for real from
+    /// the same preimage; the two are compared with their proofs erased, and anything else is refused.
+    /// Everything the plan decided (coins, change, the DUST fee, the TTL) stays as planned, and since
+    /// ZK proofs are fixed-size, the fee sized against the mock proofs still fits.
+    pub(crate) fn replace_mock_proofs(&mut self, proven: TxProven) -> Result<(), std::io::Error> {
+        let Transaction::Standard(real) = proven else {
+            return Err(err("the proven transaction is not a Standard transaction"));
+        };
+        if !same_apart_from_proofs(&real, &self.base) {
+            return Err(err(
+                "the proven transaction is not the one the policy pass saw; refusing to sign it",
+            ));
+        }
+        self.base = real;
+        Ok(())
+    }
+}
+
+/// Whether two proven transactions are the same apart from their proof bytes. Compared with every
+/// proof erased, so a transaction proven for real matches the mock-proven one built from the same
+/// preimage, and a rebuilt preimage (fresh randomness) does not.
+pub(crate) fn same_apart_from_proofs(
+    a: &StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
+    b: &StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
+) -> bool {
+    let erased = |stx: &StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>| {
+        TxProven::Standard(stx.clone())
+            .erase_proofs()
+            .transaction_hash()
+    };
+    erased(a) == erased(b)
 }
 
 /// The wallet-relative DUST effect for a fee that burns `dust_outflow` — a negative diff in the `dust`

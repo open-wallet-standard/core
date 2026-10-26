@@ -68,23 +68,17 @@ pub fn parse_connector_method(json: &str) -> Result<ConnectorMethod, std::io::Er
 pub enum ConnectorPlan {
     /// A `balanceUnsealedTransaction` planned against the wallet's own inputs.
     BalanceUnsealed(Box<BalancedPlan>),
-    /// A `makeTransfer` request; the transaction is constructed, balanced, proved, and sealed in
-    /// `authorize` (its outputs alone already determine the wallet-relative effects for the seam).
-    MakeTransfer(MakeTransferRequest),
+    /// A `makeTransfer`: its outputs built and its balancing planned over their mock-proven form;
+    /// `authorize` proves the same outputs and signs that plan.
+    MakeTransfer(Box<make_transfer::TransferPlan>),
     /// A `makeIntent` request; the wallet builds an imbalanced maker offer, proved in `authorize`.
     MakeIntent(MakeIntentRequest),
     /// A `balanceSealedTransaction`: the maker offer is SEALED (`proof,pedersen-schnorr`).
     /// A sealed tx cannot be balanced in place (its binding fixes the value balance), so the taker
     /// completes it by MERGING: it builds its own imbalanced half — the per-token complement of the
     /// maker's imbalance — seals it, and `Transaction::merge`s the two. Carries the maker's sealed
-    /// bytes and that derived complement.
-    BalanceSealedMerge {
-        maker_tx: Vec<u8>,
-        complement: MakeIntentRequest,
-        /// Whether the taker funds the merged tx's DUST fee. Off (or a fee-less chain) → the merged tx
-        /// is value-balanced but carries no fee, so a live-DUST network rejects the submit.
-        pay_fees: bool,
-    },
+    /// bytes, that half planned (its coins and its DUST fee decided), and the complement it implements.
+    BalanceSealedMerge(Box<balance_sealed::MergePlan>),
 }
 
 impl ConnectorPlan {
@@ -99,23 +93,15 @@ impl ConnectorPlan {
             ConnectorPlan::BalanceUnsealed(plan) => {
                 crate::authorize_proven_tx(chain_id, crypto_provider, *plan)
             }
-            ConnectorPlan::MakeTransfer(req) => {
-                make_transfer::authorize(chain_id, crypto_provider, req)
+            ConnectorPlan::MakeTransfer(transfer) => {
+                make_transfer::authorize(chain_id, crypto_provider, *transfer)
             }
             ConnectorPlan::MakeIntent(req) => {
                 make_intent::authorize(chain_id, crypto_provider, req)
             }
-            ConnectorPlan::BalanceSealedMerge {
-                maker_tx,
-                complement,
-                pay_fees,
-            } => balance_sealed::authorize_merge(
-                chain_id,
-                crypto_provider,
-                &maker_tx,
-                complement,
-                pay_fees,
-            ),
+            ConnectorPlan::BalanceSealedMerge(merge) => {
+                balance_sealed::authorize_merge(chain_id, crypto_provider, *merge)
+            }
         }
     }
     /// The wallet-relative net movement authorizing this plan will have — the view the policy seam gates
@@ -131,8 +117,8 @@ impl ConnectorPlan {
     ) -> Result<Vec<crate::balance_tx::SegmentEffects>, std::io::Error> {
         match self {
             ConnectorPlan::BalanceUnsealed(plan) => plan.segment_effects(chain_id, crypto_provider),
-            ConnectorPlan::MakeTransfer(req) => {
-                make_transfer::segment_effects(chain_id, crypto_provider, req)
+            ConnectorPlan::MakeTransfer(transfer) => {
+                transfer.segment_effects(chain_id, crypto_provider)
             }
             ConnectorPlan::MakeIntent(req) => {
                 make_intent::request_segment_effects(chain_id, crypto_provider, req)
@@ -140,17 +126,9 @@ impl ConnectorPlan {
             // The wallet's movement in a merge is its own half — the `complement` it contributes and
             // receives — plus the merged DUST fee it funds, all in the guaranteed section (see
             // [`balance_sealed::merge_segment_effects`]).
-            ConnectorPlan::BalanceSealedMerge {
-                maker_tx,
-                complement,
-                pay_fees,
-            } => balance_sealed::merge_segment_effects(
-                chain_id,
-                crypto_provider,
-                maker_tx,
-                complement,
-                *pay_fees,
-            ),
+            ConnectorPlan::BalanceSealedMerge(merge) => {
+                balance_sealed::merge_segment_effects(chain_id, crypto_provider, merge)
+            }
         }
     }
 
@@ -168,8 +146,8 @@ impl ConnectorPlan {
             ConnectorPlan::MakeTransfer(_) | ConnectorPlan::MakeIntent(_) => Ok(Vec::new()),
             // The taker's complement is a plain `makeIntent` and carries none; the contracts of a merge
             // are the sealed maker's, which survive the merge into the submitted transaction.
-            ConnectorPlan::BalanceSealedMerge { maker_tx, .. } => {
-                balance_sealed::maker_contracts(maker_tx)
+            ConnectorPlan::BalanceSealedMerge(merge) => {
+                balance_sealed::maker_contracts(merge.maker_tx())
             }
         }
     }
@@ -185,7 +163,9 @@ pub fn plan_connector_tx(
     match parse_connector_method(json)? {
         ConnectorMethod::BalanceUnsealed => balance_unsealed::plan(chain_id, crypto_provider, json),
         ConnectorMethod::MakeTransfer => {
-            Ok(ConnectorPlan::MakeTransfer(parse_make_transfer_json(json)?))
+            let req = parse_make_transfer_json(json)?;
+            let transfer = make_transfer::plan(chain_id, crypto_provider, &req)?;
+            Ok(ConnectorPlan::MakeTransfer(Box::new(transfer)))
         }
         ConnectorMethod::MakeIntent => Ok(ConnectorPlan::MakeIntent(parse_make_intent_json(json)?)),
         ConnectorMethod::BalanceSealed => balance_sealed::plan(chain_id, crypto_provider, json),

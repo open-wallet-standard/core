@@ -1,9 +1,11 @@
 //! DApp Connector `makeTransfer`.
 //!
 //! `makeTransfer(desiredOutputs, options?)` asks the wallet to build a transaction that sends
-//! `desiredOutputs` to their recipients. The wallet constructs the outputs (no inputs), proves them,
-//! and — since an outputs-only proven transaction is a wallet-funded deficit — funnels it through the
-//! same `plan_unsealed_proven_tx` → `authorize_proven_tx` tail as `balanceUnsealed`.
+//! `desiredOutputs` to their recipients. The wallet constructs the outputs (no inputs) and — since an
+//! outputs-only transaction is a wallet-funded deficit — funnels it through the same
+//! `plan_unsealed_proven_tx` → `authorize_proven_tx` tail as `balanceUnsealed`. The balancing is
+//! planned once, before the policy seam, over mock-proven outputs; `authorize` proves the same outputs
+//! for real and signs that plan, so the coins and fee the policy saw are the ones spent.
 
 use midnight_base_crypto::signatures::Signature as MnSig;
 use midnight_coin_structure::coin::Info as CoinInfo;
@@ -24,7 +26,7 @@ use transient_crypto::proofs::ProofPreimage;
 
 use super::build::{
     decode_shielded_recipient, decode_unshielded_recipient, default_intent_ttl, err,
-    mock_prove_unsealed, prove_to_unsealed_bytes, wire_type_to_shielded, wire_type_to_unshielded,
+    mock_prove_unsealed, prove_preimage, wire_type_to_shielded, wire_type_to_unshielded,
     DesiredOutput, PreimageTx, TransferKind,
 };
 
@@ -82,42 +84,59 @@ pub fn parse_make_transfer_json(json: &str) -> Result<MakeTransferRequest, std::
     })
 }
 
-/// Build, balance, prove, and seal a `makeTransfer` transaction. Runs **after** the policy seam.
-pub(super) fn authorize(
-    chain_id: &str,
-    crypto_provider: &MidnightCryptoProvider,
-    req: MakeTransferRequest,
-) -> Result<Vec<u8>, std::io::Error> {
-    let preimage = build_make_transfer_preimage(chain_id, &req)?;
-    let proven_bytes = prove_to_unsealed_bytes(chain_id, preimage)?;
-    // Reuse the balanceUnsealed diagonal: plan the balancing inertly, then authorize (sign + seal).
-    let plan =
-        crate::plan_unsealed_proven_tx(chain_id, crypto_provider, &proven_bytes, req.pay_fees)?;
-    crate::authorize_proven_tx(chain_id, crypto_provider, plan)
+/// A `makeTransfer` planned before the policy seam: the outputs' preimage, kept so [`authorize`] proves
+/// exactly these outputs, and the balancing plan built over their mock-proven form, which the seam reads
+/// the effects from and [`authorize`] signs.
+pub struct TransferPlan {
+    preimage: PreimageTx,
+    plan: crate::BalancedPlan,
 }
 
-/// The wallet-relative effects a `makeTransfer` will have, per segment, sized from the inert balance
-/// plan so the **DUST fee** the transfer burns is included — a `sum(|diff|)` cap at the policy seam must
-/// see it, and request-derived effects (outputs only) would under-state it. The outputs are
-/// **mock-proven** (proofs are fixed-size, so the sized fee matches the real one exactly) and the
-/// balancing is planned against the wallet's synced UTXOs; **no real proving happens here**, so a
-/// transfer denied at the seam never reaches [`authorize`]'s real proofs. `BalancedPlan::segment_effects`
-/// then nets the wallet's inputs against its own change and outputs — the value to each recipient plus
-/// the dust fee — attributing each to the segment (guaranteed or fallible) its offer rides.
-pub(super) fn segment_effects(
+/// Plan a `makeTransfer`: build its outputs, **mock-prove** them (proofs are fixed-size, so the fee
+/// sized against them matches the real one exactly) and plan the balancing against the wallet's synced
+/// coins. No real proving happens here, so a transfer denied at the seam never reaches a real proof.
+pub(super) fn plan(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     req: &MakeTransferRequest,
-) -> Result<Vec<crate::balance_tx::SegmentEffects>, std::io::Error> {
+) -> Result<TransferPlan, std::io::Error> {
     let preimage = build_make_transfer_preimage(chain_id, req)?;
     // Mock-prove into the *unsealed* proven form (`mock_prove` would seal it, and the balancer only
-    // consumes unsealed proven bytes). Fixed-size proofs → the sized fee equals the real one.
-    let mock_proven = mock_prove_unsealed(preimage)?;
+    // consumes unsealed proven bytes).
+    let mock_proven = mock_prove_unsealed(preimage.clone())?;
     let mut bytes = Vec::new();
     tagged_serialize(&mock_proven, &mut bytes)
         .map_err(|e| err(format!("serialize mock-proven makeTransfer: {e}")))?;
     let plan = crate::plan_unsealed_proven_tx(chain_id, crypto_provider, &bytes, req.pay_fees)?;
-    plan.segment_effects(chain_id, crypto_provider)
+    Ok(TransferPlan { preimage, plan })
+}
+
+impl TransferPlan {
+    /// The wallet-relative effects this transfer will have, per segment, read off the balancing plan so
+    /// the **DUST fee** the transfer burns is included: a `sum(|diff|)` cap at the policy seam must see
+    /// it, and request-derived effects (outputs only) would under-state it. The plan nets the wallet's
+    /// inputs against its own change and outputs (the value to each recipient plus the dust fee),
+    /// attributing each to the segment (guaranteed or fallible) its offer rides.
+    pub(super) fn segment_effects(
+        &self,
+        chain_id: &str,
+        crypto_provider: &MidnightCryptoProvider,
+    ) -> Result<Vec<crate::balance_tx::SegmentEffects>, std::io::Error> {
+        self.plan.segment_effects(chain_id, crypto_provider)
+    }
+}
+
+/// Prove the planned outputs for real, put the proofs into the planned transaction, and sign and seal
+/// it. Runs **after** the policy seam. Nothing is re-synced, re-selected or re-priced: the coins and the
+/// fee are the ones the seam's effects were read from.
+pub(super) fn authorize(
+    chain_id: &str,
+    crypto_provider: &MidnightCryptoProvider,
+    transfer: TransferPlan,
+) -> Result<Vec<u8>, std::io::Error> {
+    let TransferPlan { preimage, mut plan } = transfer;
+    plan.replace_mock_proofs(prove_preimage(chain_id, preimage)?)?;
+    crate::authorize_proven_tx(chain_id, crypto_provider, plan)
 }
 
 /// Construct the `proof-preimage` transaction for a `makeTransfer`: recipient outputs and no inputs.
@@ -414,6 +433,41 @@ mod tests {
         let back: UnsealedProven = tagged_deserialize(&mut &unsealed_bytes[..])
             .expect("mock_prove_unsealed output must re-parse as unsealed proven (embedded-fr)");
         assert!(matches!(back, Transaction::Standard(_)));
+    }
+
+    /// `authorize` swaps real proofs only into the transaction the policy seam saw: the comparison
+    /// ignores proofs, so the planned preimage proven again matches, while a rebuilt preimage (fresh
+    /// output randomness, so different commitments) does not.
+    #[test]
+    fn proofs_are_swapped_only_into_the_planned_transaction() {
+        let req = MakeTransferRequest {
+            desired_outputs: vec![DesiredOutput {
+                kind: TransferKind::Shielded,
+                token_type: "night".into(),
+                value: 1_000,
+                recipient: preview_shielded_address(),
+            }],
+            pay_fees: true,
+        };
+        let standard = |tx| match tx {
+            Transaction::Standard(stx) => stx,
+            Transaction::ClaimRewards(_) => panic!("not a standard transaction"),
+        };
+        let preimage =
+            build_make_transfer_preimage("midnight:preview", &req).expect("build preimage");
+        let planned = standard(mock_prove_unsealed(preimage.clone()).unwrap());
+        let proven_again = standard(mock_prove_unsealed(preimage).unwrap());
+        assert!(crate::balance_tx::same_apart_from_proofs(
+            &planned,
+            &proven_again
+        ));
+
+        let rebuilt =
+            build_make_transfer_preimage("midnight:preview", &req).expect("build preimage");
+        let rebuilt = standard(mock_prove_unsealed(rebuilt).unwrap());
+        assert!(!crate::balance_tx::same_apart_from_proofs(
+            &planned, &rebuilt
+        ));
     }
 
     #[test]
