@@ -234,7 +234,7 @@ The base JSON object available to policy evaluation:
     "raw_hex": "84a400d9010281825820..."
   },
   "spending": {
-    "daily_total": "50000000000000000",
+    "daily_total": "0",
     "date": "2026-03-22"
   },
   "timestamp": "2026-03-22T10:35:22Z"
@@ -248,7 +248,7 @@ The base JSON object available to policy evaluation:
 | `api_key_id` | string | yes | The ID of the API key making this request |
 | `request_type` | string | yes | Which operation is being authorized: `sign_transaction`, `sign_message`, `sign_hash`, `sign_typed_data`, or `read_balance` (unsealing an account key to read balances, which produces no signature). **Branch on this**, not on which optional fields are populated. |
 | `transaction` | object | no | The signing payload. Present for `sign_transaction`, `sign_message`, and `sign_hash`; omitted for `sign_typed_data`, which exposes its payload via `typed_data.raw_json` instead, and for `read_balance`, which signs nothing. See below. |
-| `spending` | object | yes | Lightweight spending metadata currently exposed by the engine |
+| `spending` | object | yes | Reserved. `daily_total` is always `"0"` and `date` is the UTC date of the request: OWS does not yet track what a key has signed. See [Cumulative limits](#cumulative-limits). |
 | `timestamp` | string | yes | ISO 8601 timestamp of the signing request |
 
 For executable policies, the engine injects `policy_config` into the JSON payload when the policy file includes a `config` object.
@@ -316,7 +316,7 @@ All fields except `primary_type` and `raw_json` are optional (the EIP-712 domain
 ```
 
 ```json
-{ "allow": false, "reason": "Daily spending limit exceeded: 0.95 / 1.0 ETH" }
+{ "allow": false, "reason": "6000000 lovelace out, cap is 5000000" }
 ```
 
 | Field | Type | Required | Description |
@@ -430,6 +430,14 @@ The corresponding policy file:
 ```
 
 On a chain whose signer does not fill `effects`, the same policy has to decode `transaction.raw_hex` itself before it can decide anything about value.
+
+### Cumulative limits
+
+The engine does not record what a key has signed, so `spending.daily_total` is always `"0"`. A daily or cumulative cap that reads it allows every request. To enforce one, the executable must keep its own ledger, and should account for three things:
+
+- It runs before signing and is not told whether signing or broadcast succeeded, so a ledger written at evaluation time counts approved requests, not confirmed spend.
+- Two signing requests can be evaluated at the same time, for example from two processes. Read the ledger, check and write it under a lock, or both requests can pass a limit that only one should.
+- `transaction.effects` is empty on chains without flow analysis (everything except Cardano today), so the amount has to come from decoding `raw_hex` there.
 
 ## References
 
