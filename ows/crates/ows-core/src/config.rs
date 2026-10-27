@@ -102,6 +102,13 @@ impl Config {
             "midnight:preview".into(),
             "https://indexer.preview.midnight.network/api/v4/graphql".into(),
         );
+        // Substrate node RPC, keyed `{chain_id}:node`, used for transaction submission — distinct
+        // from the indexer above, which only answers balance queries. As with the indexer, only
+        // preview has a default; mainnet and preprod need `rpc.midnight:<network>:node` set.
+        rpc.insert(
+            "midnight:preview:node".into(),
+            "https://rpc.preview.midnight.network/".into(),
+        );
         rpc
     }
 }
@@ -310,7 +317,7 @@ mod tests {
     fn test_load_or_default_nonexistent() {
         let config = Config::load_or_default_from(std::path::Path::new("/nonexistent/config.json"));
         // Should have all default RPCs
-        assert_eq!(config.rpc.len(), 28);
+        assert_eq!(config.rpc.len(), 29);
         assert_eq!(config.rpc_url("eip155:1"), Some("https://eth.llamarpc.com"));
         assert_eq!(
             config.rpc_url("near:mainnet"),
@@ -320,6 +327,14 @@ mod tests {
             config.rpc_url("near:testnet"),
             Some("https://rpc.testnet.near.org")
         );
+        // The Midnight node RPC (tx submission) is a distinct default from the indexer, and like
+        // it exists only for preview.
+        assert_eq!(
+            config.rpc_url("midnight:preview:node"),
+            Some("https://rpc.preview.midnight.network/")
+        );
+        assert_eq!(config.rpc_url("midnight:mainnet:node"), None);
+        assert_eq!(config.rpc_url("midnight:preprod:node"), None);
     }
 
     #[test]
