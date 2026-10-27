@@ -1,6 +1,7 @@
 use crate::curve::Curve;
 use crate::traits::{ChainSigner, SignOutput, SignerError};
 use k256::ecdsa::SigningKey;
+use ows_core::policy::TransactionContext;
 use ows_core::ChainType;
 use sha3::{Digest, Keccak256};
 
@@ -208,6 +209,20 @@ impl ChainSigner for EvmSigner {
 
     fn coin_type(&self) -> u32 {
         60
+    }
+
+    fn make_transaction_context(
+        &self,
+        tx_bytes: &[u8],
+        _rpc_url: Option<&str>,
+    ) -> Result<TransactionContext, SignerError> {
+        Ok(TransactionContext {
+            to: crate::rlp::extract_to_address(tx_bytes),
+            effects: vec![],
+            raw_hex: hex::encode(tx_bytes),
+            data: None,
+            chain_extra: None,
+        })
     }
 
     fn derive_address(&self, private_key: &[u8]) -> Result<String, SignerError> {

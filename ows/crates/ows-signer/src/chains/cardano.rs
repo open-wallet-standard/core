@@ -865,6 +865,7 @@ impl ChainSigner for CardanoSigner {
         );
 
         Ok(TransactionContext {
+            to: None,
             effects,
             raw_hex: tx_hex,
             data: None,

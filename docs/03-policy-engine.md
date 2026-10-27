@@ -108,7 +108,7 @@ Delete the API key file. The encrypted secret copy is gone. `SHA256(T)` matches 
 
 ## Declarative Policy Rules
 
-These rule types are evaluated in-process (microseconds, no subprocess). Per-transaction value caps, recipient allowlists, and cumulative daily spend are **not** implemented as declarative rules; use an **`executable`** policy (see below) if you need that level of control.
+These rule types are evaluated in-process (microseconds, no subprocess). Per-transaction value caps and cumulative daily spend are **not** implemented as declarative rules; use an **`executable`** policy (see below) if you need that level of control.
 
 ### `allowed_chains`
 
@@ -156,6 +156,29 @@ Restricts which smart contracts an API key can sign EIP-712 typed data for. The 
   "action": "deny"
 }
 ```
+
+### `recipient_allowlist`
+
+Restricts signing to transactions whose recipient is in an EVM address allowlist. Comparisons are case-insensitive, and addresses are validated and normalized to lowercase when saved.
+
+```json
+{
+  "type": "recipient_allowlist",
+  "addresses": ["0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C"]
+}
+```
+
+For `sign_transaction`, the recipient is extracted from legacy and EIP-2718 typed EVM transactions. The request is denied when the recipient is absent or cannot be determined, including contract creation, malformed transactions, and non-EVM chains. An empty allowlist denies every transaction.
+
+The rule is scoped by request type:
+
+| Request type | Behavior |
+|---|---|
+| `sign_transaction` | Enforce the allowlist; deny when `to` is unknown |
+| `sign_hash` | Deny because an arbitrary digest cannot prove a recipient |
+| `sign_message` | Pass through; EIP-191 messages are not transactions |
+| `sign_typed_data` | Pass through; use `allowed_typed_data_contracts` for EIP-712 data |
+| `read_balance` | Pass through; no signature is produced |
 
 ## Custom Executable Policies
 
@@ -257,6 +280,7 @@ For executable policies, the engine injects `policy_config` into the JSON payloa
 
 | Field | Type | Always Present | Description |
 |---|---|---|---|
+| `to` | string | no | EVM transaction recipient when it can be decoded; omitted for contract creation, malformed input, and non-EVM chains |
 | `effects` | array | yes | Per-address asset movement the transaction causes. Empty on chains whose signer does not implement flow analysis. |
 | `effects[].address` | string | yes | The address whose balance changes |
 | `effects[].diff` | array | yes | `[asset, amount]` pairs. `amount` is a **signed decimal string** in the asset's smallest unit, so it has no upper bound — parse it with `int()` / `BigInt()`, never as a JSON number. The reserved asset id `"lovelace"` denotes ADA; a Cardano native asset is keyed by its hex policy id concatenated with its hex asset name. |
@@ -264,9 +288,9 @@ For executable policies, the engine injects `policy_config` into the JSON payloa
 | `chain_extra` | object | no | Chain-specific detail that `effects` cannot carry. Present only when a chain populates it; see the chain's own document (Cardano puts contingent collateral loss in `chain_extra.collateral_effects`). |
 | `data` | string | no | Reserved for calldata. Not populated by any chain in the reference implementation. |
 
-Only chains whose signer overrides `make_transaction_context` fill `effects`; today that is Cardano. Everywhere else — EVM included — `effects` is empty and `raw_hex` is the whole payload, so a policy that needs parsed transaction fields has to decode `raw_hex` itself.
+Only chains whose signer overrides `make_transaction_context` fill chain-specific fields. Cardano fills `effects`; EVM fills `to`. `raw_hex` remains the whole payload on every chain.
 
-> **Earlier versions documented `transaction.to` and `transaction.value`.** Both fields existed on the struct but were never populated by any chain, on any code path, so a policy reading them always saw `null`. They are removed in favour of `effects`; nothing that worked has stopped working.
+> **Earlier versions documented `transaction.to` and `transaction.value`.** Neither field was populated. `to` is now populated for decodable EVM transactions; `value` remains superseded by `effects`.
 
 ### Migrating a policy that detects typed data
 

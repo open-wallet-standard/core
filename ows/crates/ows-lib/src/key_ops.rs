@@ -135,6 +135,7 @@ pub fn sign_message_with_api_key(
 ) -> Result<crate::types::SignResult, OwsLibError> {
     let (key_file, wallet) = load_authorized_wallet(token, wallet_name_or_id, vault_path)?;
     let transaction = ows_core::policy::TransactionContext {
+        to: None,
         effects: vec![],
         raw_hex: hex::encode(msg_bytes),
         data: None,
@@ -172,6 +173,7 @@ pub fn sign_hash_with_api_key(
 ) -> Result<crate::types::SignResult, OwsLibError> {
     let (key_file, wallet) = load_authorized_wallet(token, wallet_name_or_id, vault_path)?;
     let transaction = ows_core::policy::TransactionContext {
+        to: None,
         effects: vec![],
         raw_hex: hex::encode(policy_bytes),
         data: None,
@@ -464,6 +466,44 @@ mod tests {
         policy.id
     }
 
+    fn setup_recipient_policy(vault: &Path, address: &str) -> String {
+        let policy = ows_core::Policy {
+            id: "recipient-policy".into(),
+            name: "Recipient Policy".into(),
+            version: 1,
+            created_at: "2026-03-22T10:00:00Z".into(),
+            rules: vec![PolicyRule::RecipientAllowlist {
+                addresses: vec![address.into()],
+            }],
+            executable: None,
+            config: None,
+            action: PolicyAction::Deny,
+        };
+        policy_store::save_policy(&policy, Some(vault)).unwrap();
+        policy.id
+    }
+
+    fn typed_transaction(tx_type: u8, to: &str) -> Vec<u8> {
+        use ows_signer::rlp::{encode_bytes, encode_list};
+
+        let to = hex::decode(to.trim_start_matches("0x")).unwrap();
+        let fields = [
+            encode_bytes(&[1]),
+            encode_bytes(&[1]),
+            encode_bytes(&[1]),
+            encode_bytes(&[2]),
+            encode_bytes(&[0x52, 0x08]),
+            encode_bytes(&to),
+            encode_bytes(&[5]),
+            encode_bytes(&[]),
+            encode_list(&[]),
+        ]
+        .concat();
+        let mut tx = vec![tx_type];
+        tx.extend_from_slice(&encode_list(&fields));
+        tx
+    }
+
     #[test]
     fn create_api_key_and_verify_token() {
         let dir = tempfile::tempdir().unwrap();
@@ -651,6 +691,58 @@ mod tests {
         );
         let sign_result = result.unwrap();
         assert!(!sign_result.signature.is_empty());
+    }
+
+    #[test]
+    fn recipient_allowlist_scopes_api_key_signing_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        let passphrase = "test-pass";
+        let allowed = "0x742d35cc6634c0532925a3b844bc9e7595f2bd0c";
+        let wallet_id = setup_test_wallet(vault, passphrase);
+        let policy_id = setup_recipient_policy(vault, allowed);
+        let (token, _) = create_api_key(
+            "recipient-agent",
+            &[wallet_id],
+            &[policy_id],
+            passphrase,
+            None,
+            Some(vault),
+        )
+        .unwrap();
+        let chain = ows_core::parse_chain("base").unwrap();
+
+        assert!(sign_message_with_api_key(
+            &token,
+            "test-wallet",
+            &chain,
+            b"hello",
+            None,
+            None,
+            Some(vault),
+        )
+        .is_ok());
+
+        for tx_type in [0x02, 0x04] {
+            assert!(sign_with_api_key(
+                &token,
+                "test-wallet",
+                &chain,
+                &typed_transaction(tx_type, allowed),
+                None,
+                Some(vault),
+            )
+            .is_ok());
+            assert!(sign_with_api_key(
+                &token,
+                "test-wallet",
+                &chain,
+                &typed_transaction(tx_type, "0xdeadbeef00000000000000000000000000000000"),
+                None,
+                Some(vault),
+            )
+            .is_err());
+        }
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use ows_core::{Policy, PolicyContext, PolicyResult, PolicyRule};
+use ows_core::{Policy, PolicyContext, PolicyRequestType, PolicyResult, PolicyRule};
 use std::io::Write as _;
 use std::process::Command;
 use std::time::Duration;
@@ -44,6 +44,52 @@ fn evaluate_rule(rule: &PolicyRule, policy_id: &str, ctx: &PolicyContext) -> Pol
         PolicyRule::AllowedTypedDataContracts { contracts } => {
             eval_allowed_typed_data_contracts(policy_id, contracts, ctx)
         }
+        PolicyRule::RecipientAllowlist { addresses } => {
+            eval_recipient_allowlist(policy_id, addresses, ctx)
+        }
+    }
+}
+
+fn eval_recipient_allowlist(
+    policy_id: &str,
+    addresses: &[String],
+    ctx: &PolicyContext,
+) -> PolicyResult {
+    match ctx.request_type {
+        PolicyRequestType::SignMessage
+        | PolicyRequestType::SignTypedData
+        | PolicyRequestType::ReadBalance => {
+            return PolicyResult::allowed();
+        }
+        PolicyRequestType::SignHash => {
+            return PolicyResult::denied(
+                policy_id,
+                "sign_hash cannot verify a transaction recipient; recipient_allowlist denies it",
+            );
+        }
+        PolicyRequestType::SignTransaction => {}
+    }
+
+    let to = match ctx.transaction.as_ref().and_then(|tx| tx.to.as_ref()) {
+        Some(to) => to,
+        None => {
+            return PolicyResult::denied(
+                policy_id,
+                "transaction has no 'to' address but recipient_allowlist requires one",
+            );
+        }
+    };
+
+    if addresses
+        .iter()
+        .any(|address| address.eq_ignore_ascii_case(to))
+    {
+        PolicyResult::allowed()
+    } else {
+        PolicyResult::denied(
+            policy_id,
+            format!("recipient {to} not in recipient allowlist"),
+        )
     }
 }
 
@@ -240,6 +286,7 @@ mod tests {
             api_key_id: "key-1".to_string(),
             request_type: PolicyRequestType::SignTransaction,
             transaction: Some(TransactionContext {
+                to: Some("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into()),
                 effects: vec![TransactionEffect {
                     address: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into(),
                     diff: vec![("ETH".into(), "100000000000000000".into())], // 0.1 ETH
@@ -643,5 +690,72 @@ mod tests {
         );
         let result = evaluate_policies(&[policy], &ctx);
         assert!(result.allow);
+    }
+
+    #[test]
+    fn recipient_allowlist_allows_matching_address_case_insensitively() {
+        let ctx = base_context();
+        let policy = policy_with_rules(
+            "allowlist",
+            vec![PolicyRule::RecipientAllowlist {
+                addresses: vec!["0x742D35CC6634C0532925A3B844BC9E7595F2BD0C".into()],
+            }],
+        );
+        assert!(evaluate_policies(&[policy], &ctx).allow);
+    }
+
+    #[test]
+    fn recipient_allowlist_denies_non_matching_no_to_and_empty_list() {
+        let rule = |addresses| {
+            policy_with_rules(
+                "allowlist",
+                vec![PolicyRule::RecipientAllowlist { addresses }],
+            )
+        };
+        let ctx = base_context();
+        let denied = evaluate_policies(
+            &[rule(vec![
+                "0xdeadbeef00000000000000000000000000000000".into()
+            ])],
+            &ctx,
+        );
+        assert!(denied
+            .reason
+            .unwrap()
+            .contains("not in recipient allowlist"));
+
+        let mut no_to = ctx.clone();
+        no_to.transaction.as_mut().unwrap().to = None;
+        let denied = evaluate_policies(&[rule(vec![])], &no_to);
+        assert!(denied.reason.unwrap().contains("no 'to' address"));
+
+        assert!(!evaluate_policies(&[rule(vec![])], &ctx).allow);
+    }
+
+    #[test]
+    fn recipient_allowlist_is_scoped_by_request_type() {
+        let policy = policy_with_rules(
+            "allowlist",
+            vec![PolicyRule::RecipientAllowlist {
+                addresses: vec!["0x742d35cc6634c0532925a3b844bc9e7595f2bd0c".into()],
+            }],
+        );
+        let mut ctx = base_context();
+
+        assert!(evaluate_policies(std::slice::from_ref(&policy), &ctx).allow);
+        ctx.transaction.as_mut().unwrap().to =
+            Some("0xdeadbeef00000000000000000000000000000000".into());
+        assert!(!evaluate_policies(std::slice::from_ref(&policy), &ctx).allow);
+        ctx.transaction.as_mut().unwrap().to = None;
+        assert!(!evaluate_policies(std::slice::from_ref(&policy), &ctx).allow);
+
+        ctx.request_type = PolicyRequestType::SignMessage;
+        assert!(evaluate_policies(std::slice::from_ref(&policy), &ctx).allow);
+        ctx.request_type = PolicyRequestType::SignTypedData;
+        assert!(evaluate_policies(std::slice::from_ref(&policy), &ctx).allow);
+        ctx.request_type = PolicyRequestType::SignHash;
+        let denied = evaluate_policies(&[policy], &ctx);
+        assert!(!denied.allow);
+        assert!(denied.reason.unwrap().contains("cannot verify"));
     }
 }

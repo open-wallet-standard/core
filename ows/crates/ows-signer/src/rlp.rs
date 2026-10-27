@@ -44,6 +44,49 @@ fn decode_length(data: &[u8]) -> Result<(usize, usize), &'static str> {
     }
 }
 
+fn decode_item(data: &[u8]) -> Result<(&[u8], &[u8]), &'static str> {
+    let (offset, length) = decode_length(data)?;
+    let end = offset.checked_add(length).ok_or("item length overflow")?;
+    if data.len() < end {
+        return Err("truncated item");
+    }
+    Ok((&data[offset..end], &data[end..]))
+}
+
+/// Extract the recipient from an unsigned EVM transaction.
+///
+/// The `to` field index is 3 for legacy transactions, 4 for type `0x01`, and
+/// 5 for every other EIP-2718 type (`0x02..=0x7f`). Future field extraction
+/// should reuse this map. Type `0x00` is intentionally rejected: it is not a
+/// valid typed transaction type for this decoder.
+///
+/// Returns `None` for malformed RLP, non-list payloads, contract creation, and
+/// recipients that are not exactly 20 bytes.
+pub fn extract_to_address(unsigned_tx: &[u8]) -> Option<String> {
+    let (&first, rest) = unsigned_tx.split_first()?;
+    let (to_index, rlp_data) = match first {
+        0x01 => (4, rest),
+        0x02..=0x7f => (5, rest),
+        0xc0..=0xff => (3, unsigned_tx),
+        _ => return None,
+    };
+    if !matches!(rlp_data.first(), Some(0xc0..=0xff)) {
+        return None;
+    }
+    let (mut items, trailing) = decode_item(rlp_data).ok()?;
+    if !trailing.is_empty() {
+        return None;
+    }
+    for _ in 0..to_index {
+        items = decode_item(items).ok()?.1;
+    }
+    if matches!(items.first(), Some(0xc0..=0xff)) {
+        return None;
+    }
+    let (to, _) = decode_item(items).ok()?;
+    (to.len() == 20).then(|| format!("0x{}", hex::encode(to)))
+}
+
 fn read_be_uint(bytes: &[u8]) -> usize {
     let mut val = 0usize;
     for &b in bytes {
@@ -148,6 +191,63 @@ pub fn encode_signed_typed_tx(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn typed_transaction(tx_type: u8, to_index: usize, to: &[u8]) -> Vec<u8> {
+        let mut fields = Vec::new();
+        for index in 0..=to_index {
+            fields.extend_from_slice(&encode_bytes(if index == to_index { to } else { &[1] }));
+        }
+        let mut tx = vec![tx_type];
+        tx.extend_from_slice(&encode_list(&fields));
+        tx
+    }
+
+    fn legacy_transaction(to: &[u8], eip155: bool) -> Vec<u8> {
+        let mut fields = Vec::new();
+        for value in [&[1][..], &[2], &[3], to, &[5], &[]] {
+            fields.extend_from_slice(&encode_bytes(value));
+        }
+        if eip155 {
+            for value in [&[1][..], &[], &[]] {
+                fields.extend_from_slice(&encode_bytes(value));
+            }
+        }
+        encode_list(&fields)
+    }
+
+    #[test]
+    fn extracts_typed_transaction_recipient() {
+        let to = hex::decode("742d35cc6634c0532925a3b844bc9e7595f2bd0c").unwrap();
+        for (tx_type, index) in [(0x01, 4), (0x02, 5), (0x03, 5), (0x04, 5), (0x7f, 5)] {
+            assert_eq!(
+                extract_to_address(&typed_transaction(tx_type, index, &to)).as_deref(),
+                Some("0x742d35cc6634c0532925a3b844bc9e7595f2bd0c")
+            );
+        }
+        for eip155 in [false, true] {
+            assert_eq!(
+                extract_to_address(&legacy_transaction(&to, eip155)).as_deref(),
+                Some("0x742d35cc6634c0532925a3b844bc9e7595f2bd0c")
+            );
+        }
+    }
+
+    #[test]
+    fn recipient_extraction_fails_closed() {
+        assert_eq!(extract_to_address(&[]), None);
+        assert_eq!(extract_to_address(&[0x00, 0xc0]), None);
+        assert_eq!(extract_to_address(&[0x02]), None);
+        assert_eq!(extract_to_address(&[0x02, 0x01]), None);
+        assert_eq!(extract_to_address(&[0x02, 0xc1, 0x01]), None);
+        assert_eq!(extract_to_address(&typed_transaction(0x02, 5, &[])), None);
+        assert_eq!(
+            extract_to_address(&typed_transaction(0x02, 5, &[1; 19])),
+            None
+        );
+        let mut truncated = typed_transaction(0x02, 5, &[1; 20]);
+        truncated.pop();
+        assert_eq!(extract_to_address(&truncated), None);
+    }
 
     #[test]
     fn test_encode_bytes_single() {

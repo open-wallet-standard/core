@@ -20,6 +20,10 @@ pub enum PolicyRule {
     /// Deny typed data signing if `domain.verifyingContract` is not in the allowlist.
     /// Passes through for non-typed-data signing operations.
     AllowedTypedDataContracts { contracts: Vec<String> },
+
+    /// Deny if `transaction.to` is not in the allowlist (case-insensitive).
+    /// Denies transactions with no `to` field (e.g. contract creation).
+    RecipientAllowlist { addresses: Vec<String> },
 }
 
 /// A stored policy definition.
@@ -90,6 +94,9 @@ pub struct TransactionEffect {
 /// Signing-request fields available for policy evaluation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionContext {
+    /// Transaction recipient (EVM), when it can be determined.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
     pub effects: Vec<TransactionEffect>,
     /// Raw transaction hex.
     pub raw_hex: String,
@@ -244,6 +251,7 @@ mod tests {
             api_key_id: "7a2f1b3c-4d5e-6f7a-8b9c-0d1e2f3a4b5c".into(),
             request_type: PolicyRequestType::SignTransaction,
             transaction: Some(TransactionContext {
+                to: None,
                 effects: vec![TransactionEffect {
                     address: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into(),
                     diff: vec![("ETH".into(), "100000000000000000".into())],
@@ -374,6 +382,7 @@ mod tests {
             api_key_id: "k".into(),
             request_type: PolicyRequestType::SignTransaction,
             transaction: Some(TransactionContext {
+                to: None,
                 effects: vec![],
                 raw_hex: "0x00".into(),
                 data: None,
@@ -389,6 +398,16 @@ mod tests {
 
         let json = serde_json::to_string(&ctx).unwrap();
         assert!(!json.contains("typed_data"));
+    }
+
+    #[test]
+    fn test_policy_rule_serde_recipient_allowlist() {
+        let rule = PolicyRule::RecipientAllowlist {
+            addresses: vec!["0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into()],
+        };
+        let json = serde_json::to_value(&rule).unwrap();
+        assert_eq!(json["type"], "recipient_allowlist");
+        assert_eq!(serde_json::from_value::<PolicyRule>(json).unwrap(), rule);
     }
 
     #[test]

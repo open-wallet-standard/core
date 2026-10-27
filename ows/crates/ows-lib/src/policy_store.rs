@@ -1,9 +1,51 @@
-use ows_core::Policy;
+use ows_core::{Policy, PolicyRule};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::OwsLibError;
 use crate::vault;
+
+fn is_valid_evm_address(address: &str) -> bool {
+    address.len() == 42
+        && address.starts_with("0x")
+        && address[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn address_lists_mut(rules: &mut [PolicyRule]) -> impl Iterator<Item = &mut Vec<String>> {
+    rules.iter_mut().filter_map(|rule| match rule {
+        PolicyRule::RecipientAllowlist { addresses } => Some(addresses),
+        PolicyRule::AllowedTypedDataContracts { contracts } => Some(contracts),
+        _ => None,
+    })
+}
+
+fn normalize_addresses(rules: &mut [PolicyRule]) {
+    for addresses in address_lists_mut(rules) {
+        for address in addresses {
+            address.make_ascii_lowercase();
+        }
+    }
+}
+
+fn validate_addresses(rules: &[PolicyRule]) -> Result<(), OwsLibError> {
+    for rule in rules {
+        let (kind, addresses) = match rule {
+            PolicyRule::RecipientAllowlist { addresses } => ("recipient_allowlist", addresses),
+            PolicyRule::AllowedTypedDataContracts { contracts } => {
+                ("allowed_typed_data_contracts", contracts)
+            }
+            _ => continue,
+        };
+        for address in addresses {
+            if !is_valid_evm_address(address) {
+                return Err(OwsLibError::InvalidInput(format!(
+                    "malformed address in {kind}: {address}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Returns the policies directory, creating it if needed.
 /// Policies are not secret — no restrictive permissions applied.
@@ -16,9 +58,12 @@ pub fn policies_dir(vault_path: Option<&Path>) -> Result<PathBuf, OwsLibError> {
 
 /// Save a policy to `~/.ows/policies/<id>.json`.
 pub fn save_policy(policy: &Policy, vault_path: Option<&Path>) -> Result<(), OwsLibError> {
+    validate_addresses(&policy.rules)?;
+    let mut policy = policy.clone();
+    normalize_addresses(&mut policy.rules);
     let dir = policies_dir(vault_path)?;
     let path = dir.join(format!("{}.json", policy.id));
-    let json = serde_json::to_string_pretty(policy)?;
+    let json = serde_json::to_string_pretty(&policy)?;
     fs::write(&path, json)?;
     Ok(())
 }
@@ -31,7 +76,8 @@ pub fn load_policy(id: &str, vault_path: Option<&Path>) -> Result<Policy, OwsLib
         return Err(OwsLibError::InvalidInput(format!("policy not found: {id}")));
     }
     let contents = fs::read_to_string(&path)?;
-    let policy: Policy = serde_json::from_str(&contents)?;
+    let mut policy: Policy = serde_json::from_str(&contents)?;
+    normalize_addresses(&mut policy.rules);
     Ok(policy)
 }
 
@@ -54,7 +100,10 @@ pub fn list_policies(vault_path: Option<&Path>) -> Result<Vec<Policy>, OwsLibErr
         }
         match fs::read_to_string(&path) {
             Ok(contents) => match serde_json::from_str::<Policy>(&contents) {
-                Ok(p) => policies.push(p),
+                Ok(mut policy) => {
+                    normalize_addresses(&mut policy.rules);
+                    policies.push(policy);
+                }
                 Err(e) => eprintln!("warning: skipping {}: {e}", path.display()),
             },
             Err(e) => eprintln!("warning: skipping {}: {e}", path.display()),
@@ -203,5 +252,49 @@ mod tests {
         let loaded = load_policy("sim-policy", Some(&vault)).unwrap();
         assert_eq!(loaded.executable.unwrap(), "/usr/local/bin/simulate-tx");
         assert!(loaded.config.is_some());
+    }
+
+    #[test]
+    fn recipient_addresses_are_validated_and_normalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        let mut policy = test_policy("recipients", "Recipients");
+        policy.rules = vec![PolicyRule::RecipientAllowlist {
+            addresses: vec!["0x742d35Cc6634C0532925a3b844Bc9e7595f2bD0C".into()],
+        }];
+        save_policy(&policy, Some(vault)).unwrap();
+        let loaded = load_policy("recipients", Some(vault)).unwrap();
+        assert_eq!(
+            loaded.rules,
+            vec![PolicyRule::RecipientAllowlist {
+                addresses: vec!["0x742d35cc6634c0532925a3b844bc9e7595f2bd0c".into()]
+            }]
+        );
+
+        if let PolicyRule::RecipientAllowlist { addresses } = &mut policy.rules[0] {
+            addresses[0] = "0xdead".into();
+        }
+        assert!(save_policy(&policy, Some(vault))
+            .unwrap_err()
+            .to_string()
+            .contains("malformed address"));
+    }
+
+    #[test]
+    fn typed_data_contract_addresses_are_validated_and_normalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path();
+        let mut policy = test_policy("contracts", "Contracts");
+        policy.rules = vec![PolicyRule::AllowedTypedDataContracts {
+            contracts: vec!["0x000000000022D473030F116dDEE9F6B43aC78BA3".into()],
+        }];
+        save_policy(&policy, Some(vault)).unwrap();
+        let loaded = load_policy("contracts", Some(vault)).unwrap();
+        assert_eq!(
+            loaded.rules,
+            vec![PolicyRule::AllowedTypedDataContracts {
+                contracts: vec!["0x000000000022d473030f116ddee9f6b43ac78ba3".into()]
+            }]
+        );
     }
 }
