@@ -863,11 +863,12 @@ rejects only a shortfall, so that value would otherwise be destroyed when the tr
 or, for NIGHT, fail the ledger's supply check.
 
 An out-of-spec request (a proof-preimage input or a `ClaimRewards` mint claim) is rejected with a
-**precise** error rather than a generic "unsupported". So is a dust registration the dapp put in the
-transaction, unless it registers the wallet's own NIGHT to the wallet's own dust address and the
-wallet adds no DUST of its own (`payFees: false`). A registration to any other dust address would
-hand the wallet's DUST generation to someone else, and a deregistration would switch it off, so the
-balancer and the signer both refuse them.
+**precise** error rather than a generic "unsupported". So is any dust registration the dapp put in the
+transaction, even one that registers the wallet's own NIGHT to the wallet's own dust address: the
+wallet would sign it without the policy pass seeing it, and its fee allowance would pay the dapp's fee
+out of the wallet's NIGHT. The wallet adds its own registration when it pays fees (`payFees: true`).
+The signer separately refuses any registration that would hand the wallet's DUST generation to
+another dust address, or switch it off.
 
 `ows sign tx` returns the fully sealed, proven Midnight transaction on `SignResult.transaction`
 (`None` for other chains) — the seal-*without*-broadcast capability: the same bytes `send-tx`
