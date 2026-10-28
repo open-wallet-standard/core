@@ -768,9 +768,10 @@ exactly 1,000,000.
 runs at the plan→authorize seam. It fills the plan's per-segment movement into the
 transaction context under `chain_extra` — leaving the flat `effects` field empty, since
 the wallet can only account for its **own** movement, not the transaction's full effects —
-and calls `evaluate_policies`, the same evaluation as the first pass. The declarative rules
-run again, since planning can take minutes on a cold sync and a rule such as an expiry may
-have lapsed meanwhile; the executable policies now see the effects. A denial returns a
+and calls `evaluate_policies`, the same evaluation as the first pass. Planning can take minutes
+on a cold sync, so the key is reloaded first: a key revoked or expired since the first pass is
+refused, and the policies are the ones the key has now. The declarative rules run again too, since
+one such as an expiry may have lapsed meanwhile; the executable policies now see the effects. A denial returns a
 `PolicyDenied` error, so the key is never used to prove anything.
 
 This is what lets a policy express a rule like *"cap the summed movement at 1,000,000"* —

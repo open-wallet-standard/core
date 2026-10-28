@@ -419,9 +419,10 @@ pub fn enforce_policies_and_decrypt_key(
 /// The connector seam's second policy pass, as a gate: re-evaluate every policy on the key with the
 /// transaction's key-derived `chain_extra` context filled in — after the balancing plan is built,
 /// before it is authorized. A denial returns an error, so no bearer spend witness is ever built for a
-/// transaction the policy rejects. The declarative rules run again too: planning can take minutes
-/// (a cold sync), and a rule such as an expiry that held at the first pass
-/// ([`enforce_policies_and_decrypt_key`]) may no longer hold. An executable policy therefore sees a
+/// transaction the policy rejects. Planning can take minutes (a cold sync), so the key is reloaded
+/// from the store first: a key revoked since the first pass ([`enforce_policies_and_decrypt_key`]) is
+/// refused, and the key's own expiry and its policies are those it has now. The declarative rules
+/// run again too, since one may have lapsed in the meantime. An executable policy therefore sees a
 /// Midnight transaction twice, first without `chain_extra` and then with it.
 pub(crate) fn enforce_effect_policies(
     key_file: &ApiKeyFile,
@@ -431,6 +432,8 @@ pub(crate) fn enforce_effect_policies(
     chain_extra: serde_json::Value,
     vault_path: Option<&Path>,
 ) -> Result<(), OwsLibError> {
+    let key_file = &reload_api_key(key_file, vault_path)?;
+    check_expiry(key_file)?;
     let policies = load_policies_for_key(key_file, vault_path)?;
     let now = chrono::Utc::now();
     let date = now.format("%Y-%m-%d").to_string();
@@ -472,6 +475,20 @@ fn noop_spending_context(date: &str) -> ows_core::policy::SpendingContext {
         daily_total: "0".to_string(),
         date: date.to_string(),
     }
+}
+
+/// The key `key_file` was read from, as the store holds it now. Revoking a key deletes its file, so a
+/// key revoked since `key_file` was read fails with `ApiKeyNotFound`, and so does one whose file now
+/// holds another token.
+fn reload_api_key(
+    key_file: &ApiKeyFile,
+    vault_path: Option<&Path>,
+) -> Result<ApiKeyFile, OwsLibError> {
+    let current = key_store::load_api_key(&key_file.id, vault_path)?;
+    if current.token_hash != key_file.token_hash {
+        return Err(OwsLibError::Core(OwsError::ApiKeyNotFound));
+    }
+    Ok(current)
 }
 
 fn check_expiry(key_file: &ApiKeyFile) -> Result<(), OwsLibError> {
@@ -1646,6 +1663,87 @@ verdict(total <= CAP, "summed movement %d (cap CAP)" % total)
         assert!(matches!(
             denied,
             Err(OwsLibError::Core(OwsError::PolicyDenied { .. }))
+        ));
+    }
+
+    /// The key's own expiry is not a policy rule, so re-running the rules alone would miss it: a token
+    /// that lapses while the plan is built must still be refused at the seam.
+    #[test]
+    fn effect_policy_pass_rechecks_the_keys_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let (_token, mut key_file) = create_api_key(
+            "agent",
+            std::slice::from_ref(&wallet_id),
+            &[],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+        key_file.expires_at = Some("2020-01-01T00:00:00Z".to_string());
+        key_store::save_api_key(&key_file, Some(&vault)).unwrap();
+
+        let chain = ows_core::parse_chain("midnight:mainnet").unwrap();
+        let tx = ows_core::policy::TransactionContext {
+            effects: vec![],
+            raw_hex: "00".into(),
+            data: None,
+            chain_extra: None,
+        };
+        let denied = enforce_effect_policies(
+            &key_file,
+            &wallet_id,
+            &chain,
+            tx,
+            serde_json::json!({ "segment_effects": [] }),
+            Some(&vault),
+        );
+        assert!(matches!(
+            denied,
+            Err(OwsLibError::Core(OwsError::ApiKeyExpired { .. }))
+        ));
+    }
+
+    /// Revoking a key deletes its file, and planning can outlast that: the seam reloads the key, so a
+    /// token revoked while the plan is built is refused before anything is signed.
+    #[test]
+    fn effect_policy_pass_refuses_a_key_revoked_since_the_first_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let (_token, key_file) = create_api_key(
+            "agent",
+            std::slice::from_ref(&wallet_id),
+            &[],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+        key_store::delete_api_key(&key_file.id, Some(&vault)).unwrap();
+
+        let chain = ows_core::parse_chain("midnight:mainnet").unwrap();
+        let tx = ows_core::policy::TransactionContext {
+            effects: vec![],
+            raw_hex: "00".into(),
+            data: None,
+            chain_extra: None,
+        };
+        let denied = enforce_effect_policies(
+            &key_file,
+            &wallet_id,
+            &chain,
+            tx,
+            serde_json::json!({ "segment_effects": [] }),
+            Some(&vault),
+        );
+        assert!(matches!(
+            denied,
+            Err(OwsLibError::Core(OwsError::ApiKeyNotFound))
         ));
     }
 }
