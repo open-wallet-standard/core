@@ -513,10 +513,9 @@ fn build_fallible_consolidation_offer(
             output_no: out_no,
         });
     }
-    let sender_user = UserAddress::from(inputs[0].owner.clone());
     let mut outputs = vec![UtxoOutput {
         value: total_in,
-        owner: sender_user,
+        owner: UserAddress::from(sender_vk.clone()),
         type_: NIGHT,
     }];
     inputs.sort();
@@ -526,6 +525,51 @@ fn build_fallible_consolidation_offer(
         outputs: outputs.into(),
         signatures: vec![].into(),
     })
+}
+
+/// The wallet's unregistered NIGHT that no offer has claimed, for the fallible consolidation: only
+/// coins the wallet owns (an indexer row naming another owner is skipped, not trusted), each once.
+fn consolidation_leftovers(
+    pool: &[UnshieldedUtxo],
+    claimed: &[UtxoKey],
+    sender_addr: &str,
+    sender_vk: &VerifyingKey,
+) -> Result<Vec<UnshieldedUtxo>, std::io::Error> {
+    let night_wire = crate::parse_token_type(Some("night"))?.to_wire_token_type();
+    let mut seen: Vec<UtxoKey> = claimed.to_vec();
+    let mut leftovers = Vec::new();
+    for u in sender_utxos_sorted(pool, sender_addr, sender_vk, &night_wire)? {
+        let key = (u.intent_hash.clone(), u.output_index);
+        if u.registered_for_dust_generation || seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        leftovers.push(u);
+    }
+    Ok(leftovers)
+}
+
+/// The wallet's own fallible NIGHT consolidation: the segment it rides, its offer, and its intent's
+/// TTL. A plan keeps it beside the transaction being balanced, not inside it, so that transaction stays
+/// exactly what was planned against (a mock-proven `makeTransfer` is later compared with its real
+/// proof), and adds it when the plan is sized and when it is authorized.
+#[derive(Debug, Clone)]
+struct Consolidation {
+    segment: u16,
+    offer: UnshieldedOffer<MnSig, InMemoryDB>,
+    ttl: Timestamp,
+}
+
+impl Consolidation {
+    fn add_to(
+        &self,
+        stx: &mut StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
+    ) -> Result<(), std::io::Error> {
+        let mut intent = empty_intent_skeleton();
+        intent.fallible_unshielded_offer = Some(Sp::new(self.offer.clone()));
+        intent.ttl = self.ttl;
+        insert_new_intent(stx, self.segment, intent)
+    }
 }
 
 /// Give the signed intent a TTL an hour past the chain tip, matching the wallet SDK.
@@ -795,6 +839,7 @@ pub struct BalancedPlan {
     intent_ttl: Timestamp,
     shielded: Option<ShieldedFundingPlan>,
     dust: DustFeePlan,
+    consolidation: Option<Consolidation>,
 }
 
 impl BalancedPlan {
@@ -837,6 +882,9 @@ impl BalancedPlan {
                 .iter()
                 .map(|(seg, offer)| (*seg, offer)),
         );
+        // The consolidation nets to zero when it pays the wallet back, as it is built to; counted all
+        // the same, so one that did not would show as an outflow.
+        offers.extend(self.consolidation.iter().map(|c| (c.segment, &c.offer)));
         let shielded_plans = self
             .shielded
             .as_ref()
@@ -882,6 +930,10 @@ impl BalancedPlan {
             return Err(err(
                 "the proven transaction is not the one the policy pass saw; refusing to sign it",
             ));
+        }
+        // A reused balancing intent was cloned from the mock-proven base; rebuild it from the real one.
+        if let Some(intent) = real.intents.get(&self.seg_id) {
+            self.intent_in = (*intent).clone();
         }
         self.base = real;
         Ok(())
@@ -1276,7 +1328,7 @@ fn plan_unsealed_proven_standard_tx(
     let mut r: &[u8] = tx_bytes;
     let tx: TxProven = tagged_deserialize(&mut r)
         .map_err(|e| err(format!("failed to parse proven tx bytes: {e}")))?;
-    let Transaction::Standard(mut base) = tx else {
+    let Transaction::Standard(base) = tx else {
         // The only other Transaction variant is ClaimRewards — a system-issued mint claim that is
         // claimed, not balanced with counter-offers, so it is not a balancing target.
         return Err(err(
@@ -1464,15 +1516,9 @@ fn plan_unsealed_proven_standard_tx(
     // it is spent off the budget-tight guaranteed section. Balance-neutral (inputs equal the one
     // change output), so it cannot unbalance the transaction; gated on a reservation existing and at
     // least two leftover coins to fold.
+    let mut consolidation = None;
     if adding_dust && registration_reserve.is_some() {
-        let night_wire = crate::parse_token_type(Some("night"))?.to_wire_token_type();
-        let leftovers: Vec<UnshieldedUtxo> = pool
-            .iter()
-            .filter(|u| !claimed.contains(&(u.intent_hash.clone(), u.output_index)))
-            .filter(|u| !u.registered_for_dust_generation)
-            .filter(|u| u.token_type.eq_ignore_ascii_case(&night_wire))
-            .cloned()
-            .collect();
+        let leftovers = consolidation_leftovers(&pool, &claimed, sender_addr, sender_vk)?;
         // A fresh segment distinct from every existing intent and the chosen balancing segment. The
         // consolidation is optional, so a transaction that leaves no free segment goes without it.
         let seg = fresh_segment_id(&base)
@@ -1480,17 +1526,18 @@ fn plan_unsealed_proven_standard_tx(
             .zip(seg_id.checked_add(1))
             .map(|(fresh, after_balancing)| fresh.max(after_balancing));
         if let Some(seg) = seg.filter(|_| leftovers.len() >= 2) {
-            let coffer = build_fallible_consolidation_offer(
+            let offer = build_fallible_consolidation_offer(
                 &leftovers,
                 &mut claimed,
                 sender_vk,
                 sender_addr,
             )?;
             let tip_secs = dust_tip.as_ref().map(|(_, t)| *t).unwrap_or(0);
-            let mut consolidation_intent = empty_intent_skeleton();
-            consolidation_intent.fallible_unshielded_offer = Some(Sp::new(coffer));
-            consolidation_intent.ttl = chain_aligned_intent_ttl(Timestamp::from_secs(tip_secs));
-            insert_new_intent(&mut base, seg, consolidation_intent)?;
+            consolidation = Some(Consolidation {
+                segment: seg,
+                offer,
+                ttl: chain_aligned_intent_ttl(Timestamp::from_secs(tip_secs)),
+            });
         }
     }
 
@@ -1503,6 +1550,9 @@ fn plan_unsealed_proven_standard_tx(
     };
     for (seg, foffer) in &fallible_offers {
         attach_fallible_offer(&mut stx_for_sizing, *seg, foffer);
+    }
+    if let Some(c) = &consolidation {
+        c.add_to(&mut stx_for_sizing)?;
     }
     // The chosen intent is rebuilt (guaranteed offer + dust) during sizing and authorization, so its
     // own fallible offer, if any, must be threaded into that rebuild rather than left where the rebuild
@@ -1553,6 +1603,7 @@ fn plan_unsealed_proven_standard_tx(
         intent_ttl,
         shielded,
         dust,
+        consolidation,
     })
 }
 
@@ -1622,6 +1673,9 @@ pub fn authorize_proven_tx(
         if *seg != plan.seg_id {
             attach_fallible_offer(&mut base, *seg, foffer);
         }
+    }
+    if let Some(c) = &plan.consolidation {
+        c.add_to(&mut base)?;
     }
 
     let intent_out = assemble_proven_intent(
@@ -2763,6 +2817,170 @@ mod tests {
             imbalances.is_empty(),
             "consolidation must net to zero: {imbalances:?}"
         );
+    }
+
+    fn other_vk_hex() -> String {
+        let vk = MidnightSigningKey::from_bytes(&hex::decode(OTHER_SEED_HEX).unwrap())
+            .unwrap()
+            .verifying_key();
+        let mut raw = Vec::new();
+        vk.serialize(&mut raw).unwrap();
+        hex::encode(raw)
+    }
+
+    /// A plan with the wallet's consolidation: the transaction it balances, untouched, plus the
+    /// consolidation beside it.
+    fn plan_with_consolidation(
+        base: StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
+        consolidation: Consolidation,
+    ) -> BalancedPlan {
+        BalancedPlan {
+            base,
+            seg_id: 1,
+            intent_in: intent_with(None, None),
+            unshielded_offer: UnshieldedOffer {
+                inputs: vec![].into(),
+                outputs: vec![].into(),
+                signatures: vec![].into(),
+            },
+            fallible_offers: vec![],
+            intent_ttl: Timestamp::from_secs(0),
+            shielded: None,
+            dust: DustFeePlan::None,
+            consolidation: Some(consolidation),
+        }
+    }
+
+    /// The consolidation spends only the wallet's own unregistered NIGHT that no offer claimed, each
+    /// coin once: a row the indexer reports for another owner, a registered coin, another token, a
+    /// claimed coin and a repeated row are all left out.
+    #[test]
+    fn consolidation_leftovers_take_only_the_wallets_unclaimed_unregistered_night() {
+        let vk_hex = sender_vk_hex();
+        let mine = night_pool_utxo(&vk_hex, 5, 1, 0);
+        let mut registered = night_pool_utxo(&vk_hex, 6, 2, 0);
+        registered.registered_for_dust_generation = true;
+        let foreign = night_pool_utxo(&other_vk_hex(), 7, 3, 0);
+        let token = token_pool_utxo(&vk_hex, UnshieldedTokenType(HashOutput([0x5a; 32])), 8, 4);
+        let spoken_for = night_pool_utxo(&vk_hex, 9, 5, 0);
+        let pool = vec![
+            foreign,
+            mine.clone(),
+            mine.clone(),
+            registered,
+            token,
+            spoken_for.clone(),
+        ];
+        let claimed = vec![(spoken_for.intent_hash, spoken_for.output_index)];
+
+        let left = consolidation_leftovers(&pool, &claimed, "sender", &wallet_vk()).unwrap();
+        assert_eq!(left, vec![mine]);
+    }
+
+    /// The consolidated value returns to the wallet's own key, never to whatever owner the first coin
+    /// carries.
+    #[test]
+    fn consolidation_pays_the_wallets_own_key() {
+        let foreign = night_pool_utxo(&other_vk_hex(), 100, 1, 0);
+        let mine = night_pool_utxo(&sender_vk_hex(), 250, 2, 0);
+        let offer = build_fallible_consolidation_offer(
+            &[foreign, mine],
+            &mut Vec::new(),
+            &wallet_vk(),
+            "sender",
+        )
+        .unwrap();
+        let outputs: Vec<_> = offer.outputs.iter_deref().cloned().collect();
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].owner, UserAddress::from(wallet_vk()));
+        assert_eq!(outputs[0].value, 350);
+    }
+
+    /// The transaction a plan balances does not carry the wallet's consolidation, so a `makeTransfer`
+    /// proven for real, which never had one, still matches its mock-proven plan; the consolidation is
+    /// added only when the plan is authorized.
+    #[test]
+    fn real_proofs_replace_a_plan_that_consolidates() {
+        let base = base_with_intents(vec![(1, intent_with(None, None))]);
+        let offer = build_fallible_consolidation_offer(
+            &[
+                night_pool_utxo(&sender_vk_hex(), 100, 1, 0),
+                night_pool_utxo(&sender_vk_hex(), 250, 2, 0),
+            ],
+            &mut Vec::new(),
+            &wallet_vk(),
+            "sender",
+        )
+        .unwrap();
+        let consolidation = Consolidation {
+            segment: 2,
+            offer,
+            ttl: Timestamp::from_secs(3_600),
+        };
+        let mut plan = plan_with_consolidation(base.clone(), consolidation.clone());
+
+        plan.replace_mock_proofs(Transaction::Standard(base.clone()))
+            .expect("the real transfer matches the plan");
+        assert!(
+            plan.consolidation.is_some(),
+            "the consolidation must survive"
+        );
+
+        let mut authorized = base;
+        consolidation.add_to(&mut authorized).unwrap();
+        assert!(authorized.intents.get(&2).is_some());
+    }
+
+    /// A consolidation that paid anyone but the wallet would show in the effects as an outflow in its
+    /// own segment; the honest one nets to zero and is not listed.
+    #[test]
+    fn segment_effects_count_the_consolidation() {
+        let provider = MidnightSigner::mainnet()
+            .crypto_provider(&packed_signing_key(UNSHIELDED_SEED_HEX))
+            .unwrap();
+        let mut offer = build_fallible_consolidation_offer(
+            &[night_pool_utxo(&sender_vk_hex(), 100, 1, 0)],
+            &mut Vec::new(),
+            &wallet_vk(),
+            "sender",
+        )
+        .unwrap();
+        let honest = plan_with_consolidation(
+            base_with_intents(vec![]),
+            Consolidation {
+                segment: 2,
+                offer: offer.clone(),
+                ttl: Timestamp::from_secs(0),
+            },
+        );
+        assert!(honest
+            .segment_effects("midnight:mainnet", &provider)
+            .unwrap()
+            .is_empty());
+
+        let other_vk = MidnightSigningKey::from_bytes(&hex::decode(OTHER_SEED_HEX).unwrap())
+            .unwrap()
+            .verifying_key();
+        offer.outputs = vec![UtxoOutput {
+            value: 100,
+            owner: UserAddress::from(other_vk),
+            type_: NIGHT,
+        }]
+        .into();
+        let misdirected = plan_with_consolidation(
+            base_with_intents(vec![]),
+            Consolidation {
+                segment: 2,
+                offer,
+                ttl: Timestamp::from_secs(0),
+            },
+        );
+        let effects = misdirected
+            .segment_effects("midnight:mainnet", &provider)
+            .unwrap();
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].segment, 2);
+        assert_eq!(effects[0].effects[0].diff[0].1, "-100");
     }
 
     /// Funding a fallible unshielded offer in its own segment nets that segment to zero — the core Gap B
