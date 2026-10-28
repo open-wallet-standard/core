@@ -45,13 +45,18 @@ const BUILTIN_KEY_LOCATIONS: &[&str] = &[
 
 static PROOF_SERVER_HTTP: OnceLock<reqwest::Client> = OnceLock::new();
 
-/// Shared HTTP client for Midnight proof-server `/check` and `/prove` (long timeout).
+/// Shared HTTP client for Midnight proof-server `/check` and `/prove` (long timeout). Every request
+/// carries spend keys, so it goes to the configured server and nowhere else: proxies named in the
+/// environment (`HTTP_PROXY`, `ALL_PROXY`) are ignored, and a redirect, which would re-send the body,
+/// is not followed.
 fn proof_server_http_client() -> &'static reqwest::Client {
     PROOF_SERVER_HTTP.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(PROOF_SERVER_TIMEOUT)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
+            .expect("the proof-server client needs only the TLS backend reqwest::Client::new needs")
     })
 }
 
@@ -365,6 +370,8 @@ impl ProvingProvider for Prover {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_net::{loopback_listener, run_child_behind_proxy};
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn remote_rejects_empty_and_non_http_urls() {
@@ -407,6 +414,61 @@ mod tests {
             !format!("{unreachable:#}").contains("secret"),
             "{unreachable:#}"
         );
+    }
+
+    const CHILD_URL_VAR: &str = "OWS_TEST_PROOF_SERVER_CHILD_URL";
+
+    /// Every proof-server request carries spend keys, so it must reach the configured host and no
+    /// other: not a proxy named in the environment, not wherever a redirect points. The request runs
+    /// in a child copy of this test binary, so the proxy variables are set there from the start and
+    /// this process's environment is never touched.
+    #[test]
+    fn proof_server_requests_ignore_proxy_settings_and_redirects() {
+        let refuse = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let (proxy, proxy_hits) = loopback_listener(refuse.to_string());
+        let (elsewhere, elsewhere_hits) = loopback_listener(refuse.to_string());
+        let (server, server_hits) = loopback_listener(format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://{elsewhere}/prove\r\n\
+             Content-Length: 0\r\nConnection: close\r\n\r\n"
+        ));
+
+        assert!(
+            run_child_behind_proxy(
+                "prover::tests::proof_server_request_from_child",
+                CHILD_URL_VAR,
+                &format!("http://{server}/prove"),
+                proxy,
+            ),
+            "the child request did not end at the server's redirect"
+        );
+        assert_eq!(
+            server_hits.load(Ordering::SeqCst),
+            1,
+            "the configured server was not asked"
+        );
+        assert_eq!(
+            proxy_hits.load(Ordering::SeqCst),
+            0,
+            "the request went through the proxy"
+        );
+        assert_eq!(
+            elsewhere_hits.load(Ordering::SeqCst),
+            0,
+            "the redirect was followed"
+        );
+    }
+
+    /// The child half of the test above; a no-op when run on its own.
+    #[test]
+    #[ignore = "run by proof_server_requests_ignore_proxy_settings_and_redirects"]
+    fn proof_server_request_from_child() {
+        let Ok(url) = std::env::var(CHILD_URL_VAR) else {
+            return;
+        };
+        let url = reqwest::Url::parse(&url).unwrap();
+        let err =
+            crate::block_on(Prover::post_proof_server(url, b"preimage".to_vec())).unwrap_err();
+        assert!(err.to_string().contains("307"), "{err:#}");
     }
 
     #[test]

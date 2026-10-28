@@ -70,14 +70,30 @@ struct IndexerBlockHashResp {
 }
 
 static INDEXER_HTTP: OnceLock<reqwest::Client> = OnceLock::new();
+static LOOPBACK_INDEXER_HTTP: OnceLock<reqwest::Client> = OnceLock::new();
 
-/// Shared HTTP client for Midnight indexer GraphQL (bounded request timeout).
-pub fn indexer_http_client() -> &'static reqwest::Client {
-    INDEXER_HTTP.get_or_init(|| {
-        reqwest::Client::builder()
+/// Shared HTTP client for the Midnight indexer GraphQL at `indexer_url` (bounded request timeout).
+///
+/// An indexer on this machine is reached directly, never through a proxy named in the environment
+/// (`HTTP_PROXY`, `ALL_PROXY`): its endpoint is plaintext, so that proxy would receive its queries and
+/// could answer them in its place, and reqwest makes no exception for loopback hosts. Any other
+/// indexer keeps the environment's proxy, which some deployments need to reach the network at all;
+/// over https the proxy only relays the encrypted connection.
+pub fn indexer_http_client(indexer_url: &str) -> &'static reqwest::Client {
+    let loopback = reqwest::Url::parse(indexer_url).is_ok_and(|url| crate::urls::is_loopback(&url));
+    let (cell, builder) = if loopback {
+        (
+            &LOOPBACK_INDEXER_HTTP,
+            reqwest::Client::builder().no_proxy(),
+        )
+    } else {
+        (&INDEXER_HTTP, reqwest::Client::builder())
+    };
+    cell.get_or_init(|| {
+        builder
             .timeout(midnight_env::indexer_http_timeout())
             .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
+            .expect("the indexer client needs only the TLS backend reqwest::Client::new needs")
     })
 }
 
@@ -85,7 +101,7 @@ pub fn indexer_http_client() -> &'static reqwest::Client {
 pub async fn fetch_indexer_tip(
     indexer_url: &str,
 ) -> Result<(midnight_ledger::structure::LedgerParameters, u64), std::io::Error> {
-    fetch_indexer_tip_with_client(indexer_http_client(), indexer_url).await
+    fetch_indexer_tip_with_client(indexer_http_client(indexer_url), indexer_url).await
 }
 
 pub async fn fetch_indexer_tip_with_client(
@@ -140,7 +156,7 @@ pub async fn fetch_indexer_tip_with_client(
 
 /// Current indexer chain-tip block height (HTTP `block { height }`).
 pub async fn fetch_indexer_block_height(indexer_url: &str) -> Result<i64, std::io::Error> {
-    fetch_indexer_block_height_with_client(indexer_http_client(), indexer_url).await
+    fetch_indexer_block_height_with_client(indexer_http_client(indexer_url), indexer_url).await
 }
 
 pub async fn fetch_indexer_block_height_with_client(
@@ -186,7 +202,7 @@ pub async fn fetch_indexer_block_height_with_client(
 /// chain instance behind a network id, which a testnet reset replaces while keeping the id.
 pub async fn fetch_indexer_genesis_hash(indexer_url: &str) -> Result<String, std::io::Error> {
     let q = r#"query GenesisHash($offset: BlockOffset) { block(offset: $offset) { hash } }"#;
-    let resp = indexer_http_client()
+    let resp = indexer_http_client(indexer_url)
         .post(indexer_url)
         .json(&serde_json::json!({
             "query": q,
@@ -230,6 +246,60 @@ pub async fn fetch_indexer_ledger_parameters(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_net::{json_response, loopback_listener, run_child_behind_proxy};
+    use std::sync::atomic::Ordering;
+
+    const CHILD_INDEXER_VAR: &str = "OWS_TEST_INDEXER_CHILD_URL";
+
+    /// An indexer on this machine is plaintext, so a proxy named in the environment must not get its
+    /// queries: it could answer them in the indexer's place. Any other indexer keeps that proxy, which
+    /// some deployments need. The requests run in a child copy of this test binary with the proxy
+    /// variables set.
+    #[test]
+    fn only_a_remote_indexer_goes_through_the_environments_proxy() {
+        let (proxy, proxy_hits) =
+            loopback_listener(json_response(r#"{"data":{"block":{"height":7}}}"#));
+        let (indexer, indexer_hits) =
+            loopback_listener(json_response(r#"{"data":{"block":{"height":42}}}"#));
+
+        assert!(
+            run_child_behind_proxy(
+                "ledger_params::tests::indexer_requests_from_child",
+                CHILD_INDEXER_VAR,
+                &format!("http://{indexer}/api/v3/graphql"),
+                proxy,
+            ),
+            "the child's requests did not end where they should"
+        );
+        assert_eq!(
+            indexer_hits.load(Ordering::SeqCst),
+            1,
+            "the loopback indexer was not asked"
+        );
+        assert_eq!(
+            proxy_hits.load(Ordering::SeqCst),
+            1,
+            "the remote request skipped the proxy"
+        );
+    }
+
+    /// The child half of the test above; a no-op when run on its own.
+    #[test]
+    #[ignore = "run by only_a_remote_indexer_goes_through_the_environments_proxy"]
+    fn indexer_requests_from_child() {
+        let Ok(loopback) = std::env::var(CHILD_INDEXER_VAR) else {
+            return;
+        };
+        assert_eq!(
+            crate::block_on(fetch_indexer_block_height(&loopback)).unwrap(),
+            42
+        );
+        let remote = "http://indexer.invalid/api/v3/graphql";
+        assert_eq!(
+            crate::block_on(fetch_indexer_block_height(remote)).unwrap(),
+            7
+        );
+    }
 
     #[tokio::test]
     async fn a_failed_request_does_not_echo_the_url() {

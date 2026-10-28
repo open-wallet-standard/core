@@ -262,9 +262,16 @@ async fn dry_run_extrinsic(
     // Try HTTP first (some providers restrict this; we'll fall back to WS JSON-RPC).
     let http_attempt = async {
         let url = node_http_url(node_rpc_url)?;
-        let client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .connect_timeout(NODE_CONNECT_TIMEOUT)
-            .timeout(NODE_REQUEST_TIMEOUT)
+            .timeout(NODE_REQUEST_TIMEOUT);
+        // A node on this machine is plaintext, so a proxy named in the environment would receive the
+        // dry run and could answer it; reqwest makes no exception for loopback hosts. A remote node
+        // keeps the environment's proxy, which some deployments need to reach the network at all.
+        if reqwest::Url::parse(&url).is_ok_and(|u| is_loopback(&u)) {
+            builder = builder.no_proxy();
+        }
+        let client = builder
             .build()
             .map_err(|e| err(format!("system_dryRun client: {}", e.without_url())))?;
         let body = serde_json::json!({
@@ -448,6 +455,51 @@ pub fn broadcast_sealed(node_rpc_url: &str, signed_bytes: &[u8]) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_net::{json_response, loopback_listener, run_child_behind_proxy};
+    use std::sync::atomic::Ordering;
+
+    const CHILD_NODE_VAR: &str = "OWS_TEST_NODE_CHILD_URL";
+
+    /// A node on this machine is plaintext, so a proxy named in the environment must not get its dry
+    /// run; a remote node keeps that proxy. The dry runs run in a child copy of this test binary with
+    /// the proxy variables set.
+    #[test]
+    fn only_a_remote_node_dry_run_goes_through_the_environments_proxy() {
+        let dry_run = json_response(r#"{"jsonrpc":"2.0","id":1,"result":"0x00"}"#);
+        let (proxy, proxy_hits) = loopback_listener(dry_run.clone());
+        let (node, node_hits) = loopback_listener(dry_run);
+
+        assert!(
+            run_child_behind_proxy(
+                "submit::tests::node_dry_runs_from_child",
+                CHILD_NODE_VAR,
+                &format!("http://{node}"),
+                proxy,
+            ),
+            "the child's dry runs did not end where they should"
+        );
+        assert_eq!(
+            node_hits.load(Ordering::SeqCst),
+            1,
+            "the loopback node was not asked"
+        );
+        assert_eq!(
+            proxy_hits.load(Ordering::SeqCst),
+            1,
+            "the remote dry run skipped the proxy"
+        );
+    }
+
+    /// The child half of the test above; a no-op when run on its own.
+    #[test]
+    #[ignore = "run by only_a_remote_node_dry_run_goes_through_the_environments_proxy"]
+    fn node_dry_runs_from_child() {
+        let Ok(loopback) = std::env::var(CHILD_NODE_VAR) else {
+            return;
+        };
+        crate::block_on(dry_run_extrinsic(&loopback, "00")).unwrap();
+        crate::block_on(dry_run_extrinsic("http://node.invalid", "00")).unwrap();
+    }
 
     #[test]
     fn node_ws_url_normalizes_schemes() {

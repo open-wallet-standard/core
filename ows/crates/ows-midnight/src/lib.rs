@@ -16,6 +16,8 @@ mod midnight_env;
 mod mock_indexer;
 mod prover;
 mod submit;
+#[cfg(test)]
+mod test_net;
 mod tip_verify;
 mod urls;
 mod wallet;
