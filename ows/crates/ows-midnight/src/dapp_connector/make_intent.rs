@@ -92,7 +92,10 @@ pub(super) const GUARANTEED_SEGMENT: u16 = 0;
 #[serde(rename_all = "camelCase")]
 pub struct DesiredInput {
     pub kind: TransferKind,
-    #[serde(rename = "type")]
+    #[serde(
+        rename = "type",
+        deserialize_with = "super::build::deserialize_token_type"
+    )]
     pub token_type: String,
     #[serde(deserialize_with = "deserialize_u128")]
     pub value: u128,
@@ -111,9 +114,10 @@ pub struct MakeIntentRequest {
 }
 
 /// The `options` bag of a `makeIntent` request: the connector spec's `intentId` and `payFees`, plus the
-/// `ttl` extension.
+/// `ttl` extension. Any other key is refused, so a misspelled `ttl` cannot quietly leave a sealed offer
+/// on the default expiry.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MakeIntentOptions {
     intent_id: Option<IntentIdJson>,
     pay_fees: Option<bool>,
@@ -129,9 +133,14 @@ enum IntentIdJson {
     Keyword(String),
 }
 
+/// The request object. Any key it does not define is refused, as in `options`, so a `ttl` or `payFees`
+/// written beside `options` rather than in it is not dropped.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MakeIntentJson {
+    /// The key that routes the request ([`super::parse_connector_method`]); read there, not here.
+    #[serde(default, rename = "method")]
+    _method: Option<serde::de::IgnoredAny>,
     #[serde(default)]
     desired_inputs: Vec<DesiredInput>,
     #[serde(default)]
@@ -770,6 +779,29 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(req.ttl, Some(Timestamp::from_secs(ttl)));
+    }
+
+    /// A misspelled option is refused, not dropped: a `TTL` that quietly fell back to the default would
+    /// leave a sealed offer open longer than the maker asked.
+    #[test]
+    fn a_misspelled_option_is_refused() {
+        for bad in [r#"{"TTL":1}"#, r#"{"intentID":2}"#, r#"{"payfees":false}"#] {
+            let json = format!(
+                r#"{{"desiredInputs":[{{"kind":"unshielded","type":"night","value":1}}],"options":{bad}}}"#
+            );
+            let err = parse_make_intent_json(&json).unwrap_err().to_string();
+            assert!(err.contains("unknown field"), "{bad}: {err}");
+        }
+    }
+
+    /// An unfilled `type` would otherwise parse as NIGHT.
+    #[test]
+    fn a_blank_token_type_is_refused() {
+        for t in ["", "  "] {
+            let json =
+                format!(r#"{{"desiredInputs":[{{"kind":"unshielded","type":"{t}","value":1}}]}}"#);
+            assert!(parse_make_intent_json(&json).is_err(), "{t:?}");
+        }
     }
 
     #[test]

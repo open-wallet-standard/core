@@ -225,6 +225,43 @@ fn sealed_request_json(maker: &str) -> String {
 mod tests {
     use super::*;
 
+    /// A key a request does not define is refused, not dropped, at the top level as in `options`: a
+    /// `ttl` or `payFees` written beside `options` rather than in it would otherwise fall back to the
+    /// default without a word. `method`, which routes the request, is the one key every request takes.
+    #[test]
+    fn every_request_refuses_an_unknown_top_level_key() {
+        let refused = |what: &str, err: std::io::Error| {
+            let err = err.to_string();
+            assert!(err.contains("unknown field"), "{what}: {err}");
+        };
+        refused(
+            "makeIntent ttl",
+            parse_make_intent_json(r#"{"method":"makeIntent","ttl":5,"desiredInputs":[]}"#)
+                .unwrap_err(),
+        );
+        refused(
+            "makeTransfer payFees",
+            parse_make_transfer_json(
+                r#"{"method":"makeTransfer","payFees":false,"desiredOutputs":[]}"#,
+            )
+            .unwrap_err(),
+        );
+        refused(
+            "balanceUnsealedTransaction option",
+            parse_balance_unsealed_json(
+                r#"{"method":"balanceUnsealedTransaction","option":{"payFees":false},"tx":"00"}"#,
+            )
+            .unwrap_err(),
+        );
+        refused(
+            "balanceSealedTransaction payFees",
+            parse_balance_sealed_json(
+                r#"{"method":"balanceSealedTransaction","payFees":false,"makerTx":"00"}"#,
+            )
+            .unwrap_err(),
+        );
+    }
+
     fn method_of(json: &str) -> ConnectorMethod {
         parse_connector_method(json).unwrap()
     }

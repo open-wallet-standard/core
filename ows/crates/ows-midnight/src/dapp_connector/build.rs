@@ -78,7 +78,7 @@ pub enum TransferKind {
 #[serde(rename_all = "camelCase")]
 pub struct DesiredOutput {
     pub kind: TransferKind,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", deserialize_with = "deserialize_token_type")]
     pub token_type: String,
     #[serde(deserialize_with = "deserialize_u128")]
     pub value: u128,
@@ -131,6 +131,22 @@ pub(super) fn effects_from_movements<'a>(
         }
     }
     Ok(effects)
+}
+
+/// A desired input's or output's `type`: it must name a token. An empty or blank string would
+/// otherwise parse as NIGHT, so an unfilled template field would move NIGHT.
+pub(super) fn deserialize_token_type<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    let token_type = <String as Deserialize>::deserialize(deserializer)?;
+    if token_type.trim().is_empty() {
+        return Err(D::Error::custom(
+            "a token type must be named: \"night\" or a 32-byte hex token id",
+        ));
+    }
+    Ok(token_type)
 }
 
 /// Accept a u128 amount as either a JSON number or a decimal string. Routes through `serde_json::Value`

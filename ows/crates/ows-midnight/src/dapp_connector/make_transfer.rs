@@ -54,16 +54,21 @@ fn default_pay_fees() -> bool {
     true
 }
 
+/// The spec's options bag. Any other key is refused rather than ignored.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OptionsJson {
     #[serde(default = "default_pay_fees")]
     pay_fees: bool,
 }
 
+/// The request object. Any key it does not define is refused, as in `options`.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MakeTransferJson {
+    /// The key that routes the request ([`super::parse_connector_method`]); read there, not here.
+    #[serde(default, rename = "method")]
+    _method: Option<serde::de::IgnoredAny>,
     desired_outputs: Vec<DesiredOutput>,
     #[serde(default)]
     options: Option<OptionsJson>,
@@ -266,6 +271,20 @@ mod tests {
         assert!(!req.pay_fees);
         assert_eq!(req.desired_outputs[0].value, 5);
         assert_eq!(req.desired_outputs[0].kind, TransferKind::Shielded);
+    }
+
+    #[test]
+    fn a_misspelled_option_or_a_blank_token_type_is_refused() {
+        let misspelled = parse_make_transfer_json(
+            r#"{"desiredOutputs":[{"kind":"unshielded","type":"night","value":5,"recipient":"mn_addr_r"}],"options":{"payfees":false}}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(misspelled.contains("unknown field"), "{misspelled}");
+        assert!(parse_make_transfer_json(
+            r#"{"desiredOutputs":[{"kind":"unshielded","type":"","value":5,"recipient":"mn_addr_r"}]}"#,
+        )
+        .is_err());
     }
 
     #[test]

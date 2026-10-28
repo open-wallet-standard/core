@@ -44,16 +44,21 @@ fn default_pay_fees() -> bool {
     true
 }
 
+/// The spec's options bag. Any other key is refused rather than ignored.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OptionsJson {
     #[serde(default = "default_pay_fees")]
     pay_fees: bool,
 }
 
+/// The request object. Any key it does not define is refused, as in `options`.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BalanceSealedJson {
+    /// The key that routes the request ([`super::parse_connector_method`]); read there, not here.
+    #[serde(default, rename = "method")]
+    _method: Option<serde::de::IgnoredAny>,
     /// The maker offer: hex, a `swapoffer` string, or a stringified MIP-0006 payload. Accepts
     /// `makerTx`, or `tx`/`transaction` as aliases.
     #[serde(alias = "tx", alias = "transaction")]
@@ -671,6 +676,14 @@ mod tests {
         let req = parse_balance_sealed_json(r#"{"tx":"00","options":{"payFees":false}}"#).unwrap();
         assert_eq!(req.maker_tx, vec![0x00]);
         assert!(!req.pay_fees);
+    }
+
+    #[test]
+    fn rejects_an_unknown_option() {
+        let err = parse_balance_sealed_json(r#"{"tx":"00","options":{"payfees":false}}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown field"), "{err}");
     }
 
     #[test]
