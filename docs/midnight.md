@@ -686,6 +686,9 @@ imbalance, funds the merged tx's DUST fee, seals its half, and `Transaction::mer
 - The maker must keep all its value in the guaranteed section (segment 0). One with coins, an
   unshielded offer, or an imbalance in a fallible segment is refused, since that segment could
   fail on its own while the taker's payment stands.
+- The maker must both give and want a token, in whatever form it arrives (MIP-0006): a give-only
+  or want-only transaction is refused, as is one already balanced. So is a maker built for another
+  network, before the taker's half is proven.
 
 #### `balanceUnsealedTransaction`
 

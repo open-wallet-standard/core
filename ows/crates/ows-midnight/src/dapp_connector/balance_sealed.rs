@@ -123,7 +123,7 @@ pub(super) fn plan(
                 .addresses(&MidnightNetwork::from_chain_id(chain_id))
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             let complement =
-                sealed_maker_complement(&maker_tx, &addrs.unshielded, &addrs.shielded)?;
+                sealed_maker_complement(chain_id, &maker_tx, &addrs.unshielded, &addrs.shielded)?;
             let merge = plan_merge(
                 chain_id,
                 crypto_provider,
@@ -263,6 +263,7 @@ fn ensure_value_in_guaranteed_section(
 /// value balance is fixed by the binding signature); `Transaction::balance` reports the per-token
 /// surplus/shortage, which [`complement_from_balance`] negates into the taker's half.
 pub(super) fn sealed_maker_complement(
+    chain_id: &str,
     maker_bytes: &[u8],
     taker_unshielded_addr: &str,
     taker_shielded_addr: &str,
@@ -278,6 +279,8 @@ pub(super) fn sealed_maker_complement(
             "balanceSealedTransaction expects a Standard maker transaction",
         ));
     };
+    // A maker built for another network would only fail at the merge, after the taker's half is proven.
+    crate::balance_tx::ensure_tx_network_id_matches_chain(chain_id, &base.network_id)?;
     ensure_value_in_guaranteed_section(base, &imbalance)?;
     let maker_segments: BTreeSet<u16> = base
         .intents
@@ -287,12 +290,27 @@ pub(super) fn sealed_maker_complement(
             *seg_sp.deref()
         })
         .collect();
-    complement_from_balance(
+    let complement = complement_from_balance(
         imbalance,
         &maker_segments,
         taker_unshielded_addr,
         taker_shielded_addr,
-    )
+    )?;
+    // MIP-0006: a taker settles only an offer that both gives and wants, whatever form it came in. A
+    // want-only "offer" would have the taker pay with nothing in return.
+    match (
+        complement.desired_inputs.is_empty(),
+        complement.desired_outputs.is_empty(),
+    ) {
+        (false, false) => Ok(complement),
+        (true, true) => Err(std::io::Error::other(
+            "the maker transaction is already balanced, so there is nothing for a taker to \
+             complete; paying the fee of another transaction is not supported",
+        )),
+        _ => Err(std::io::Error::other(
+            "refusing a one-sided maker offer: a swap must both give and want a token (MIP-0006)",
+        )),
+    }
 }
 
 /// The contract actions a sealed maker offer carries. A merge preserves both halves' intents verbatim,
@@ -627,7 +645,19 @@ mod merge_tests {
 
         // The taker's complement, netted back per token in balance() convention: input supplies (+),
         // output absorbs (-). Merging it onto the maker must zero every token, i.e. taker == -maker.
-        let req = sealed_maker_complement(&bytes, "taker_unshielded", "taker_shielded").unwrap();
+        // The fixture only gives or only wants, which the taker path refuses (MIP-0006), so the
+        // negation is checked on the balance itself.
+        let Transaction::Standard(base) = &tx else {
+            panic!("a standard transaction");
+        };
+        let segments: BTreeSet<u16> = base.intents.iter().map(|p| *p.deref().0.deref()).collect();
+        let req = complement_from_balance(
+            tx.balance(None).unwrap(),
+            &segments,
+            "taker_unshielded",
+            "taker_shielded",
+        )
+        .unwrap();
         let mut taker: BTreeMap<String, i128> = BTreeMap::new();
         for inp in &req.desired_inputs {
             *taker.entry(inp.token_type.clone()).or_default() += inp.value as i128;
@@ -836,7 +866,12 @@ mod tests {
         }
 
         fn complement(maker: ProvenBase) -> Result<MakeIntentRequest, std::io::Error> {
-            sealed_maker_complement(&sealed(maker), "taker_unshielded", "taker_shielded")
+            sealed_maker_complement(
+                "midnight:preview",
+                &sealed(maker),
+                "taker_unshielded",
+                "taker_shielded",
+            )
         }
 
         fn assert_refused(maker: ProvenBase, what: &str) {
@@ -851,6 +886,29 @@ mod tests {
             assert_eq!(req.desired_outputs[0].value, 600_000);
             assert_eq!(req.desired_inputs.len(), 1);
             assert_eq!(req.desired_inputs[0].value, 50);
+        }
+
+        /// MIP-0006: an offer that only gives, or only wants, is refused whatever form it arrives in.
+        #[test]
+        fn refuses_a_one_sided_maker() {
+            for (maker, what) in [
+                (
+                    maker(offer(vec![give()], vec![change()]), None),
+                    "give-only",
+                ),
+                (maker(offer(vec![], vec![want()]), None), "want-only"),
+            ] {
+                let e = complement(maker).expect_err(what);
+                assert!(e.to_string().contains("one-sided"), "{what}: {e}");
+            }
+        }
+
+        #[test]
+        fn refuses_a_maker_for_another_network() {
+            let mut other = maker(offer(vec![give()], vec![change(), want()]), None);
+            other.network_id = "mainnet".to_string();
+            let e = complement(other).expect_err("a mainnet maker on preview");
+            assert!(e.to_string().contains("network id"), "{e}");
         }
 
         #[test]

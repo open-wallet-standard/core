@@ -1355,7 +1355,7 @@ pub(crate) fn adding_dust(pay_fees: bool, indexer_url: &str) -> Result<bool, std
 /// Reject a transaction whose ledger network id does not match the chain we're signing for, so a
 /// mainnet tx can never be balanced/signed while pointed at a testnet (or an ad-hoc feature testnet
 /// at another). Matched case-insensitively: a Midnight tx body may carry a capitalized network name.
-fn ensure_tx_network_id_matches_chain(
+pub(crate) fn ensure_tx_network_id_matches_chain(
     chain_id: &str,
     tx_network_id: &str,
 ) -> Result<(), std::io::Error> {
