@@ -1252,6 +1252,53 @@ struct FallibleUnshieldedDeficit {
     outputs: Vec<UtxoOutput>,
 }
 
+/// The NIGHT coin to reserve for the generationless fee registration, chosen once the payments are
+/// funded: a coin the guaranteed payment already spends, or one no payment needs, and never one a
+/// fallible payment needs. Reserving first took the wallet's best coin even when a fallible payment,
+/// such as a `makeTransfer`'s NIGHT leg, had nothing else to draw on. The payments are funded here in a
+/// dry run, in the order the real selection funds them afterwards, so both pick the same coins: largest
+/// first never reaches the reserve, which would otherwise have been picked in the dry run.
+fn reserve_for_fee_registration(
+    pool: &[UnshieldedUtxo],
+    sender_vk: &VerifyingKey,
+    sender_addr: &str,
+    guaranteed_deficits: &[(UnshieldedTokenType, u128)],
+    outputs_in: &[UtxoOutput],
+    fallible_deficits: &[FallibleUnshieldedDeficit],
+    tip: Timestamp,
+) -> Result<Option<UnshieldedUtxo>, std::io::Error> {
+    let mut paid: Vec<UtxoKey> = Vec::new();
+    let (_, guaranteed) = build_unshielded_balancing_offer(
+        pool,
+        &mut paid,
+        sender_vk,
+        sender_addr,
+        guaranteed_deficits,
+        outputs_in.to_vec(),
+        None,
+    )?;
+    for fd in fallible_deficits {
+        build_unshielded_balancing_offer(
+            pool,
+            &mut paid,
+            sender_vk,
+            sender_addr,
+            &fd.needs,
+            fd.outputs.clone(),
+            None,
+        )?;
+    }
+    let night_wire = crate::parse_token_type(Some("night"))?.to_wire_token_type();
+    let candidates: Vec<UnshieldedUtxo> =
+        sender_utxos_sorted(pool, sender_addr, sender_vk, &night_wire)?
+            .into_iter()
+            .filter(|u| {
+                guaranteed.contains(u) || !paid.contains(&(u.intent_hash.clone(), u.output_index))
+            })
+            .collect();
+    fee_sizing::pick_best_unregistered_for_dust(&candidates, tip)
+}
+
 /// Build a [`Prover`](crate::Prover) for authorize / prove paths.
 ///
 /// When `rpc["{chain_id}:prover"]` is set, posts to that proof server; otherwise proves in-process
@@ -1480,9 +1527,15 @@ fn plan_unsealed_proven_standard_tx(
         None
     };
     let registration_reserve = match &dust_tip {
-        Some((_, tip_secs)) => {
-            fee_sizing::pick_best_unregistered_for_dust(&pool, Timestamp::from_secs(*tip_secs))?
-        }
+        Some((_, tip_secs)) => reserve_for_fee_registration(
+            &pool,
+            sender_vk,
+            sender_addr,
+            &guaranteed_deficits,
+            &outputs_in,
+            &fallible_deficits,
+            Timestamp::from_secs(*tip_secs),
+        )?,
         None => None,
     };
 
@@ -2826,6 +2879,115 @@ mod tests {
         let mut raw = Vec::new();
         vk.serialize(&mut raw).unwrap();
         hex::encode(raw)
+    }
+
+    fn night_coin(owner_hex: &str, nights: u128, ih_byte: u8) -> UnshieldedUtxo {
+        night_pool_utxo(
+            owner_hex,
+            nights * midnight_ledger::structure::STARS_PER_NIGHT,
+            ih_byte,
+            0,
+        )
+    }
+
+    fn fallible_night_need(nights: u128) -> Vec<FallibleUnshieldedDeficit> {
+        vec![FallibleUnshieldedDeficit {
+            seg_id: 1,
+            needs: vec![(NIGHT, nights * midnight_ledger::structure::STARS_PER_NIGHT)],
+            outputs: vec![],
+        }]
+    }
+
+    const RESERVE_TIP: Timestamp = Timestamp::from_secs(1_000_000);
+
+    /// A fallible payment that needs the wallet's only NIGHT coin gets it; the coin is not reserved for
+    /// the fee registration first. A fresh wallet sending NIGHT with makeTransfer, whose NIGHT leg is
+    /// fallible, is exactly this case.
+    #[test]
+    fn the_fee_reserve_never_takes_a_coin_a_fallible_payment_needs() {
+        let pool = vec![night_coin(&sender_vk_hex(), 1_000, 1)];
+        let pay = fallible_night_need(1);
+        let reserve = reserve_for_fee_registration(
+            &pool,
+            &wallet_vk(),
+            "sender",
+            &[],
+            &[],
+            &pay,
+            RESERVE_TIP,
+        )
+        .unwrap();
+        assert_eq!(reserve, None);
+
+        let mut claimed = Vec::new();
+        build_unshielded_balancing_offer(
+            &pool,
+            &mut claimed,
+            &wallet_vk(),
+            "sender",
+            &[],
+            vec![],
+            reserve.as_ref(),
+        )
+        .unwrap();
+        build_unshielded_balancing_offer(
+            &pool,
+            &mut claimed,
+            &wallet_vk(),
+            "sender",
+            &pay[0].needs,
+            vec![],
+            None,
+        )
+        .expect("the payment draws on the wallet's coin");
+    }
+
+    /// With a coin to spare, the spare backs the registration and the payment keeps the coin it picked.
+    #[test]
+    fn the_fee_reserve_is_a_coin_the_payments_leave() {
+        let picked = night_coin(&sender_vk_hex(), 1_000, 1);
+        let spare = night_coin(&sender_vk_hex(), 1_000, 2);
+        let pool = vec![picked, spare.clone()];
+        let reserve = reserve_for_fee_registration(
+            &pool,
+            &wallet_vk(),
+            "sender",
+            &[],
+            &[],
+            &fallible_night_need(500),
+            RESERVE_TIP,
+        )
+        .unwrap();
+        assert_eq!(reserve, Some(spare));
+    }
+
+    /// A coin the guaranteed payment already spends can back the registration without a second input.
+    #[test]
+    fn the_fee_reserve_may_be_a_coin_the_guaranteed_payment_spends() {
+        let only = night_coin(&sender_vk_hex(), 1_000, 1);
+        let pool = vec![only.clone()];
+        let need = [(NIGHT, 500 * midnight_ledger::structure::STARS_PER_NIGHT)];
+        let reserve = reserve_for_fee_registration(
+            &pool,
+            &wallet_vk(),
+            "sender",
+            &need,
+            &[],
+            &[],
+            RESERVE_TIP,
+        )
+        .unwrap();
+        assert_eq!(reserve, Some(only));
+    }
+
+    /// Only the wallet's own coins are reserved, whatever owner an indexer row names.
+    #[test]
+    fn the_fee_reserve_skips_coins_another_key_owns() {
+        let pool = vec![night_coin(&other_vk_hex(), 5_000, 1)];
+        let reserve =
+            reserve_for_fee_registration(&pool, &wallet_vk(), "sender", &[], &[], &[], RESERVE_TIP)
+                .unwrap();
+        assert_eq!(reserve, None);
     }
 
     /// A plan with the wallet's consolidation: the transaction it balances, untouched, plus the
