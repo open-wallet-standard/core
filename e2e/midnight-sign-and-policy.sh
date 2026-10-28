@@ -164,7 +164,9 @@ cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
 # ── 2. Endpoints ──────────────────────────────────────────────────────────────────────────
-run "config: indexer + node endpoints" "ows config show" "$OWS" config show
+# `ows config show` prints URLs verbatim, and an indexer or node URL can carry an API key in its query.
+config_show_redacted() { "$OWS" config show | sed -E 's/\?[^[:space:]]*/?<redacted>/'; }
+run "config: indexer + node endpoints (URL queries redacted)" "ows config show" config_show_redacted
 
 # ── 3. OWNER-mode message signing — BIP-340 Schnorr with the unshielded key ────────────────
 run "OWNER-mode sign message on $CHAIN (signature = x-only pubkey ‖ sig)" \

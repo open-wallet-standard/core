@@ -135,7 +135,9 @@ fi
 export OWS_MNEMONIC="$MNEMONIC"
 
 # ── 2. Sanity: config (real vault path + endpoints; read-only) ────────────────────────────
-run "config: vault path + endpoints (read-only sanity)" "ows config show" "$OWS" config show
+# `ows config show` prints URLs verbatim, and an indexer or node URL can carry an API key in its query.
+config_show_redacted() { "$OWS" config show | sed -E 's/\?[^[:space:]]*/?<redacted>/'; }
+run "config: vault path + endpoints (URL queries redacted)" "ows config show" config_show_redacted
 
 # ── 3. Derive the unshielded Night address across the known networks (byte-for-byte) ──────
 say ""
