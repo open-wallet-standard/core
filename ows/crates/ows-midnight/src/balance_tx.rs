@@ -325,8 +325,20 @@ fn wrap_proven_standard(
     seg_id: u16,
     intent_out: Intent<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
 ) -> TxProven {
-    // Replace only the intent the wallet balanced; the dapp's other intents carry through untouched.
-    let intents = stx_in.intents.insert(seg_id, intent_out);
+    // Replace only the intent the wallet balanced; the dapp's other intents carry through untouched. A
+    // fresh intent the wallet put nothing into is left out: a fee-less balancing that funds only
+    // shielded value fills no unshielded offer and no dust section, and never sets its TTL, which the
+    // ledger would reject as expired.
+    let unused = intent_out.guaranteed_unshielded_offer.is_none()
+        && intent_out.fallible_unshielded_offer.is_none()
+        && intent_out.actions.iter_deref().next().is_none()
+        && intent_out.dust_actions.is_none()
+        && stx_in.intents.get(&seg_id).is_none();
+    let intents = if unused {
+        stx_in.intents.clone()
+    } else {
+        stx_in.intents.insert(seg_id, intent_out)
+    };
     Transaction::Standard(StandardTransaction {
         network_id: stx_in.network_id.clone(),
         intents,
@@ -2691,7 +2703,7 @@ mod tests {
             &empty_offer(),
             None,
             &empty_intent_skeleton(),
-            None,
+            Some(dust_registration_to(&wallet_vk(), Some(own_dust_address()))),
             Timestamp::from_secs(0),
         );
         let Transaction::Standard(stx) = wrap_proven_standard(&base, fresh, new_intent) else {
@@ -3286,6 +3298,36 @@ mod tests {
             reserve_for_fee_registration(&pool, &wallet_vk(), "sender", &[], &[], &[], RESERVE_TIP)
                 .unwrap();
         assert_eq!(reserve, None);
+    }
+
+    /// A fee-less balancing that funds only shielded value leaves no wallet intent behind: the fresh
+    /// skeleton it would have added carries nothing and a TTL of 0, which the ledger rejects as expired.
+    #[test]
+    fn a_balancing_that_adds_no_unshielded_value_adds_no_intent() {
+        let provider = MidnightSigner::mainnet()
+            .crypto_provider(&packed_signing_key(UNSHIELDED_SEED_HEX))
+            .unwrap();
+        let plan = BalancedPlan {
+            base: base_with_intents(vec![]),
+            seg_id: 1,
+            intent_in: empty_intent_skeleton(),
+            unshielded_offer: UnshieldedOffer {
+                inputs: vec![].into(),
+                outputs: vec![].into(),
+                signatures: vec![].into(),
+            },
+            fallible_offers: vec![],
+            intent_ttl: Timestamp::from_secs(0),
+            shielded: None,
+            dust: DustFeePlan::None,
+            consolidation: None,
+        };
+        let bytes = authorize_proven_tx("midnight:mainnet", &provider, plan).unwrap();
+        let Transaction::Standard(stx) = tagged_deserialize::<TxProven>(&mut &bytes[..]).unwrap()
+        else {
+            panic!("not a standard transaction");
+        };
+        assert_eq!(stx.intents.iter().count(), 0);
     }
 
     /// A plan with the wallet's consolidation: the transaction it balances, untouched, plus the
