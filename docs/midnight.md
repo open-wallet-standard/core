@@ -425,7 +425,9 @@ default, since it is the only network with a public indexer that needs no API ke
 and preprod, set the URL yourself: Midnight's
 [networks guide](https://docs.midnight.network/guides/networks-and-environments) lists the hosted
 endpoints, which take a per-network API key in a `?project_id=` query, or point it at your own
-indexer (for example `http://localhost:8088/api/v4/graphql`). Credentials in the URL (user info,
+indexer (for example `http://localhost:8088/api/v4/graphql`). A plaintext `http://` or `ws://` URL
+is accepted only for an indexer on this machine, as for the node and the proof server, since the
+connection carries the API key and the wallet's addresses. Credentials in the URL (user info,
 query) never appear in error messages and are left out of the snapshot cache key, so rotating a
 key keeps the snapshots, while switching to another indexer starts a fresh sync. Sync timeouts
 default to HTTP 30s, WS connect 30s, WS idle 90s, and stall 120s, each overridable from the

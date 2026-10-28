@@ -13,9 +13,10 @@ fn invalid_input(msg: impl Into<String>) -> std::io::Error {
     std::io::Error::other(msg.into())
 }
 
-/// Resolve the configured Midnight indexer URL for a CAIP-2 chain id.
+/// Resolve the configured Midnight indexer URL for a CAIP-2 chain id. A plaintext URL is accepted only
+/// for an indexer on this machine, as for the node and the proof server.
 pub fn resolve_indexer_url(chain_id: &str) -> Result<String, std::io::Error> {
-    Config::load_or_default()
+    let url = Config::load_or_default()
         .rpc_url(chain_id)
         .map(str::to_string)
         .ok_or_else(|| {
@@ -24,7 +25,9 @@ pub fn resolve_indexer_url(chain_id: &str) -> Result<String, std::io::Error> {
 to an indexer's GraphQL URL (Midnight lists the endpoints for each network at \
 https://docs.midnight.network/guides/networks-and-environments)"
             ))
-        })
+        })?;
+    crate::urls::refuse_plaintext_to_remote(&url, "indexer")?;
+    Ok(url)
 }
 
 /// Resolve an optional Midnight proof-server URL for a CAIP-2 chain id.
