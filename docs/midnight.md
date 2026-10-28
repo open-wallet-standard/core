@@ -608,12 +608,13 @@ behavior. Each method has its own submodule under `ows-midnight/src/dapp_connect
 deficit), then balances it with its **own** inputs, proves, signs, and seals. Fees are
 paid in **dust**, never in the transferred token.
 
-- Unshielded outputs ride the guaranteed offer of an intent keyed at a **non-zero intent
-  id** — id 0 names the guaranteed segment, which is built across every intent rather than
-  belonging to one, so the ledger rejects an intent declared there (surfaced on-chain as
-  `Custom error: 167`). The outputs still execute unconditionally, in segment 0 with every
-  other intent's guaranteed half; only the *intent's id* is non-zero.
-- Shielded outputs ride the guaranteed Zswap offer directly.
+- Unshielded outputs ride the **fallible** offer of intent 1, and the wallet funds them from its
+  NIGHT inside that same offer, with the change: the whole NIGHT leg executes in segment 1, which
+  keeps it off the guaranteed section's tight time-to-dismiss budget. The intent id cannot be 0,
+  which names the guaranteed segment that every intent shares; the ledger rejects an intent declared
+  there (surfaced on-chain as `Custom error: 167`). So the effects report the NIGHT outflow at
+  segment 1, and a landed transfer can partly fail: the fee is spent even if the NIGHT leg is not.
+- Shielded outputs ride the guaranteed Zswap offer directly, in segment 0 with the DUST fee.
 - The outputs-only proven transaction reuses the same `plan_unsealed_proven_tx →
   authorize_proven_tx` tail as `balanceUnsealed` — one "diagonal" that every method funnels
   into.
@@ -926,10 +927,10 @@ wallet's own address with the balanced outputs.
 ### The credential
 
 `OWS_PASSPHRASE` carries either the **owner envelope passphrase** (decrypts the packed `MNK1` role
-seeds and builds the `MidnightCryptoProvider`) or an **api-key token**, which goes through the same
-policy check as on every other chain before the key is decrypted. That check sees the connector
-request, the dapp's transaction, but not what the wallet adds while balancing it: its own inputs and
-change, and the DUST fee. All bearer key material stays in `ows-signer`; `ows-midnight` holds none,
+seeds and builds the `MidnightCryptoProvider`) or an **api-key token**, which runs both policy
+passes exactly as `sign tx` does: the request's shape before the key is decrypted, then the planned
+effects, the wallet's own inputs, change and DUST fee included, before anything is proved or
+broadcast. All bearer key material stays in `ows-signer`; `ows-midnight` holds none,
 not even while sizing the fee, where the signer hands it mock-proven sections rather than the
 key-bearing preimages (enforced by the `no_key_material_gate` workspace test).
 
@@ -989,6 +990,11 @@ signature from doubling as a transaction signature: the ledger checks intent inp
 registrations with this same key, over SHA-256 of a `data_to_sign` that never starts with the
 prefix. The result is the 32-byte x-only public key followed by the 64-byte signature, hex-encoded.
 
+The frame names no network, and the key is the same on every network, so a signature made on
+preview is just as valid for the wallet's mainnet address. A policy that allows message signing only
+on `midnight:preview` limits which command runs, not where its signatures can be used; give an agent
+message signing only where any network's verifier may see the result.
+
 Raw hash signing (`sign_hash` in `ows-lib`, `signHash` in the bindings) is refused for Midnight.
 Nothing on Midnight signs a caller-supplied digest, and a raw signature with this key could authorize
 a spend.
@@ -1039,11 +1045,14 @@ and every policy on the key runs both times:
    under `chain_extra`, and every policy runs again. The declarative rules are re-checked,
    since planning can outlast an expiry, and the executables decide on the movement.
 
-So an executable policy sees each Midnight transaction **twice**. It should **allow when
-`chain_extra` is absent**, which is the first pass, and decide once it is present. A program
-that denies whenever the effects are missing denies every Midnight transaction at the first
-pass; to fail closed, deny inside the second pass instead, for example when `chain_extra` is
-present but its `segment_effects` don't parse.
+So an executable policy sees each Midnight transaction **twice**: once without `chain_extra`,
+then with it. Tell the passes apart by what the request **is**, never by a missing field:
+`chain_extra` is just as absent for a Midnight `sign message`, for a balance read, and for every
+other chain the same wallet can sign for, and a token is scoped to a wallet, not to a chain
+family. So allow the first pass only for `request_type == "sign_transaction"` on a `midnight:`
+chain, decide on the second, and deny every other request type and chain unless you mean the
+token to have it. To fail closed, also deny inside the second pass when its `segment_effects`
+don't parse.
 
 The Midnight effects are handed to the program under **`transaction.chain_extra`**, not the
 generic `transaction.effects` field. That field would imply a full account of *all* a
@@ -1073,21 +1082,31 @@ effects, so parse it before doing arithmetic on it (a JSON number would lose pre
 2^53). `segment == 0` is the guaranteed segment, always executed and pooled
 across every intent in the transaction; anything non-zero is one intent's fallible half,
 allowed to fail on its own (see
-[Intents and segments](#intents-and-segments-are-not-the-same-thing)). A cap that treats all movement the same sums across every segment;
-one that only bounds what *will* execute can restrict itself to segment 0:
+[Intents and segments](#intents-and-segments-are-not-the-same-thing)). Cap outflows in **every**
+segment: a fallible segment normally executes, it only *may* fail, and `makeTransfer` itself sends
+its NIGHT in segment 1. Only an inflow in a fallible segment is uncertain, so never let one offset
+an outflow. Summing the absolute movement over all segments, as below, is the simple conservative
+form:
 
 ```python
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 import sys, json
 ctx = json.load(sys.stdin)
+midnight = ctx["chain_id"].startswith("midnight:")
+signing = ctx["request_type"] == "sign_transaction"
 extra = (ctx.get("transaction") or {}).get("chain_extra")
-if extra is None:  # first pass: nothing planned yet, the second pass decides
-    print(json.dumps({"allow": True, "reason": "first pass"}))
+def verdict(allow, reason):
+    print(json.dumps({"allow": allow, "reason": reason}))
     sys.exit()
+if midnight and ctx["request_type"] == "read_balance":  # unseals the key to read balances; signs nothing
+    verdict(True, "balance read")
+if not (midnight and signing):
+    verdict(False, f"{ctx['request_type']} on {ctx['chain_id']} is not what this key is for")
+if extra is None:  # a Midnight transaction's first pass: nothing planned yet, the second decides
+    verdict(True, "first pass")
 segs = extra.get("segment_effects", [])
 total = sum(abs(int(d)) for s in segs for e in s.get("effects", []) for _, d in e.get("diff", []))
-print(json.dumps({"allow": total <= 1_000_000,
-                  "reason": f"summed movement {total} (cap 1000000)"}))
+verdict(total <= 1_000_000, f"summed movement {total} (cap 1000000)")
 ```
 
 > **⚠ A fallible segment id is an identifier, not a sequence number.** It is the id of the
@@ -1096,12 +1115,14 @@ print(json.dumps({"allow": total <= 1_000_000,
 > small or contiguous ids, and never read one as a position: test guaranteed-versus-fallible
 > as `segment == 0` versus `segment != 0`.
 
-Registered as a policy that `deny`s on failure:
+Registered as a policy that `deny`s on failure, with the chain allowlist as a declarative rule
+too:
 
 ```json
 { "id": "midnight-move-cap", "name": "Midnight movement cap", "version": 1,
-  "created_at": "2026-07-15T00:00:00Z", "rules": [],
-  "executable": "/tmp/cap.py", "action": "deny" }
+  "created_at": "2026-07-15T00:00:00Z",
+  "rules": [{ "type": "allowed_chains", "chain_ids": ["midnight:preprod"] }],
+  "executable": "/home/you/.ows/plugins/policies/midnight-move-cap.py", "action": "deny" }
 ```
 
 Then minted into a key (`ows key create … --policy midnight-move-cap`, see
@@ -1286,8 +1307,6 @@ effect-aware pass).
 ows config show
 # …
 # RPC endpoints:
-#   midnight:mainnet:node    https://rpc.mainnet.midnight.network/                    (default)
-#   midnight:preprod:node    https://rpc.preprod.midnight.network/                    (default)
 #   midnight:preview         https://indexer.preview.midnight.network/api/v4/graphql  (default)
 #   midnight:preview:node    https://rpc.preview.midnight.network/                    (default)
 #   midnight:preview:prover  http://127.0.0.1:6300                                    (custom)
@@ -1299,7 +1318,10 @@ understanding why is central to how Midnight commands reach the network.
 
 Only preview ships a default indexer: mainnet and preprod have no public indexer that answers
 without an API key, so their `midnight:<net>` entry has to be set (see
-[Fund balance](#fund-balance-ows-fund-balance)). All three networks ship a default node.
+[Fund balance](#fund-balance-ows-fund-balance)). The same goes for their `midnight:<net>:node`
+entry: only preview ships a default node, and Midnight's
+[networks guide](https://docs.midnight.network/guides/networks-and-environments) lists the hosted
+mainnet and preprod endpoints, which take a `?project_id=` key.
 
 The sample above shows a custom `:prover` entry. That key is **not** shipped in defaults, so
 it appears in `config show` only after you add it to `~/.ows/config.json`.
@@ -1337,7 +1359,11 @@ which can burn its DUST as fees. The unshielded key, which controls NIGHT and ot
 tokens, never leaves the signer. Only point `:prover` at a proof server you trust as much as the
 wallet itself, and prefer a local instance (`http://127.0.0.1:6300`). A plaintext `http://` URL
 is accepted only for a loopback address; anything else needs `https://`. Credentials in the URL
-never appear in error messages.
+never appear in error messages. Requests to the proof server ignore `HTTP_PROXY` and `ALL_PROXY`
+and follow no redirect, so whatever runs `ows` cannot divert the keys by setting the environment.
+A loopback port is still no proof of identity: any local process can listen on `127.0.0.1:6300`
+while the proof server is down, so on a machine shared with an agent, keep a local proof server
+running or leave `:prover` unset and prove in-process.
 
 Indexer and node are resolved by **separate** functions on purpose. Both are exact lookups on
 their key — `resolve_indexer_url` on `midnight:<net>`, `resolve_midnight_node_rpc_url` on
