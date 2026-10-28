@@ -704,13 +704,16 @@ exist depending on the wallet's NIGHT registration state:
 
 - **Generationless DUST** — when the wallet has *unregistered* NIGHT inputs, a dust
   registration is derived from them on the fly.
-- **DUST spend proofs** — when all NIGHT is already registered, existing dust is spent with
-  proofs.
+- **DUST spend proofs** — when all NIGHT is already registered, or the unregistered NIGHT has not
+  yet generated enough to cover the fee, existing dust is spent with proofs.
 
 Fee sizing is done by mock-proving the shielded/dust fragments offline (through the crypto
 provider's `build_preimage_dust_spends`) so the fee is right before the real proof is
 built. The best-Dust NIGHT coin is reserved for the fee registration, and leftover NIGHT is
-rotated through a fallible offer so change returns cleanly.
+rotated through a fallible offer so change returns cleanly. Both serve the registration only: when
+the reserved coin cannot cover the fee, the balancing is planned again without it or the rotation,
+and a DUST spend pays. Spending them beside the spend would cost fee for both, and re-creating the
+reserved coin would restart its age, so a young coin would never get to pay.
 
 ### The effect model (what the policy seam gates on)
 

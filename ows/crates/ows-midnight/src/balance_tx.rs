@@ -53,7 +53,7 @@ use crate::UnshieldedUtxo;
 
 mod fee_sizing;
 pub(crate) use fee_sizing::{size_merge_dust_fee, splice_mock_shielded_for_sizing, MergeDustFee};
-use fee_sizing::{DustFeeContext, DustFeePlan};
+use fee_sizing::{DustFeeContext, DustFeePlan, RegistrationFee};
 
 type TxProven = Transaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>;
 
@@ -1358,6 +1358,141 @@ fn ensure_tx_network_id_matches_chain(
     Ok(())
 }
 
+/// The wallet's unshielded balancing of one transaction: the guaranteed offer and the coins it spends,
+/// each fallible segment's offer, and the consolidation that only a fee-registration reserve brings.
+struct UnshieldedBalancing {
+    offer: UnshieldedOffer<MnSig, InMemoryDB>,
+    selected: Vec<UnshieldedUtxo>,
+    fallible_offers: Vec<(u16, UnshieldedOffer<MnSig, InMemoryDB>)>,
+    consolidation: Option<Consolidation>,
+}
+
+/// What the wallet's unshielded balancing is planned from: the transaction and the segment of its
+/// balancing intent, the wallet's coins and key, what the guaranteed section and each fallible segment
+/// are short of, the outputs the balancing intent re-emits, and the chain tip a consolidation's TTL is
+/// aligned to.
+struct BalancingInputs<'a> {
+    base: &'a StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
+    seg_id: u16,
+    pool: &'a [UnshieldedUtxo],
+    sender_vk: &'a VerifyingKey,
+    sender_addr: &'a str,
+    guaranteed_deficits: &'a [(UnshieldedTokenType, u128)],
+    outputs_in: &'a [UtxoOutput],
+    fallible_deficits: &'a [FallibleUnshieldedDeficit],
+    tip_secs: u64,
+}
+
+/// Plan the wallet's unshielded balancing from `inputs`: the guaranteed offer funding the guaranteed
+/// deficits and re-emitting the balancing intent's outputs, with `reserve` spent beside it when there
+/// is one, then each fallible deficit in its own segment from the coins left, so no coin is spent
+/// twice.
+///
+/// With a reserve, the wallet's remaining unregistered NIGHT is rotated onto a fresh fallible segment:
+/// consolidated into a single self-output, so it is spent off the budget-tight guaranteed section, with
+/// a TTL aligned to the tip. That is balance-neutral (the inputs equal the one change output), so it
+/// cannot unbalance the transaction, and it is built only when there are at least two leftover coins to
+/// fold and a segment free for them.
+fn plan_unshielded_balancing(
+    inputs: &BalancingInputs,
+    reserve: Option<&UnshieldedUtxo>,
+) -> Result<UnshieldedBalancing, std::io::Error> {
+    let BalancingInputs {
+        base,
+        seg_id,
+        pool,
+        sender_vk,
+        sender_addr,
+        guaranteed_deficits,
+        outputs_in,
+        fallible_deficits,
+        tip_secs,
+    } = *inputs;
+    let mut claimed: Vec<UtxoKey> = Vec::new();
+    let (offer, selected) = build_unshielded_balancing_offer(
+        pool,
+        &mut claimed,
+        sender_vk,
+        sender_addr,
+        guaranteed_deficits,
+        outputs_in.to_vec(),
+        reserve,
+    )?;
+
+    let mut fallible_offers: Vec<(u16, UnshieldedOffer<MnSig, InMemoryDB>)> = Vec::new();
+    for fd in fallible_deficits {
+        let (foffer, _fselected) = build_unshielded_balancing_offer(
+            pool,
+            &mut claimed,
+            sender_vk,
+            sender_addr,
+            &fd.needs,
+            fd.outputs.clone(),
+            None,
+        )?;
+        fallible_offers.push((fd.seg_id, foffer));
+    }
+
+    let mut consolidation = None;
+    if reserve.is_some() {
+        let leftovers = consolidation_leftovers(pool, &claimed, sender_addr, sender_vk)?;
+        // A fresh segment distinct from every existing intent and the chosen balancing segment. The
+        // consolidation is optional, so a transaction that leaves no free segment goes without it.
+        let seg = fresh_segment_id(base)
+            .ok()
+            .zip(seg_id.checked_add(1))
+            .map(|(fresh, after_balancing)| fresh.max(after_balancing));
+        if let Some(seg) = seg.filter(|_| leftovers.len() >= 2) {
+            let offer = build_fallible_consolidation_offer(
+                &leftovers,
+                &mut claimed,
+                sender_vk,
+                sender_addr,
+            )?;
+            consolidation = Some(Consolidation {
+                segment: seg,
+                offer,
+                ttl: chain_aligned_intent_ttl(Timestamp::from_secs(tip_secs)),
+            });
+        }
+    }
+
+    Ok(UnshieldedBalancing {
+        offer,
+        selected,
+        fallible_offers,
+        consolidation,
+    })
+}
+
+/// Pay the DUST fee by a generationless registration when the wallet's unregistered NIGHT can, over a
+/// balancing planned from `inputs` with the coin `reserve`d for it, and otherwise by a DUST spend over a
+/// balancing planned again without that coin. The reserve, and the consolidation that comes with it,
+/// only serve the registration: a spend paying beside them would pay fee for both, and re-creating the
+/// reserved coin resets its age, so a young coin that cannot pay yet never would while the wallet
+/// transacts.
+fn balance_and_size_fee(
+    inputs: &BalancingInputs,
+    reserve: Option<&UnshieldedUtxo>,
+    register: impl Fn(&UnshieldedBalancing) -> Result<Option<RegistrationFee>, std::io::Error>,
+    spend: impl Fn(&UnshieldedBalancing) -> Result<(DustFeePlan, Timestamp), std::io::Error>,
+) -> Result<(UnshieldedBalancing, DustFeePlan, Timestamp), std::io::Error> {
+    let balancing = plan_unshielded_balancing(inputs, reserve)?;
+    if let Some(registration) = register(&balancing)? {
+        return Ok((
+            balancing,
+            DustFeePlan::Registration(registration.dust_actions),
+            registration.intent_ttl,
+        ));
+    }
+    let balancing = match reserve {
+        Some(_) => plan_unshielded_balancing(inputs, None)?,
+        None => balancing,
+    };
+    let (dust, intent_ttl) = spend(&balancing)?;
+    Ok((balancing, dust, intent_ttl))
+}
+
 /// Plan (but do not authorize) the balancing of an already-proven (`proof,embedded-fr`) unsealed
 /// Standard transaction: parse it, plan the wallet's shielded funding, build the balanced unshielded
 /// offer, and size the DUST fee — all without real proving. The returned [`BalancedPlan`] carries no
@@ -1514,7 +1649,6 @@ fn plan_unsealed_proven_standard_tx(
             scope,
         ),
     )?;
-    let mut claimed: Vec<UtxoKey> = Vec::new();
 
     // When paying a DUST fee, fetch the chain tip up front so the best-Dust NIGHT coin can be reserved
     // for the generationless registration before the balancing inputs are selected. Reusing this tip
@@ -1538,114 +1672,108 @@ fn plan_unsealed_proven_standard_tx(
         )?,
         None => None,
     };
-
-    let (offer, selected) = build_unshielded_balancing_offer(
-        &pool,
-        &mut claimed,
+    let balancing_inputs = BalancingInputs {
+        base: &base,
+        seg_id,
+        pool: &pool,
         sender_vk,
         sender_addr,
-        &guaranteed_deficits,
-        outputs_in,
-        registration_reserve.as_ref(),
-    )?;
-
-    // Fund each fallible unshielded deficit in its own segment from the same (now-partly-claimed) pool.
-    let mut fallible_offers: Vec<(u16, UnshieldedOffer<MnSig, InMemoryDB>)> = Vec::new();
-    for fd in &fallible_deficits {
-        let (foffer, _fselected) = build_unshielded_balancing_offer(
-            &pool,
-            &mut claimed,
-            sender_vk,
-            sender_addr,
-            &fd.needs,
-            fd.outputs.clone(),
-            None,
-        )?;
-        fallible_offers.push((fd.seg_id, foffer));
-    }
-
-    // On DUST-fee chains, rotate the wallet's remaining unregistered NIGHT (beyond the coin reserved
-    // for the registration) onto a fresh fallible segment: consolidate it into a single self-output so
-    // it is spent off the budget-tight guaranteed section. Balance-neutral (inputs equal the one
-    // change output), so it cannot unbalance the transaction; gated on a reservation existing and at
-    // least two leftover coins to fold.
-    let mut consolidation = None;
-    if adding_dust && registration_reserve.is_some() {
-        let leftovers = consolidation_leftovers(&pool, &claimed, sender_addr, sender_vk)?;
-        // A fresh segment distinct from every existing intent and the chosen balancing segment. The
-        // consolidation is optional, so a transaction that leaves no free segment goes without it.
-        let seg = fresh_segment_id(&base)
-            .ok()
-            .zip(seg_id.checked_add(1))
-            .map(|(fresh, after_balancing)| fresh.max(after_balancing));
-        if let Some(seg) = seg.filter(|_| leftovers.len() >= 2) {
-            let offer = build_fallible_consolidation_offer(
-                &leftovers,
-                &mut claimed,
-                sender_vk,
-                sender_addr,
-            )?;
-            let tip_secs = dust_tip.as_ref().map(|(_, t)| *t).unwrap_or(0);
-            consolidation = Some(Consolidation {
-                segment: seg,
-                offer,
-                ttl: chain_aligned_intent_ttl(Timestamp::from_secs(tip_secs)),
-            });
-        }
-    }
+        guaranteed_deficits: &guaranteed_deficits,
+        outputs_in: &outputs_in,
+        fallible_deficits: &fallible_deficits,
+        tip_secs: dust_tip.as_ref().map(|(_, t)| *t).unwrap_or(0),
+    };
 
     // Size the DUST fee against a stand-in tx that already carries the shielded section (mock-proved,
-    // fixed-size) and the fallible balancing offers, so the fee — which covers the whole tx — is right
-    // even though the real shielded proving is deferred past the seam.
-    let mut stx_for_sizing = match &shielded {
-        Some(s) => fee_sizing::splice_mock_shielded_for_sizing(&base, crypto_provider, s)?,
-        None => base.clone(),
+    // fixed-size), the fallible balancing offers and the consolidation, so the fee — which covers the
+    // whole tx — is right even though the real shielded proving is deferred past the seam. The chosen
+    // intent is rebuilt (guaranteed offer + dust) during sizing and authorization, so its own fallible
+    // offer, if any, must be threaded into that rebuild rather than left where the rebuild would drop
+    // it.
+    let sizing_tx = |balancing: &UnshieldedBalancing| -> Result<_, std::io::Error> {
+        let mut stx = match &shielded {
+            Some(s) => fee_sizing::splice_mock_shielded_for_sizing(&base, crypto_provider, s)?,
+            None => base.clone(),
+        };
+        for (seg, foffer) in &balancing.fallible_offers {
+            attach_fallible_offer(&mut stx, *seg, foffer);
+        }
+        if let Some(c) = &balancing.consolidation {
+            c.add_to(&mut stx)?;
+        }
+        let chosen_fallible = balancing
+            .fallible_offers
+            .iter()
+            .find(|(s, _)| *s == seg_id)
+            .map(|(_, o)| o.clone());
+        Ok((stx, chosen_fallible))
     };
-    for (seg, foffer) in &fallible_offers {
-        attach_fallible_offer(&mut stx_for_sizing, *seg, foffer);
-    }
-    if let Some(c) = &consolidation {
-        c.add_to(&mut stx_for_sizing)?;
-    }
-    // The chosen intent is rebuilt (guaranteed offer + dust) during sizing and authorization, so its
-    // own fallible offer, if any, must be threaded into that rebuild rather than left where the rebuild
-    // would drop it.
-    let chosen_fallible = fallible_offers
-        .iter()
-        .find(|(s, _)| *s == seg_id)
-        .map(|(_, o)| o.clone());
 
     // On a chain with a live dust ledger (Preview/Preprod, mainnet too), fees are paid with a DUST
-    // section: a generationless registration signed by the wallet (no proof) when it has unregistered
-    // NIGHT, otherwise a proof-bearing spend of its generated dust. Both that section and an
-    // hour-past-tip TTL need the chain time, so fetch the tip once (it also carries the ledger
-    // parameters used to size the fee). The fee is sized here without real proving; the proof-bearing
-    // spend is realized post-seam by the signer.
-    let (dust, intent_ttl) = if adding_dust {
-        let (ledger_params, tip_secs) = dust_tip.expect("dust tip fetched above when adding_dust");
-        let dust_ctime = Timestamp::from_secs(tip_secs);
-        let dust_pk = crypto_provider
-            .dust_public_key()
-            .map_err(|e| err(e.to_string()))?;
-        let night_vk = sender_vk.clone();
-        fee_sizing::size_dust_fee(&DustFeeContext {
-            stx: &stx_for_sizing,
-            seg_id,
-            intent_in: &intent_in,
-            offer: &offer,
-            fallible_offer: chosen_fallible.as_ref(),
-            selected: &selected,
-            dust_pk,
-            night_vk,
-            crypto_provider,
-            dust_ctime,
-            ledger_params: &ledger_params,
-            indexer_url,
-            scope,
-        })?
-    } else {
-        (DustFeePlan::None, intent_in.ttl)
+    // section: a generationless registration signed by the wallet (no proof) when its unregistered
+    // NIGHT can cover the fee, otherwise a proof-bearing spend of its generated dust. Both that section
+    // and an hour-past-tip TTL need the chain time, taken from the tip fetched above (it also carries
+    // the ledger parameters used to size the fee). The fee is sized here without real proving; the
+    // proof-bearing spend is realized post-seam by the signer.
+    let (balancing, dust, intent_ttl) = match dust_tip {
+        Some((ledger_params, tip_secs)) => {
+            let dust_ctime = Timestamp::from_secs(tip_secs);
+            let dust_pk = crypto_provider
+                .dust_public_key()
+                .map_err(|e| err(e.to_string()))?;
+            balance_and_size_fee(
+                &balancing_inputs,
+                registration_reserve.as_ref(),
+                |balancing| {
+                    let (stx, chosen_fallible) = sizing_tx(balancing)?;
+                    fee_sizing::size_registration_fee(&DustFeeContext {
+                        stx: &stx,
+                        seg_id,
+                        intent_in: &intent_in,
+                        offer: &balancing.offer,
+                        fallible_offer: chosen_fallible.as_ref(),
+                        selected: &balancing.selected,
+                        dust_pk,
+                        night_vk: sender_vk.clone(),
+                        crypto_provider,
+                        dust_ctime,
+                        ledger_params: &ledger_params,
+                        indexer_url,
+                        scope,
+                    })
+                },
+                |balancing| {
+                    let (stx, chosen_fallible) = sizing_tx(balancing)?;
+                    fee_sizing::size_spend_fee(&DustFeeContext {
+                        stx: &stx,
+                        seg_id,
+                        intent_in: &intent_in,
+                        offer: &balancing.offer,
+                        fallible_offer: chosen_fallible.as_ref(),
+                        selected: &balancing.selected,
+                        dust_pk,
+                        night_vk: sender_vk.clone(),
+                        crypto_provider,
+                        dust_ctime,
+                        ledger_params: &ledger_params,
+                        indexer_url,
+                        scope,
+                    })
+                },
+            )?
+        }
+        None => (
+            plan_unshielded_balancing(&balancing_inputs, None)?,
+            DustFeePlan::None,
+            intent_in.ttl,
+        ),
     };
+    let UnshieldedBalancing {
+        offer,
+        fallible_offers,
+        consolidation,
+        ..
+    } = balancing;
 
     Ok(BalancedPlan {
         base,
@@ -2940,6 +3068,176 @@ mod tests {
             None,
         )
         .expect("the payment draws on the wallet's coin");
+    }
+
+    /// The reserved coin and the consolidation serve only a registration. When the registration
+    /// cannot pay, the DUST spend is sized over a balancing planned again without the reserve, so the
+    /// transaction pays for neither, and the reserved coin is not re-created younger. A registration
+    /// that pays keeps the balancing it was sized over, and without a reserve there is nothing to drop.
+    #[test]
+    fn a_dust_spend_is_sized_over_a_balancing_without_the_reserve() {
+        let stars = midnight_ledger::structure::STARS_PER_NIGHT;
+        let payment = night_coin(&sender_vk_hex(), 1_000, 1);
+        let reserved = night_coin(&sender_vk_hex(), 800, 2);
+        let pool = vec![
+            payment.clone(),
+            reserved.clone(),
+            night_coin(&sender_vk_hex(), 10, 3),
+            night_coin(&sender_vk_hex(), 10, 4),
+        ];
+        let base = base_with_intents(vec![]);
+        let vk = wallet_vk();
+        let need = [(NIGHT, 500 * stars)];
+        let inputs = BalancingInputs {
+            base: &base,
+            seg_id: 1,
+            pool: &pool,
+            sender_vk: &vk,
+            sender_addr: "sender",
+            guaranteed_deficits: &need,
+            outputs_in: &[],
+            fallible_deficits: &[],
+            tip_secs: RESERVE_TIP.to_secs(),
+        };
+        let registered = std::cell::Cell::new(0);
+        let spent = std::cell::Cell::new(0);
+
+        let (balancing, dust, _) = balance_and_size_fee(
+            &inputs,
+            Some(&reserved),
+            |with_reserve| {
+                registered.set(registered.get() + 1);
+                assert!(with_reserve.selected.contains(&reserved));
+                assert!(with_reserve.consolidation.is_some());
+                Ok(None)
+            },
+            |without_reserve| {
+                spent.set(spent.get() + 1);
+                assert_eq!(without_reserve.selected, vec![payment.clone()]);
+                assert!(without_reserve.consolidation.is_none());
+                Ok((DustFeePlan::None, Timestamp::from_secs(7)))
+            },
+        )
+        .unwrap();
+        assert_eq!((registered.get(), spent.get()), (1, 1));
+        assert_eq!(balancing.selected, vec![payment.clone()]);
+        assert!(balancing.consolidation.is_none());
+        assert!(matches!(dust, DustFeePlan::None));
+
+        let registration = dust_registration_to(&vk, Some(own_dust_address()));
+        let (balancing, dust, intent_ttl) = balance_and_size_fee(
+            &inputs,
+            Some(&reserved),
+            |_| {
+                Ok(Some(RegistrationFee {
+                    dust_actions: registration.clone(),
+                    intent_ttl: Timestamp::from_secs(9),
+                }))
+            },
+            |_| panic!("a registration that pays needs no DUST spend"),
+        )
+        .unwrap();
+        assert!(balancing.selected.contains(&reserved));
+        assert!(balancing.consolidation.is_some());
+        assert!(matches!(dust, DustFeePlan::Registration(_)));
+        assert_eq!(intent_ttl, Timestamp::from_secs(9));
+
+        let (balancing, _, _) = balance_and_size_fee(
+            &inputs,
+            None,
+            |without_reserve| {
+                assert!(!without_reserve.selected.contains(&reserved));
+                Ok(None)
+            },
+            |_| Ok((DustFeePlan::None, Timestamp::from_secs(7))),
+        )
+        .unwrap();
+        assert_eq!(balancing.selected, vec![payment.clone()]);
+        assert!(balancing.consolidation.is_none());
+    }
+
+    /// A registration of the wallet's NIGHT pays its own transaction's fee when that NIGHT has generated
+    /// enough DUST, sized with no network: a registration of the wallet's own key to its own DUST
+    /// address, allowing at least the fee of the transaction it registers in. A coin that generated
+    /// nothing yet gives no registration, so the caller pays with a DUST spend instead.
+    #[test]
+    fn a_registration_pays_the_fee_from_the_night_it_spends() {
+        use midnight_ledger::structure::INITIAL_PARAMETERS;
+        let stars = midnight_ledger::structure::STARS_PER_NIGHT;
+        let provider = MidnightSigner::mainnet()
+            .crypto_provider(&packed_signing_key(UNSHIELDED_SEED_HEX))
+            .unwrap();
+        let vk = provider.unshielded_verifying_key().unwrap();
+        let dust_pk = provider.dust_public_key().unwrap();
+        let tip = Timestamp::from_secs(10_000_000);
+        let base = base_with_intents(vec![]);
+        let intent_in = empty_intent_skeleton();
+        let scope = SyncCacheScope::default();
+        let sized = |coin: UnshieldedUtxo| {
+            let (offer, selected) = build_unshielded_balancing_offer(
+                std::slice::from_ref(&coin),
+                &mut Vec::new(),
+                &vk,
+                "sender",
+                &[(NIGHT, stars)],
+                vec![],
+                None,
+            )
+            .unwrap();
+            let fee = fee_sizing::size_registration_fee(&DustFeeContext {
+                stx: &base,
+                seg_id: 1,
+                intent_in: &intent_in,
+                offer: &offer,
+                fallible_offer: None,
+                selected: &selected,
+                dust_pk,
+                night_vk: vk.clone(),
+                crypto_provider: &provider,
+                dust_ctime: tip,
+                ledger_params: &INITIAL_PARAMETERS,
+                indexer_url: "http://127.0.0.1:1/api/v3/graphql",
+                scope: &scope,
+            })
+            .unwrap();
+            let fee_now = fee.as_ref().map(|fee| {
+                wrap_proven_standard(
+                    &base,
+                    1,
+                    assemble_proven_intent(
+                        &offer,
+                        None,
+                        &intent_in,
+                        Some(fee.dust_actions.clone()),
+                        fee.intent_ttl,
+                    ),
+                )
+                .fees(&INITIAL_PARAMETERS, true)
+                .unwrap()
+            });
+            (fee, fee_now)
+        };
+
+        let aged = UnshieldedUtxo {
+            ctime_unix_secs: Some(1_000),
+            ..night_coin(&sender_vk_hex(), 1_000_000, 1)
+        };
+        let (fee, fee_now) = sized(aged);
+        let fee = fee.expect("the aged coin's generated DUST covers the fee");
+        let registration = fee.dust_actions.registrations.iter_deref().next().unwrap();
+        assert_eq!(registration.night_key, vk);
+        assert_eq!(registration.dust_address.as_deref(), Some(&dust_pk));
+        assert!(
+            registration.allow_fee_payment >= fee_now.unwrap(),
+            "the allowance covers the fee of the transaction it registers in"
+        );
+        assert_eq!(fee.intent_ttl, chain_aligned_intent_ttl(tip));
+
+        let fresh = UnshieldedUtxo {
+            ctime_unix_secs: Some(tip.to_secs()),
+            ..night_coin(&sender_vk_hex(), 1_000_000, 1)
+        };
+        assert!(sized(fresh).0.is_none());
     }
 
     /// With a coin to spare, the spare backs the registration and the payment keeps the coin it picked.

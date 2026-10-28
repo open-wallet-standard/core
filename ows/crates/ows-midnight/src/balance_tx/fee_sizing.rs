@@ -111,8 +111,10 @@ fn registration_dust_actions(
     }
 }
 
-/// Build a generationless fee registration sized to `fee_dust`, or `None` when the selected inputs
-/// have no unregistered NIGHT capacity.
+/// Build a generationless fee registration sized to `fee_dust`, or `None` when the selected inputs'
+/// unregistered NIGHT capacity cannot cover it. Capacity short of the fee is no registration at all,
+/// so the caller falls back to a DUST spend: a young NIGHT coin must not block a wallet that holds
+/// DUST.
 fn try_registration_dust_actions(
     selected: &[UnshieldedUtxo],
     fee_dust: u128,
@@ -121,7 +123,7 @@ fn try_registration_dust_actions(
     dust_ctime: Timestamp,
 ) -> Result<Option<DustActions<MnSig, ProofMarker, InMemoryDB>>, std::io::Error> {
     let dust_allow = dust_allowance_from_night_inputs(selected, dust_ctime)?;
-    if dust_allow == 0 {
+    if dust_allow == 0 || dust_allow < fee_dust {
         return Ok(None);
     }
     let allow_fee_payment = cap_allow_fee_payment(dust_allow, fee_dust)?;
@@ -291,28 +293,14 @@ fn dust_section_covers_fee(
     Ok(balances.into_iter().all(|(_, bal)| bal >= 0))
 }
 
-/// Size the DUST fee section that balances the transaction, **without** real proving. The fee depends
-/// on the tx (dust-section bytes included), so estimate → build section → re-check, converging within
-/// a few iterations.
-///
-/// Each iteration prefers a signature-based **generationless registration** funded by the wallet's
-/// unregistered NIGHT (no proving). When the wallet has no unregistered NIGHT capacity — a normal
-/// funded wallet registers all its NIGHT for dust generation — it falls back to a **DUST spend** of
-/// its generated dust, syncing the spendable dust state once and sizing the spends with `mock_prove`
-/// (fixed-size proofs → the mock section's fee matches the real one exactly). The registration is
-/// finalized here; the proof-bearing spend is realized post-seam by
-/// [`MidnightCryptoProvider::authorize_dust`].
-pub(super) fn size_dust_fee(
+/// The fee a first DUST section is sized against: the margined fee of the transaction with a
+/// zero-allowance registration in place, which the sizing loops then grow until the section covers it.
+fn initial_fee_target(
     ctx: &DustFeeContext,
-) -> Result<(DustFeePlan, Timestamp), std::io::Error> {
-    const MAX_FEE_ITERS: usize = 8;
-    // Re-read from the tip once the (possibly slow) dust sync has run — see [`reprice_after_sync`].
-    // The registration path returns before any sync, so there these stay as the caller read them.
-    let mut params = ctx.ledger_params.clone();
-    let mut dust_ctime = ctx.dust_ctime;
-    let mut intent_ttl = chain_aligned_intent_ttl(dust_ctime);
-
-    // First pass: a zero-allowance registration only to size the fee.
+    params: &LedgerParameters,
+    dust_ctime: Timestamp,
+    intent_ttl: Timestamp,
+) -> Result<u128, std::io::Error> {
     let first = registration_dust_actions(ctx.dust_pk, ctx.night_vk.clone(), 0, dust_ctime);
     let tx_first = wrap_proven_standard(
         ctx.stx,
@@ -325,57 +313,102 @@ pub(super) fn size_dust_fee(
             intent_ttl,
         ),
     );
-    let mut fee_target = with_drift_margin(
+    Ok(with_drift_margin(
         tx_first
-            .fees_with_margin(&params, FEE_BLOCKS_MARGIN)
+            .fees_with_margin(params, FEE_BLOCKS_MARGIN)
             .map_err(|e| err(format!("DUST fee estimate failed: {e:?}")))?,
         tx_first
-            .fees(&params, false)
+            .fees(params, false)
             .map_err(|e| err(format!("DUST fee estimate failed: {e:?}")))?,
-    );
+    ))
+}
 
-    // The dust state is expensive to sync, so pull it only when the spend fallback is first needed.
-    let mut dust_state: Option<DustLocalState<InMemoryDB>> = None;
+/// A generationless fee registration sized for the wallet's own transaction, and the TTL its intent
+/// takes with it. It carries no proof, so it is final once sized.
+pub(super) struct RegistrationFee {
+    pub(super) dust_actions: DustActions<MnSig, ProofMarker, InMemoryDB>,
+    pub(super) intent_ttl: Timestamp,
+}
 
-    for attempt in 0..MAX_FEE_ITERS {
-        if let Some(reg) = try_registration_dust_actions(
+/// Size a signature-based **generationless registration** that pays the transaction's DUST fee from
+/// the wallet's unregistered NIGHT among the selected inputs, **without** real proving or a dust sync.
+/// The fee depends on the tx (dust-section bytes included), so estimate → build section → re-check,
+/// converging within a few iterations. The registration needs no proof, so it is final once sized.
+///
+/// Returns `None` when that NIGHT has not generated enough DUST to cover the fee, or when the tx
+/// cannot meet the time-to-dismiss bound this way. The caller then pays with [`size_spend_fee`]: a
+/// young NIGHT coin must not block a wallet that holds DUST.
+pub(super) fn size_registration_fee(
+    ctx: &DustFeeContext,
+) -> Result<Option<RegistrationFee>, std::io::Error> {
+    const MAX_FEE_ITERS: usize = 8;
+    let params = ctx.ledger_params;
+    let intent_ttl = chain_aligned_intent_ttl(ctx.dust_ctime);
+    let mut fee_target = initial_fee_target(ctx, params, ctx.dust_ctime, intent_ttl)?;
+
+    for _ in 0..MAX_FEE_ITERS {
+        let Some(reg) = try_registration_dust_actions(
             ctx.selected,
             fee_target,
             ctx.dust_pk,
             ctx.night_vk.clone(),
-            dust_ctime,
-        )? {
-            let tx_check = wrap_proven_standard(
-                ctx.stx,
-                ctx.seg_id,
-                assemble_proven_intent(
-                    ctx.offer,
-                    ctx.fallible_offer,
-                    ctx.intent_in,
-                    Some(reg.clone()),
-                    intent_ttl,
-                ),
-            );
-            if dust_section_covers_fee(&tx_check, &params)? {
-                return Ok((DustFeePlan::Registration(reg), intent_ttl));
-            }
+            ctx.dust_ctime,
+        )?
+        else {
+            return Ok(None);
+        };
+        let tx_check = wrap_proven_standard(
+            ctx.stx,
+            ctx.seg_id,
+            assemble_proven_intent(
+                ctx.offer,
+                ctx.fallible_offer,
+                ctx.intent_in,
+                Some(reg.clone()),
+                intent_ttl,
+            ),
+        );
+        if dust_section_covers_fee(&tx_check, params)? {
+            return Ok(Some(RegistrationFee {
+                dust_actions: reg,
+                intent_ttl,
+            }));
         }
+        fee_target = with_drift_margin(
+            tx_check
+                .fees_with_margin(params, FEE_BLOCKS_MARGIN)
+                .map_err(|e| err(format!("DUST fee re-estimate failed: {e:?}")))?,
+            tx_check
+                .fees(params, false)
+                .map_err(|e| err(format!("DUST fee re-estimate failed: {e:?}")))?,
+        )
+        .max(fee_target.saturating_add(1));
+    }
+    Ok(None)
+}
 
-        if dust_state.is_none() {
-            dust_state = Some(sync_spendable_dust_state(
-                ctx.indexer_url,
-                ctx.crypto_provider,
-                ctx.scope,
-            )?);
-            // The sync just moved the chain on; re-price against where it actually is now. The loop
-            // is self-correcting from here — a fee target the fresher params outgrow simply fails the
-            // coverage check below and is raised on the next attempt.
-            let (fresh_params, fresh_ctime) = reprice_after_sync(ctx.indexer_url, dust_ctime)?;
-            params = fresh_params;
-            dust_ctime = fresh_ctime;
-            intent_ttl = chain_aligned_intent_ttl(dust_ctime);
-        }
-        let synced = dust_state.as_ref().expect("dust state synced above");
+/// Size a proof-bearing **DUST spend** of the wallet's generated dust that pays the transaction's fee,
+/// **without** real proving: the spendable dust state is synced once and the spends are sized with
+/// `mock_prove` (fixed-size proofs → the mock section's fee matches the real one exactly). The fee
+/// depends on the tx (dust-section bytes included), so estimate → build section → re-check, converging
+/// within a few iterations. The proof-bearing spend is realized post-seam by
+/// [`MidnightCryptoProvider::authorize_dust`].
+///
+/// This is how a funded wallet, which registers all its NIGHT for dust generation, pays; and how any
+/// wallet pays when [`size_registration_fee`] finds no unregistered NIGHT that can cover the fee.
+pub(super) fn size_spend_fee(
+    ctx: &DustFeeContext,
+) -> Result<(DustFeePlan, Timestamp), std::io::Error> {
+    const MAX_FEE_ITERS: usize = 8;
+    let dust_state = sync_spendable_dust_state(ctx.indexer_url, ctx.crypto_provider, ctx.scope)?;
+    // The sync just moved the chain on; re-price against where it actually is now — see
+    // [`reprice_after_sync`]. The loop is self-correcting from here: a fee target the fresher params
+    // outgrow simply fails the coverage check below and is raised on the next attempt.
+    let (params, dust_ctime) = reprice_after_sync(ctx.indexer_url, ctx.dust_ctime)?;
+    let intent_ttl = chain_aligned_intent_ttl(dust_ctime);
+    let mut fee_target = initial_fee_target(ctx, &params, dust_ctime, intent_ttl)?;
+
+    for attempt in 0..MAX_FEE_ITERS {
         let plan = DustSpendPlan {
             fee_dust: fee_target,
             dust_ctime,
@@ -385,7 +418,7 @@ pub(super) fn size_dust_fee(
         };
         let dust_actions = ctx
             .crypto_provider
-            .mock_dust_spends(synced, &plan, &ctx.stx.network_id)
+            .mock_dust_spends(&dust_state, &plan, &ctx.stx.network_id)
             .map_err(|e| err(e.to_string()))?;
         let tx_check = wrap_proven_standard(
             ctx.stx,
@@ -402,8 +435,8 @@ pub(super) fn size_dust_fee(
             return Ok((
                 DustFeePlan::Spend {
                     plan,
-                    dust_state: Box::new(synced.clone()),
-                    ledger_params: Box::new(params.clone()),
+                    dust_state: Box::new(dust_state),
+                    ledger_params: Box::new(params),
                 },
                 intent_ttl,
             ));
@@ -479,7 +512,7 @@ pub(crate) struct MergeDustFee {
     pub(crate) ledger_params: LedgerParameters,
 }
 
-/// Size the taker's DUST fee for a sealed-offer MERGE. Unlike [`size_dust_fee`] (which sizes against the
+/// Size the taker's DUST fee for a sealed-offer MERGE. Unlike [`size_spend_fee`] (which sizes against the
 /// wallet's own balancing tx), the fee here must cover the **merged** transaction — the maker's sealed
 /// bytes plus the taker's sealed half — because the fee covers the whole tx and the maker contributes
 /// real bytes but never pays. So each iteration mock-proves a candidate DUST section into the taker's
@@ -767,6 +800,23 @@ mod tests {
     /// The live-run trigger for the proof-bearing fallback: a fully dust-registered wallet has no
     /// generationless capacity, so `try_registration_dust_actions` yields `None` and the caller must
     /// fall back to proving a DUST spend.
+    /// Capacity that covers only part of the fee is no registration, so sizing moves on to a DUST
+    /// spend instead of aborting with the registration's shortfall.
+    #[test]
+    fn capacity_short_of_the_fee_yields_no_registration() {
+        let dust_pk = DustPublicKey::from(DustSecretKey::derive_secret_key(&[0x22u8; 32]));
+        let night_vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+            .unwrap()
+            .verifying_key();
+        let now = Timestamp::from_secs(2_000);
+        let young = [night_utxo(STARS_PER_NIGHT, false, Some(1_999))];
+        assert!(dust_allowance_from_night_inputs(&young, now).unwrap() > 0);
+
+        let none =
+            try_registration_dust_actions(&young, 10u128.pow(15), dust_pk, night_vk, now).unwrap();
+        assert!(none.is_none());
+    }
+
     #[test]
     fn all_registered_night_yields_no_registration_forcing_the_spend_fallback() {
         let dust_pk = DustPublicKey::from(DustSecretKey::derive_secret_key(&[0x22u8; 32]));
