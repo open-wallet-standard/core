@@ -156,8 +156,8 @@ ows mnemonic derive --chain midnight            # 'midnight' alias resolves to m
 # → mn_addr1dwv2rta0a2skyhrvukaw2q9r2sq6yc4jhj63rf7afxpkrrv6g35qw3dyt6
 ows mnemonic derive --chain midnight:feature-x  # any ad-hoc reference is kept verbatim
 # → mn_addr_feature-x1dwv2rta0a2skyhrvukaw2q9r2sq6yc4jhj63rf7afxpkrrv6g35qgl8r2t
-ows mnemonic derive --chain midnight:preview --index 1
-# → mn_addr_preview14vxp6lccnpxc2zecz5a7fls8cc63kme540jwgajrakhmvc9xkxmqpmzrx8
+ows mnemonic derive --chain midnight:preview --index 1  # account 1: m/44'/2400'/1'/0/0
+# → mn_addr_preview1kpq4jf9d35tjnw0jtx7vaexaavq7xyj0x497pcqzwqetuyrc7nrq37rt92
 ```
 
 Two things to notice. The mainnet address matches the `midnight_derive_addresses_mainnet_vector`
@@ -222,13 +222,14 @@ Midnight uses a **multi-role** BIP-44 tree rather than the single derivation pat
 chains use:
 
 ```
-m/44'/2400'/0'/{role}/{index}
-                ^role: 0 = unshielded (Night), 2 = dust, 3 = shielded (Zswap)
+m/44'/2400'/{index}'/{role}/0
+            ^account  ^role: 0 = unshielded (Night), 2 = dust, 3 = shielded (Zswap)
 ```
 
 - **SLIP-44 coin type `2400`** identifies Midnight.
-- **Account `0'`** is fixed — OWS is single-address-per-wallet, so per-address selection
-  is the address `index`, not the account.
+- **`--index` selects the hardened BIP-44 account**, and each role's key sits at address
+  index `0`. Lace numbers its Midnight wallets the same way, so `--index N` reaches the same
+  keys as account `N` there. The default, `--index 0`, is account `0'`.
 - The three **roles** produce the three independent domain seeds.
 
 `derive` prints only the unshielded (role 0) address, but — because address derivation
@@ -238,8 +239,9 @@ dust operations use to *act* in those domains — see
 [the packed signing key](#the-packed-signing-key-and-why-it-is-mnemonic-only).
 
 The role constants and path builder live in one place (`MidnightSigner::derivation_path`
-/ `role_from_path`) so the coin type and account are a single source of truth, and a
-derived key can be mapped *back* to its role when the bundle is decoded.
+/ `role_from_path` / `account_from_path`) so the coin type and address index are a single
+source of truth, a derived key can be mapped *back* to its role when the bundle is decoded,
+and a stored path can be mapped back to its account when the wallet's keys are unsealed.
 
 ### How this differs from other chains
 
@@ -334,7 +336,7 @@ for <address> on <chain_id>` / `none — no unspent shielded coins found after f
 - **Unset** — the empty passphrase is tried; when it doesn't open the wallet, the shielded and
   DUST balances are left out, with the `note:` above.
 
-The keys are unsealed at the account's stored index (the last segment of its derivation path), so
+The keys are unsealed at the account's stored index (the hardened account segment of its derivation path), so
 the shielded and dust keys always belong to the stored unshielded address. The passphrase is
 removed from the environment and the unsealed key is dropped as soon as the provider is built, so
 neither lives through the sync; the provider itself holds the role seeds and the keys derived

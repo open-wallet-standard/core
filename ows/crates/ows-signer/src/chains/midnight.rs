@@ -224,10 +224,11 @@ pub struct MidnightAddresses {
 impl MidnightSigner {
     /// SLIP-44 coin type for Midnight.
     const COIN_TYPE: u32 = 2400;
-    /// BIP-44 hardened account. OWS uses one account per wallet (single-address
-    /// model), so this is fixed; per-address selection is the address index.
-    const DEFAULT_ACCOUNT: u32 = 0;
-    /// WalletEngine roles under `m/44'/COIN_TYPE'/DEFAULT_ACCOUNT'/role/index`.
+    /// Address index under each role. Midnight wallets such as Lace number their accounts at the
+    /// hardened BIP-44 account level, which the derivation index selects, and derive every role's
+    /// key at address index 0.
+    const ADDRESS_INDEX: u32 = 0;
+    /// WalletEngine roles under `m/44'/COIN_TYPE'/account'/role/ADDRESS_INDEX`.
     const ROLE_UNSHIELDED: u32 = 0;
     const ROLE_DUST: u32 = 2;
     const ROLE_SHIELDED: u32 = 3;
@@ -264,10 +265,10 @@ impl MidnightSigner {
         }
     }
 
-    /// Build a Wallet SDK derivation path for a `role` and address `index`.
-    /// The coin type and hardened account live here as the single source of truth.
-    fn derivation_path(role: u32, index: u32) -> String {
-        let (coin, account) = (Self::COIN_TYPE, Self::DEFAULT_ACCOUNT);
+    /// Build a Wallet SDK derivation path for a `role` of BIP-44 `account`.
+    /// The coin type and address index live here as the single source of truth.
+    fn derivation_path(role: u32, account: u32) -> String {
+        let (coin, index) = (Self::COIN_TYPE, Self::ADDRESS_INDEX);
         format!("m/44'/{coin}'/{account}'/{role}/{index}")
     }
 
@@ -276,6 +277,21 @@ impl MidnightSigner {
     /// the `role` embedded by [`Self::derivation_path`].
     fn role_from_path(path: &str) -> Option<u32> {
         path.split('/').nth(4).and_then(|s| s.parse().ok())
+    }
+
+    /// The BIP-44 account a stored Midnight path was derived at — the inverse of
+    /// [`Self::derivation_path`], so the keys unsealed for a wallet's account match its stored
+    /// address. `None` for any other shape, including a path at a nonzero address index.
+    pub fn account_from_path(path: &str) -> Option<u32> {
+        let coin = format!("{}'", Self::COIN_TYPE);
+        let index = Self::ADDRESS_INDEX.to_string();
+        match path.split('/').collect::<Vec<_>>().as_slice() {
+            ["m", "44'", c, account, role, i] if *c == coin && *i == index => {
+                role.parse::<u32>().ok()?;
+                account.strip_suffix('\'')?.parse().ok()
+            }
+            _ => None,
+        }
     }
 
     /// Resolve the 32-byte seed for `role` from a derived-key bundle. Returns a
@@ -1372,6 +1388,7 @@ impl ChainSigner for MidnightSigner {
         seal_signed_proven(tx_bytes, &signature.signature)
     }
 
+    /// `index` selects the BIP-44 account: `m/44'/2400'/{index}'/0/0`.
     fn default_derivation_path(&self, index: u32) -> String {
         Self::derivation_path(Self::ROLE_UNSHIELDED, index)
     }
@@ -1860,6 +1877,39 @@ mod tests {
         );
         // The primary (first) path matches the single-key default for the same index.
         assert_eq!(paths[0], signer.default_derivation_path(0));
+    }
+
+    #[test]
+    fn midnight_index_selects_the_account_not_the_address_index() {
+        let signer = MidnightSigner::mainnet();
+        assert_eq!(
+            signer.default_derivation_paths(1),
+            vec![
+                "m/44'/2400'/1'/0/0".to_string(),
+                "m/44'/2400'/1'/3/0".to_string(),
+                "m/44'/2400'/1'/2/0".to_string(),
+            ]
+        );
+        assert_eq!(signer.default_derivation_path(7), "m/44'/2400'/7'/0/0");
+    }
+
+    #[test]
+    fn midnight_account_from_path_inverts_the_derivation_path() {
+        let signer = MidnightSigner::mainnet();
+        for account in [0, 1, 7, 0x7fff_ffff] {
+            for path in signer.default_derivation_paths(account) {
+                assert_eq!(MidnightSigner::account_from_path(&path), Some(account));
+            }
+        }
+        // A path from before the account level was selectable put the index last; for a nonzero
+        // index it names no account these keys derive at.
+        assert_eq!(
+            MidnightSigner::account_from_path("m/44'/2400'/0'/0/7"),
+            None
+        );
+        assert_eq!(MidnightSigner::account_from_path("m/44'/2400'/3/0/0"), None);
+        assert_eq!(MidnightSigner::account_from_path("m/44'/60'/3'/0/0"), None);
+        assert_eq!(MidnightSigner::account_from_path(""), None);
     }
 
     #[test]

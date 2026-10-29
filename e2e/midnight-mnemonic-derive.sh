@@ -108,7 +108,7 @@ MAINNET_ADDR="mn_addr1${DATA_PREFIX}w3dyt6"
 PREVIEW_ADDR="mn_addr_preview1${DATA_PREFIX}4y8xms"
 PREPROD_ADDR="mn_addr_preprod1${DATA_PREFIX}49ekgd"
 FEATUREX_ADDR="mn_addr_feature-x1${DATA_PREFIX}gl8r2t"
-PREVIEW_IDX1_ADDR="mn_addr_preview14vxp6lccnpxc2zecz5a7fls8cc63kme540jwgajrakhmvc9xkxmqpmzrx8"
+PREVIEW_IDX1_ADDR="mn_addr_preview1kpq4jf9d35tjnw0jtx7vaexaavq7xyj0x497pcqzwqetuyrc7nrq37rt92"
 # For a fully custom network there is no pinned checksum, but the HRP tag + shared data part are —
 # same key, network-tagged prefix — so assert everything up to (not including) the 6-char checksum.
 CUSTOM_ADDR_PREFIX="mn_addr_${CUSTOM_NET}1${DATA_PREFIX}"
@@ -168,7 +168,7 @@ expect "derive midnight:feature-x (ad-hoc reference kept verbatim)" \
   "$FEATUREX_ADDR" \
   "$OWS" mnemonic derive --chain midnight:feature-x
 
-expect "derive midnight:preview --index 1 (a different address index)" \
+expect "derive midnight:preview --index 1 (account 1)" \
   "ows mnemonic derive --chain midnight:preview --index 1" \
   "$PREVIEW_IDX1_ADDR" \
   "$OWS" mnemonic derive --chain midnight:preview --index 1

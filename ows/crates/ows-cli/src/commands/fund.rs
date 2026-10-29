@@ -34,20 +34,17 @@ fn find_account_for_chain<'a>(
         })
 }
 
-/// The address index a mnemonic account was derived at: the last segment of its stored path, so
-/// the keys unsealed for it match the stored address.
+/// The BIP-44 account a Midnight mnemonic account was derived at, read from its stored path, so the
+/// keys unsealed for it match the stored address.
 fn account_index(account: &AccountInfo) -> Result<u32, CliError> {
-    account
-        .derivation_path
-        .rsplit('/')
-        .next()
-        .and_then(|index| index.parse().ok())
-        .ok_or_else(|| {
+    ows_signer::chains::MidnightSigner::account_from_path(&account.derivation_path).ok_or_else(
+        || {
             CliError::InvalidArgs(format!(
                 "cannot read the account index from derivation path \"{}\"",
                 account.derivation_path
             ))
-        })
+        },
+    )
 }
 
 /// Unseal the Midnight account key for a balance read. The passphrase is either an api-key token,
@@ -281,15 +278,16 @@ mod tests {
     }
 
     #[test]
-    fn the_account_index_is_the_last_derivation_path_segment() {
+    fn the_account_index_is_the_hardened_account_segment() {
         let at = |path: &str| AccountInfo {
             derivation_path: path.to_string(),
             ..account("midnight:mainnet", "mn_addr")
         };
         assert_eq!(account_index(&at("m/44'/2400'/0'/0/0")).unwrap(), 0);
-        assert_eq!(account_index(&at("m/44'/2400'/0'/0/7")).unwrap(), 7);
+        assert_eq!(account_index(&at("m/44'/2400'/7'/0/0")).unwrap(), 7);
         assert!(account_index(&at("")).is_err());
-        assert!(account_index(&at("m/44'/2400'/0'/0/7'")).is_err());
+        assert!(account_index(&at("m/44'/2400'/7/0/0")).is_err());
+        assert!(account_index(&at("m/44'/2400'/0'/0/7")).is_err());
     }
 
     #[test]
