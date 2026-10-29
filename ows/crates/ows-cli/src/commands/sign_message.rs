@@ -11,7 +11,7 @@ pub fn run(
     message: &str,
     encoding: &str,
     typed_data: Option<&str>,
-    index: u32,
+    index: Option<u32>,
     json_output: bool,
     address: Option<&str>,
 ) -> Result<(), CliError> {
@@ -30,7 +30,7 @@ pub fn run(
                 chain_str,
                 td_json,
                 passphrase.as_deref(),
-                Some(index),
+                index,
                 address,
                 None,
             )
@@ -41,7 +41,7 @@ pub fn run(
                 message,
                 passphrase.as_deref(),
                 Some(encoding),
-                Some(index),
+                index,
                 address,
                 None,
             )

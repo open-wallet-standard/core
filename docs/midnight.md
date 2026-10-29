@@ -232,6 +232,13 @@ m/44'/2400'/{index}'/{role}/0
   keys as account `N` there. The default, `--index 0`, is account `0'`.
 - The three **roles** produce the three independent domain seeds.
 
+A wallet stores the account it was imported at. Without `--index`, `sign tx`, `sign send-tx` and
+`sign message` act on that stored account, as `fund balance` does, so a wallet imported with
+`--index 2` signs with account 2's keys; every other chain keeps the default of `0`. An explicit
+`--index` still wins for the owner. An API token signs only from the stored account and refuses an
+`--index` naming another, since each index is a separate account of the phrase and neither the
+policy context nor the audit record says which account signed.
+
 `derive` prints only the unshielded (role 0) address, but — because address derivation
 routes every chain through the bundle — it assembles the full three-seed `MNK1` bundle and
 `derive_address` extracts role 0 from it. That same packed bundle is what the shielded and

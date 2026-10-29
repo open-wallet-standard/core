@@ -6,7 +6,7 @@ pub fn run(
     chain_str: &str,
     wallet_name: &str,
     tx_hex: &str,
-    index: u32,
+    index: Option<u32>,
     json_output: bool,
 ) -> Result<(), CliError> {
     // Check for API token in passphrase — route through library for policy enforcement
@@ -18,7 +18,7 @@ pub fn run(
             chain_str,
             tx_hex,
             passphrase.as_deref(),
-            Some(index),
+            index,
             None,
         );
         let result = match result {

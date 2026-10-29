@@ -519,6 +519,29 @@ fn load_policies_for_key(
     Ok(policies)
 }
 
+/// The derivation index a token unseals a key at. On Midnight an index names a whole account of the
+/// phrase, and neither the policy context nor the audit record says which account signed, so a token
+/// signs only from the account the wallet stored: an index naming another one is refused. Other chains
+/// keep the index they are given.
+fn token_signing_index(
+    wallet: &EncryptedWallet,
+    chain_type: ows_core::ChainType,
+    index: Option<u32>,
+) -> Result<Option<u32>, OwsLibError> {
+    let resolved = crate::ops::signing_index(wallet, chain_type, index)?;
+    if chain_type != ows_core::ChainType::Midnight {
+        return Ok(resolved);
+    }
+    let stored = crate::ops::signing_index(wallet, chain_type, None)?.unwrap_or(0);
+    match index {
+        Some(requested) if requested != stored => Err(OwsLibError::InvalidInput(format!(
+            "an API token signs Midnight only from the wallet's stored account {stored}; index \
+             {requested} is another account of the same phrase"
+        ))),
+        _ => Ok(resolved),
+    }
+}
+
 fn decrypt_key_from_api_key(
     key_file: &ApiKeyFile,
     wallet: &EncryptedWallet,
@@ -533,6 +556,7 @@ fn decrypt_key_from_api_key(
         ))
     })?;
 
+    let index = token_signing_index(wallet, chain_type, index)?;
     let envelope: CryptoEnvelope = serde_json::from_value(envelope_value.clone())?;
     let secret = decrypt(&envelope, token)?;
     crate::ops::secret_to_signing_key(&secret, &wallet.key_type, chain_type, index)
@@ -771,6 +795,122 @@ mod tests {
         );
         let sign_result = result.unwrap();
         assert!(!sign_result.signature.is_empty());
+    }
+
+    /// A token signing without an index, as the CLI does by default, signs with the Midnight
+    /// account the wallet stored rather than account 0.
+    #[test]
+    fn api_key_midnight_message_defaults_to_the_wallets_stored_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let info = crate::ops::import_wallet_mnemonic(
+            "mn-agent",
+            phrase,
+            Some(passphrase),
+            Some(2),
+            Some(&vault),
+        )
+        .unwrap();
+        let stored = &info
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "midnight:mainnet")
+            .unwrap()
+            .address;
+        let preview = ows_signer::chains::MidnightSigner::preview()
+            .reencode_unshielded_address(stored)
+            .unwrap();
+        let policy = ows_core::Policy {
+            id: "midnight-preview".to_string(),
+            name: "Midnight preview".to_string(),
+            version: 1,
+            created_at: "2026-03-22T10:00:00Z".to_string(),
+            rules: vec![PolicyRule::AllowedChains {
+                chain_ids: vec!["midnight:preview".to_string()],
+            }],
+            executable: None,
+            config: None,
+            action: PolicyAction::Deny,
+        };
+        policy_store::save_policy(&policy, Some(&vault)).unwrap();
+        let (token, _) = create_api_key(
+            "midnight-agent",
+            &[info.id],
+            &[policy.id],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+
+        let chain = ows_core::parse_chain("midnight:preview").unwrap();
+        sign_message_with_api_key(
+            &token,
+            "mn-agent",
+            &chain,
+            b"hello",
+            None,
+            Some(&preview),
+            Some(&vault),
+        )
+        .expect("the token signs with the stored account's key");
+    }
+
+    /// An index names another Midnight account of the phrase, which neither the policy nor the audit
+    /// record would show, so a token refuses any index but the wallet's stored account.
+    #[test]
+    fn api_key_midnight_refuses_an_index_naming_another_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let info = crate::ops::import_wallet_mnemonic(
+            "mn-agent",
+            phrase,
+            Some(passphrase),
+            Some(2),
+            Some(&vault),
+        )
+        .unwrap();
+        let stored = &info
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "midnight:mainnet")
+            .unwrap()
+            .address;
+        let preview = ows_signer::chains::MidnightSigner::preview()
+            .reencode_unshielded_address(stored)
+            .unwrap();
+        let (token, _) = create_api_key(
+            "midnight-agent",
+            &[info.id],
+            &[],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+        let chain = ows_core::parse_chain("midnight:preview").unwrap();
+        let sign = |index| {
+            sign_message_with_api_key(
+                &token,
+                "mn-agent",
+                &chain,
+                b"hello",
+                index,
+                Some(&preview),
+                Some(&vault),
+            )
+        };
+
+        let refused = sign(Some(0)).unwrap_err().to_string();
+        assert!(
+            refused.contains("stored account 2") && refused.contains("index 0"),
+            "{refused}"
+        );
+        sign(Some(2)).expect("the stored account's own index is allowed");
     }
 
     #[test]

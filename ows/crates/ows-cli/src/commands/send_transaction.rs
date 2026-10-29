@@ -4,7 +4,7 @@ pub fn run(
     chain_str: &str,
     wallet_name: &str,
     tx_hex: &str,
-    index: u32,
+    index: Option<u32>,
     json_output: bool,
     rpc_url_override: Option<&str>,
 ) -> Result<(), CliError> {
@@ -17,7 +17,7 @@ pub fn run(
             chain_str,
             tx_hex,
             passphrase.as_deref(),
-            Some(index),
+            index,
             rpc_url_override,
             None,
         );

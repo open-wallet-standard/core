@@ -203,6 +203,35 @@ fn derive_all_accounts_from_keys(keys: &KeyPair) -> Result<Vec<WalletAccount>, O
     Ok(accounts)
 }
 
+/// The derivation index a key is unsealed at. Without one, a Midnight key comes from the account
+/// the wallet stored, the one it lists and `fund balance` reads; every other chain keeps the
+/// generic default.
+pub(crate) fn signing_index(
+    wallet: &EncryptedWallet,
+    chain_type: ChainType,
+    index: Option<u32>,
+) -> Result<Option<u32>, OwsLibError> {
+    if index.is_some() || chain_type != ChainType::Midnight {
+        return Ok(index);
+    }
+    let namespace = format!("{}:", ChainType::Midnight.namespace());
+    let Some(account) = wallet
+        .accounts
+        .iter()
+        .find(|a| a.chain_id.starts_with(&namespace))
+    else {
+        return Ok(None);
+    };
+    MidnightSigner::account_from_path(&account.derivation_path)
+        .map(Some)
+        .ok_or_else(|| {
+            OwsLibError::InvalidInput(format!(
+                "cannot read the Midnight account from derivation path \"{}\"",
+                account.derivation_path
+            ))
+        })
+}
+
 pub(crate) fn secret_to_signing_key(
     secret: &SecretBytes,
     key_type: &KeyType,
@@ -1051,6 +1080,7 @@ pub fn decrypt_signing_key(
     vault_path: Option<&Path>,
 ) -> Result<SecretBytes, OwsLibError> {
     let wallet = vault::load_wallet_by_name_or_id(wallet_name_or_id, vault_path)?;
+    let index = signing_index(&wallet, chain_type, index)?;
     let envelope: CryptoEnvelope = serde_json::from_value(wallet.crypto.clone())?;
     let secret = decrypt(&envelope, passphrase)?;
     secret_to_signing_key(&secret, &wallet.key_type, chain_type, index)
@@ -3001,6 +3031,47 @@ mod tests {
             midnight.address,
             "mn_addr1dwv2rta0a2skyhrvukaw2q9r2sq6yc4jhj63rf7afxpkrrv6g35qw3dyt6"
         );
+    }
+
+    /// Signing names no index, as `ows sign message` does by default: a Midnight wallet imported at
+    /// account 3 must sign with account 3's key, the one behind its listed address.
+    #[test]
+    fn midnight_signing_defaults_to_the_wallets_stored_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let info = import_wallet_mnemonic("mn-account-3", phrase, None, Some(3), Some(dir.path()))
+            .unwrap();
+        let stored = &info
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "midnight:mainnet")
+            .unwrap()
+            .address;
+        let preview = MidnightSigner::preview()
+            .reencode_unshielded_address(stored)
+            .unwrap();
+        let sign = |index| {
+            sign_message(
+                "mn-account-3",
+                "midnight:preview",
+                "hello",
+                None,
+                None,
+                index,
+                Some(&preview),
+                Some(dir.path()),
+            )
+        };
+
+        sign(None).expect("the default signs with the stored account's key");
+        assert!(sign(Some(0)).is_err(), "an explicit index still wins");
+
+        let wallet = vault::load_wallet_by_name_or_id("mn-account-3", Some(dir.path())).unwrap();
+        assert_eq!(
+            signing_index(&wallet, ChainType::Midnight, None).unwrap(),
+            Some(3)
+        );
+        assert_eq!(signing_index(&wallet, ChainType::Evm, None).unwrap(), None);
     }
 
     #[test]
