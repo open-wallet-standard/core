@@ -52,7 +52,8 @@ ows wallet import --name demo --mnemonic
 `wallet info` lists Midnight among the supported chains, and `mnemonic derive` with no
 `--chain` includes a `midnight:mainnet` line. The account is the **unshielded (Night)** address
 only — one address per chain, like every other chain. The shielded and dust addresses are
-derived too (`MidnightSigner::derive_addresses`) and printed by `ows fund balance` (see
+derived too (`MidnightSigner::derive_addresses`), with no network access, and printed by
+`ows mnemonic derive --chain midnight:<network>` and `ows fund balance` (see
 [Fund balance](#fund-balance-ows-fund-balance)).
 
 A universal wallet stores one Midnight account, `midnight:mainnet` under the mainnet HRP.
@@ -109,8 +110,9 @@ network:
 - **dust** — the SCALE-encoded dust public key, HRP `mn_dust{suffix}`.
 
 `{suffix}` is empty on mainnet and `_{reference}` on every other network (`mn_addr_preview`,
-`mn_shield-addr_preview`, `mn_dust_preview`, …). The wallet account and `derive` expose only the
-unshielded one; `ows fund balance` prints the shielded and dust ones.
+`mn_shield-addr_preview`, `mn_dust_preview`, …). The wallet account and `derive`'s stdout carry only
+the unshielded one; `derive --chain midnight:<network>` and `ows fund balance` print all three, on
+stderr, from the keys alone.
 
 ### Validation
 
@@ -167,11 +169,19 @@ its checksum change. One key, one hash; the network id lives in the human-readab
 
 ### What it prints
 
-`ows mnemonic derive --chain midnight:*` prints **only the unshielded (Night) address**.
-It does not print the shielded or dust addresses. This is deliberate: `derive` is the
-generic one-address-per-chain command shared with EVM, Solana, Bitcoin, etc., and every
-other chain has exactly one address. Midnight's shielded and dust addresses only surface
-together, in a command that shows all three at once.
+`ows mnemonic derive --chain midnight:*` prints **only the unshielded (Night) address** on
+stdout. `derive` is the generic one-address-per-chain command shared with EVM, Solana,
+Bitcoin, etc., and scripts read that one line. The full `Addresses` block that
+`ows fund balance` shows, unshielded, shielded and dust together, follows on stderr, so the
+shielded and dust addresses are available offline, with no wallet and no indexer:
+
+```
+mn_addr_preview1dwv2rta0a2skyhrvukaw2q9r2sq6yc4jhj63rf7afxpkrrv6g35q4y8xms
+Addresses:
+  Unshielded: mn_addr_preview1dwv2rta0a2skyhrvukaw2q9r2sq6yc4jhj63rf7afxpkrrv6g35q4y8xms
+  Shielded:   mn_shield-addr_preview1ywxc2p9986usecc9xert79afzq4m9x35u62sx0a4e2tc5w6mta5ulwhc432vhrlpnvygfep3pxcdt8tgzfstesrm6tf7hjc5jgpl20g2dm5vg
+  Dust:       mn_dust_preview1wwcff2ckd4n5hfj43055td8glwtzkhhf6z88xwf0rpftvgstr7zpx50t9vq
+```
 
 Because Midnight is in the wallet's default account set (`ALL_CHAIN_TYPES`), `derive` with no
 `--chain` — which enumerates that set — also emits a `midnight:mainnet` line (the default
@@ -304,12 +314,12 @@ Amounts print to **stdout** as `{amount:>24} {token_type}`; status, addresses, a
 to **stderr**, so balances pipe out cleanly. A Preview run (values illustrative):
 
 ```
-[ows-midnight] syncing balances from indexer (may take a while on first run)…
 Addresses:
   Unshielded: mn_addr_preview1dwv2rta0a2skyhrvukaw2q9r2sq6yc4jhj63rf7afxpkrrv6g35q4y8xms
   Shielded:   mn_shield-addr_preview1…
   Dust:       mn_dust_preview1…
 
+[ows-midnight] syncing balances from indexer (may take a while on first run)…
 Unshielded balances:
               1000000000 0000000000000000000000000000000000000000000000000000000000000000
 
@@ -326,7 +336,10 @@ Dust status (fees):
 ```
 
 The `Addresses` block re-encodes the stored address to the target network's HRP and adds
-shielded/dust when a key is available (else `(unavailable)`). Unshielded token types are the
+shielded/dust when a key is available (else `(unavailable)`). It derives from the keys alone and
+prints before the indexer is resolved, so it shows before a first sync that can take minutes, and
+also when no indexer is configured for the network, where the command then stops with that
+error. Unshielded token types are the
 indexer's `tokenType` as sent (NIGHT is 64 zeros); shielded ones are the coin's token type as
 `0x`-prefixed hex. An empty section says so — `none — no unshielded tokens found
 for <address> on <chain_id>` / `none — no unspent shielded coins found after full sync`.

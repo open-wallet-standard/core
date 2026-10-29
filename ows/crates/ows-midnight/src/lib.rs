@@ -33,7 +33,7 @@ pub use dapp_connector::{
     ConnectorMethod, ConnectorPlan, DesiredInput, DesiredOutput, MakeIntentRequest,
     MakeTransferRequest, TransferKind, UnsealedKind,
 };
-pub use fund_balance::print_fund_balance;
+pub use fund_balance::{print_addresses, print_fund_balance};
 pub use ledger_params::fetch_indexer_ledger_parameters;
 pub use prover::Prover;
 pub use submit::broadcast_sealed;
