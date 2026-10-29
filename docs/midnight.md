@@ -877,12 +877,19 @@ rejects only a shortfall, so that value would otherwise be destroyed when the tr
 or, for NIGHT, fail the ledger's supply check.
 
 An out-of-spec request (a proof-preimage input or a `ClaimRewards` mint claim) is rejected with a
-**precise** error rather than a generic "unsupported". So is any dust registration the dapp put in the
-transaction, even one that registers the wallet's own NIGHT to the wallet's own dust address: the
-wallet would sign it without the policy pass seeing it, and its fee allowance would pay the dapp's fee
-out of the wallet's NIGHT. The wallet adds its own registration when it pays fees (`payFees: true`).
-The signer separately refuses any registration that would hand the wallet's DUST generation to
-another dust address, or switch it off.
+**precise** error rather than a generic "unsupported". A dust registration the dapp put in the
+transaction is signed only when it registers the wallet's own NIGHT to the wallet's own dust address.
+One to any other dust address would hand the wallet's DUST generation away and a deregistration would
+switch it off, so the balancer refuses both before anything is proven, and the signer refuses them
+again. The registration must also allow no fee payment (`allow_fee_payment` 0), whatever `payFees`
+is. The ledger backs that allowance only with NIGHT its own intent spends. With `payFees: false` the
+wallet folds its NIGHT inputs into the dapp's lowest intent: an allowance on a registration there
+would pay the dapp's fee out of the DUST those inputs have accrued, and one in any other intent has
+nothing to back it. With `payFees: true` the wallet's inputs ride an intent of
+their own, since the dapp's already holds a dust section, so nothing would back the allowance and the
+node would reject the transaction. Every registration the wallet signs, the dapp's and its own fee
+registration alike, is listed for the policy pass in `chain_extra.dust_registrations` (see
+[How the wallet pays](#how-the-wallet-pays--chain_extrafee-and-chain_extradust_registrations)).
 
 `ows sign tx` returns the fully sealed, proven Midnight transaction on `SignResult.transaction`
 (`None` for other chains) — the seal-*without*-broadcast capability: the same bytes `send-tx`
@@ -1205,8 +1212,10 @@ that NIGHT generates DUST. Two sibling keys show both:
 "fee": { "mode": "registration", "dust_burned": "60000" },
 "dust_registrations": [
   { "intent_id": 4,
+    "carried": false,
     "night_address": "mn_addr_preview1…",
     "dust_address": "mn_dust_preview1…",
+    "own": true,
     "allow_fee_payment": "60000",
     "replaces_delegation": null }
 ]
@@ -1221,10 +1230,16 @@ that NIGHT generates DUST. Two sibling keys show both:
   takes at most its `allow_fee_payment`, which the ledger draws from the generationless DUST of
   the NIGHT it registers; whatever the fee leaves is credited to the wallet's DUST address. To cap
   what fees cost in DUST whichever way they are paid, cap `fee.dust_burned`.
-- **`dust_registrations`** — every dust registration the wallet signs. The wallet's own fee
-  registration rides its balancing intent and points the wallet's NIGHT key (`night_address`) at
-  the wallet's own DUST address (`dust_address`). Dust actions apply before any segment executes,
-  whichever intent carries them, so an entry names its intent (`intent_id`), not a segment.
+- **`dust_registrations`** — every dust registration the wallet signs, by intent: its own fee
+  registration (`carried: false`), which rides its balancing intent, and any the dapp's transaction
+  carries into `balanceUnsealedTransaction` (`carried: true`). Each points the wallet's NIGHT key
+  (`night_address`) at a DUST address (`dust_address`); `own` says whether that address is the
+  wallet's, and is always `true`, since the wallet refuses to sign a registration to any other, or a
+  deregistration. Dust actions apply before any segment executes, whichever intent carries them, so
+  an entry names its intent (`intent_id`), not a segment.
+- **`allow_fee_payment`** — how much of the fee the registration may pay from the generationless
+  DUST of its intent's NIGHT. A carried registration always allows `0`: the wallet refuses one that
+  allows more.
 - **`replaces_delegation`** — whether the registration moves an existing delegation of that NIGHT
   key to a different DUST address. On chain a registration overwrites the key's delegation, and a
   key delegated elsewhere can still hold NIGHT coins that generate nothing (those it held before

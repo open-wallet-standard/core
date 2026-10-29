@@ -72,10 +72,15 @@ pub struct DustRegistrationContext {
     /// The intent that carries it. Dust actions apply before any segment executes, whichever intent
     /// carries them.
     pub intent_id: u16,
+    /// Whether the dapp's transaction carried it; `false` for the wallet's own fee registration.
+    pub carried: bool,
     /// The unshielded address of the NIGHT key it registers.
     pub night_address: String,
     /// The DUST address that NIGHT will generate to.
     pub dust_address: String,
+    /// Whether `dust_address` is the wallet's own. The wallet refuses to sign a registration to any
+    /// other, so this is always `true` today.
+    pub own: bool,
     pub allow_fee_payment: String,
     /// Whether it moves an existing delegation of the NIGHT key to a different DUST address: `null`
     /// when that is unknown. It is always unknown today: the indexer reports whether a NIGHT coin
@@ -142,8 +147,10 @@ mod tests {
             fee: FeeContext::registration(60_000),
             dust_registrations: vec![DustRegistrationContext {
                 intent_id: 2,
+                carried: false,
                 night_address: "mn_addr1wallet".to_string(),
                 dust_address: "mn_dust1wallet".to_string(),
+                own: true,
                 allow_fee_payment: "60000".to_string(),
                 replaces_delegation: None,
             }],
@@ -159,8 +166,10 @@ mod tests {
             json["dust_registrations"],
             serde_json::json!([{
                 "intent_id": 2,
+                "carried": false,
                 "night_address": "mn_addr1wallet",
                 "dust_address": "mn_dust1wallet",
+                "own": true,
                 "allow_fee_payment": "60000",
                 "replaces_delegation": null,
             }])
