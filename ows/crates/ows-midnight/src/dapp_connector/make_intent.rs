@@ -113,6 +113,50 @@ pub struct MakeIntentRequest {
     pub ttl: Option<Timestamp>,
 }
 
+/// A `makeIntent` request planned for the policy seam, with its offer's expiry fixed: the request's own
+/// `ttl`, or the wallet default taken when the plan is made. The instant the policy pass reads is then
+/// the one that gets sealed, rather than a default taken again once the policy has decided.
+pub struct IntentPlan {
+    request: MakeIntentRequest,
+    ttl: Timestamp,
+    ttl_is_default: bool,
+}
+
+/// Plan a `makeIntent`: fix the offer's expiry. Needs no key and no network, since the offer's effects
+/// come from the request.
+pub(super) fn plan(request: MakeIntentRequest) -> IntentPlan {
+    let ttl_is_default = request.ttl.is_none();
+    let ttl = request.ttl.unwrap_or_else(default_intent_ttl);
+    IntentPlan {
+        request,
+        ttl,
+        ttl_is_default,
+    }
+}
+
+impl IntentPlan {
+    pub(super) fn request(&self) -> &MakeIntentRequest {
+        &self.request
+    }
+
+    /// The request to build, with the expiry the policy pass saw.
+    pub(super) fn into_request(self) -> MakeIntentRequest {
+        MakeIntentRequest {
+            ttl: Some(self.ttl),
+            ..self.request
+        }
+    }
+
+    /// The offer the maker seals: the intent it keys at and when it expires.
+    pub(super) fn offer_context(&self) -> crate::policy_context::OfferContext {
+        crate::policy_context::OfferContext {
+            intent_id: self.request.intent_segment,
+            ttl: self.ttl.to_secs(),
+            ttl_is_default: self.ttl_is_default,
+        }
+    }
+}
+
 /// The `options` bag of a `makeIntent` request: the connector spec's `intentId` and `payFees`, plus the
 /// `ttl` extension. Any other key is refused, so a misspelled `ttl` cannot quietly leave a sealed offer
 /// on the default expiry.
@@ -769,6 +813,39 @@ mod tests {
         assert_eq!(req.desired_outputs.len(), 1);
         assert_eq!(req.intent_segment, DEFAULT_INTENT_SEGMENT);
         assert_eq!(req.ttl, None);
+    }
+
+    /// The plan fixes the expiry before the policy pass: a request's own `ttl` is kept, and an omitted
+    /// one becomes the wallet default once, flagged as such, and is what gets built.
+    #[test]
+    fn the_plan_fixes_the_offers_expiry_for_the_policy_pass() {
+        let parse = |options: &str| {
+            parse_make_intent_json(&format!(
+                r#"{{"desiredInputs":[{{"kind":"unshielded","type":"night","value":1}}],"options":{options}}}"#
+            ))
+            .unwrap()
+        };
+        let requested = now_secs() + 30;
+        let explicit = plan(parse(&format!(r#"{{"ttl":{requested},"intentId":7}}"#)));
+        assert_eq!(
+            explicit.offer_context(),
+            crate::policy_context::OfferContext {
+                intent_id: 7,
+                ttl: requested,
+                ttl_is_default: false,
+            }
+        );
+
+        let now = now_secs();
+        let defaulted = plan(parse("{}"));
+        let offer = defaulted.offer_context();
+        assert!(offer.ttl_is_default);
+        assert_eq!(offer.intent_id, DEFAULT_INTENT_SEGMENT);
+        assert!(offer.ttl >= now + max_ttl_secs() && offer.ttl <= now + max_ttl_secs() + 2);
+        assert_eq!(
+            defaulted.into_request().ttl,
+            Some(Timestamp::from_secs(offer.ttl))
+        );
     }
 
     #[test]

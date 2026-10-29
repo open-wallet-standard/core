@@ -664,6 +664,11 @@ The request is rejected at parse — before any proving is paid for — if the i
 future (born expired) or is further than `global_ttl` ahead, the two bounds the ledger enforces
 against the block the offer lands in (`IntentTtlExpired`, `IntentTtlTooFarInFuture`).
 
+The expiry is fixed when the offer is planned, the default included, and the policy pass sees it
+as `chain_extra.offer` (see
+[How long a maker offer stands](#how-long-a-maker-offer-stands--chain_extraoffer)), so a policy can
+cap an agent's offers without parsing the request.
+
 A taker should read the maker's TTL before completing an offer: the merged transaction has to
 land inside it, and the taker's own tip-aligned TTL does not extend it — the ledger checks each
 intent's TTL separately.
@@ -1256,6 +1261,30 @@ if int(fee.get("dust_burned", "0")) > 1_000_000_000:
     verdict(False, f"fee may burn {fee['dust_burned']} DUST specks")
 if extra.get("dust_registrations"):
     verdict(False, "registers NIGHT for DUST generation")
+```
+
+### How long a maker offer stands — `chain_extra.offer`
+
+A `makeIntent` seals an offer that anyone holding it can complete until it expires, and the maker
+can withdraw it only by spending one of its inputs, so its lifetime is authority the wallet hands
+out. Its context carries the offer, which no other method has:
+
+```json
+"offer": { "intent_id": 1, "ttl": 1785878998, "ttl_is_default": true }
+```
+
+- **`intent_id`** — the intent the maker's offer keys at: the request's `intentId`, the id drawn
+  for `"random"`, or `1` when the request names none.
+- **`ttl`** — when the offer expires, in Unix seconds: the request's `options.ttl`, or the wallet
+  default (`global_ttl` past now, currently an hour) fixed when the offer is planned. It is the
+  instant that gets sealed.
+- **`ttl_is_default`** — `true` when the request named no `ttl`.
+
+```python
+import time
+offer = extra.get("offer")
+if offer and offer["ttl"] - int(time.time()) > 300:
+    verdict(False, f"maker offer stands until {offer['ttl']}, more than 5 minutes")
 ```
 
 ### Why the design consumes an executable policy rather than a built-in rule

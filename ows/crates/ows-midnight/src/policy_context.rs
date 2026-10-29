@@ -8,13 +8,30 @@ use crate::contracts::ContractInteraction;
 /// Everything the policy seam shows a policy about one planned transaction. The two lists are kept
 /// disjoint: `segment_effects` is how much the *wallet* moves, `contracts` is *who* the transaction
 /// talks to and how much value each contract declares. `fee` and `dust_registrations` describe the
-/// wallet's own fee section and the authority over DUST generation it signs away.
+/// wallet's own fee section and the authority over DUST generation it signs away. `offer` is present
+/// only for a `makeIntent`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct PolicyContext {
     pub segment_effects: Vec<SegmentEffects>,
     pub contracts: Vec<ContractInteraction>,
     pub fee: FeeContext,
     pub dust_registrations: Vec<DustRegistrationContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offer: Option<OfferContext>,
+}
+
+/// The maker offer a `makeIntent` seals. A sealed offer is a bearer artifact its maker can withdraw
+/// only by letting it expire or by spending one of its inputs, so how long it stands is authority the
+/// wallet hands out.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct OfferContext {
+    /// The intent the offer keys at: the request's `intentId`, the one drawn for `"random"`, or `1`.
+    pub intent_id: u16,
+    /// When the offer expires, in Unix seconds.
+    pub ttl: u64,
+    /// Whether the request named no `ttl`, leaving the wallet default: the widest window the ledger
+    /// accepts.
+    pub ttl_is_default: bool,
 }
 
 /// How the wallet pays the transaction's DUST fee.
@@ -115,6 +132,7 @@ mod tests {
             }],
             fee: FeeContext::none(),
             dust_registrations: vec![],
+            offer: None,
         };
 
         let json = serde_json::to_value(&context).unwrap();
@@ -137,6 +155,7 @@ mod tests {
                 "received_from": [],
             })
         );
+        assert!(json.get("offer").is_none(), "only a maker offer has one");
     }
 
     #[test]
@@ -154,6 +173,7 @@ mod tests {
                 allow_fee_payment: "60000".to_string(),
                 replaces_delegation: None,
             }],
+            offer: None,
         };
 
         let json = serde_json::to_value(&context).unwrap();
@@ -181,6 +201,19 @@ mod tests {
         assert_eq!(
             serde_json::to_value(FeeContext::none()).unwrap(),
             serde_json::json!({ "mode": "none", "dust_burned": "0" })
+        );
+    }
+
+    #[test]
+    fn a_maker_offer_serializes_as_documented() {
+        let offer = OfferContext {
+            intent_id: 7,
+            ttl: 1_785_878_998,
+            ttl_is_default: false,
+        };
+        assert_eq!(
+            serde_json::to_value(offer).unwrap(),
+            serde_json::json!({ "intent_id": 7, "ttl": 1_785_878_998u64, "ttl_is_default": false })
         );
     }
 }

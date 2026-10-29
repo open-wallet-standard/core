@@ -72,8 +72,9 @@ pub enum ConnectorPlan {
     /// A `makeTransfer`: its outputs built and its balancing planned over their mock-proven form;
     /// `authorize` proves the same outputs and signs that plan.
     MakeTransfer(Box<make_transfer::TransferPlan>),
-    /// A `makeIntent` request; the wallet builds an imbalanced maker offer, proved in `authorize`.
-    MakeIntent(MakeIntentRequest),
+    /// A `makeIntent` request with its expiry fixed; the wallet builds an imbalanced maker offer,
+    /// proved in `authorize`.
+    MakeIntent(make_intent::IntentPlan),
     /// A `balanceSealedTransaction`: the maker offer is SEALED (`proof,pedersen-schnorr`).
     /// A sealed tx cannot be balanced in place (its binding fixes the value balance), so the taker
     /// completes it by MERGING: it builds its own imbalanced half — the per-token complement of the
@@ -97,8 +98,8 @@ impl ConnectorPlan {
             ConnectorPlan::MakeTransfer(transfer) => {
                 make_transfer::authorize(chain_id, crypto_provider, *transfer)
             }
-            ConnectorPlan::MakeIntent(req) => {
-                make_intent::authorize(chain_id, crypto_provider, req)
+            ConnectorPlan::MakeIntent(plan) => {
+                make_intent::authorize(chain_id, crypto_provider, plan.into_request())
             }
             ConnectorPlan::BalanceSealedMerge(merge) => {
                 balance_sealed::authorize_merge(chain_id, crypto_provider, *merge)
@@ -121,8 +122,8 @@ impl ConnectorPlan {
             ConnectorPlan::MakeTransfer(transfer) => {
                 transfer.segment_effects(chain_id, crypto_provider)
             }
-            ConnectorPlan::MakeIntent(req) => {
-                make_intent::request_segment_effects(chain_id, crypto_provider, req)
+            ConnectorPlan::MakeIntent(plan) => {
+                make_intent::request_segment_effects(chain_id, crypto_provider, plan.request())
             }
             // The wallet's movement in a merge is its own half — the `complement` it contributes and
             // receives — plus the merged DUST fee it funds, all in the guaranteed section (see
@@ -155,8 +156,8 @@ impl ConnectorPlan {
 
     /// The `chain_extra` context the policy seam gates on, serialized as an executable policy reads
     /// it: the plan's [effects](Self::segment_effects) and its [contracts](Self::contracts), how the
-    /// wallet pays the fee and the dust registrations it signs. The whole Midnight context is built
-    /// here, so the caller only hands it to the gate.
+    /// wallet pays the fee, the dust registrations it signs and, for a maker offer, how long the offer
+    /// stands. The whole Midnight context is built here, so the caller only hands it to the gate.
     pub fn policy_context(
         &self,
         chain_id: &str,
@@ -178,11 +179,16 @@ impl ConnectorPlan {
             ConnectorPlan::MakeIntent(_) => (FeeContext::none(), Vec::new()),
             ConnectorPlan::BalanceSealedMerge(merge) => (merge.fee_context(), Vec::new()),
         };
+        let offer = match self {
+            ConnectorPlan::MakeIntent(plan) => Some(plan.offer_context()),
+            _ => None,
+        };
         let context = PolicyContext {
             segment_effects: self.segment_effects(chain_id, crypto_provider)?,
             contracts: self.contracts()?,
             fee,
             dust_registrations,
+            offer,
         };
         serde_json::to_value(&context).map_err(|e| std::io::Error::other(e.to_string()))
     }
@@ -202,7 +208,9 @@ pub fn plan_connector_tx(
             let transfer = make_transfer::plan(chain_id, crypto_provider, &req)?;
             Ok(ConnectorPlan::MakeTransfer(Box::new(transfer)))
         }
-        ConnectorMethod::MakeIntent => Ok(ConnectorPlan::MakeIntent(parse_make_intent_json(json)?)),
+        ConnectorMethod::MakeIntent => Ok(ConnectorPlan::MakeIntent(make_intent::plan(
+            parse_make_intent_json(json)?,
+        ))),
         ConnectorMethod::BalanceSealed => balance_sealed::plan(chain_id, crypto_provider, json),
         ConnectorMethod::Other(method) => Err(std::io::Error::other(format!(
             "Midnight DApp Connector method '{method}' is not yet implemented"
@@ -388,7 +396,7 @@ mod tests {
     }
 
     /// A maker offer plans from the request alone, so its whole policy context is built offline: the
-    /// maker's movement, no contracts, no fee (the taker pays) and no registration.
+    /// maker's movement, no contracts, no fee (the taker pays), no registration, and the offer itself.
     #[test]
     fn a_maker_offers_policy_context_shows_no_fee_and_no_registration() {
         let json = r#"{"method":"makeIntent","desiredInputs":[{"kind":"unshielded","type":"night","value":"5"}],"desiredOutputs":[]}"#;
@@ -409,6 +417,8 @@ mod tests {
             serde_json::json!({ "mode": "none", "dust_burned": "0" })
         );
         assert_eq!(context["dust_registrations"], serde_json::json!([]));
+        assert_eq!(context["offer"]["intent_id"], 1);
+        assert_eq!(context["offer"]["ttl_is_default"], true);
     }
 
     #[test]
