@@ -1812,6 +1812,93 @@ verdict(total <= CAP, "summed movement %d (cap CAP)" % total)
         );
     }
 
+    /// The seam is wired into the token entry points, not only callable: a makeIntent that spends no
+    /// coin plans without a network, so `sign_with_api_key` and `sign_and_send` must refuse one over
+    /// the token's cap at the second pass, and `sign_with_api_key` must sign one within it. A gate
+    /// replaced by a no-op signs the first; one that always denies refuses the second.
+    #[test]
+    fn token_entry_points_gate_a_midnight_request_at_the_seam() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let info = crate::ops::import_wallet_mnemonic(
+            "mn-agent",
+            phrase,
+            Some(passphrase),
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+        let stored = &info
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "midnight:mainnet")
+            .unwrap()
+            .address;
+        let own = ows_signer::chains::MidnightSigner::preview()
+            .reencode_unshielded_address(stored)
+            .unwrap();
+        let policy = save_midnight_cap_policy(dir.path(), &vault, 1_000_000);
+        let (token, _) = create_api_key(
+            "midnight-agent",
+            &[info.id],
+            &[policy.id],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+        let chain = ows_core::parse_chain("midnight:preview").unwrap();
+        let asking = |value: u64| {
+            format!(
+                r#"{{"method":"makeIntent","desiredInputs":[],"desiredOutputs":[{{"kind":"unshielded","type":"night","value":"{value}","recipient":"{own}"}}],"options":{{"intentId":1}}}}"#
+            )
+        };
+        let over_cap = asking(5_000_000);
+        let denied_at_seam = |result: Result<(), OwsLibError>| match result {
+            Err(OwsLibError::Core(OwsError::PolicyDenied { reason, .. })) => assert!(
+                reason.contains("summed movement 5000000"),
+                "denied for another reason: {reason}"
+            ),
+            other => panic!("expected the seam to deny, got {other:?}"),
+        };
+
+        denied_at_seam(
+            sign_with_api_key(
+                &token,
+                "mn-agent",
+                &chain,
+                over_cap.as_bytes(),
+                None,
+                Some(&vault),
+            )
+            .map(|_| ()),
+        );
+        denied_at_seam(
+            crate::ops::sign_and_send(
+                "mn-agent",
+                "midnight:preview",
+                &over_cap,
+                Some(&token),
+                None,
+                None,
+                Some(&vault),
+            )
+            .map(|_| ()),
+        );
+        let signed = sign_with_api_key(
+            &token,
+            "mn-agent",
+            &chain,
+            asking(500).as_bytes(),
+            None,
+            Some(&vault),
+        )
+        .expect("an intent within the cap passes the seam");
+        assert!(signed.transaction.is_some(), "{signed:?}");
+    }
+
     /// The second pass re-runs the declarative rules, not only the executables: planning can outlast a
     /// rule that held at the first pass, such as an expiry, and the seam must still deny.
     #[test]

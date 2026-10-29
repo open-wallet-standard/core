@@ -905,7 +905,9 @@ The connector methods need a local prover, a funded wallet and the indexer, so t
 on preview: `e2e/dapp-connector-siblings.md` walks through each method, and
 `e2e/midnight-connector-siblings.sh` drives them interactively. The second pass is covered by
 `effect_policy_pass_gates_via_executable_policy` (`ows-lib/src/key_ops.rs`), which drives
-`enforce_effect_policies` the way an executable program consumes it, and by the
+`enforce_effect_policies` the way an executable program consumes it, by
+`token_entry_points_gate_a_midnight_request_at_the_seam` there, which sends an offline makeIntent
+through `sign_with_api_key` and `sign_and_send` under a capped token, and by the
 `plan_segment_effects` cases in `ows-midnight/src/balance_tx.rs`.
 
 ## Sign and send (`ows sign send-tx`)
@@ -1478,7 +1480,8 @@ knowable at the first pass, so there is nothing to re-evaluate.
   drives `enforce_effect_policies` over a constructed `chain_extra` the way the executable
   programs consume `transaction.chain_extra.segment_effects`, and
   `effect_policy_pass_rechecks_declarative_rules` checks that an expired policy still denies
-  there; `plan_segment_effects` cases in
+  there; `token_entry_points_gate_a_midnight_request_at_the_seam` checks that `sign_with_api_key`
+  and `sign_and_send` both run that gate; `plan_segment_effects` cases in
   `ows-midnight/src/balance_tx.rs` cover the per-segment effect derivation, and
   `contract_interactions` cases in `ows-midnight/src/contracts.rs` cover the per-segment
   `contracts` derivation.
@@ -1568,7 +1571,8 @@ effect-aware pass).
 - **Balance:** `e2e/midnight-fund-balance.sh` mints a token for the wallet and runs the balance
   in owner and token mode side by side.
 - **Signing:** `effect_policy_pass_gates_via_executable_policy` (`ows-lib/src/key_ops.rs`) runs
-  the second, effect-aware pass over a token's executable policy.
+  the second, effect-aware pass over a token's executable policy, and
+  `token_entry_points_gate_a_midnight_request_at_the_seam` runs it through the token entry points.
 
 ## Endpoints (`ows config show`)
 

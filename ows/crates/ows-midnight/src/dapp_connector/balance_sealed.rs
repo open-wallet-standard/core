@@ -1406,6 +1406,111 @@ mod tests {
                 .unwrap()
         }
 
+        /// A taker whose key is not the maker's, so its movement is told apart from the maker's.
+        fn taker() -> MidnightCryptoProvider {
+            let mut credential = b"MNK1".to_vec();
+            credential.extend_from_slice(&[0x44; 32]);
+            credential.extend_from_slice(&[0x55; 32]);
+            credential.extend_from_slice(&[0x66; 32]);
+            ows_signer::chains::MidnightSigner::preview()
+                .crypto_provider(&ows_signer::SecretBytes::new(credential))
+                .unwrap()
+        }
+
+        /// The taker's half of a merge moves exactly the complement its effects are derived from, and
+        /// completes the maker. Built with the planner's own coin selection, it nets per token to the
+        /// request-derived effects the policy pass gates on, also when it spends a NIGHT coin to back a
+        /// fee registration, which returns whole, and with the maker it leaves no token imbalanced, so
+        /// the merge moves nothing the policy did not see.
+        #[test]
+        fn the_taker_half_moves_its_complement_and_completes_the_maker() {
+            const CHAIN: &str = "midnight:preview";
+            let taker = taker();
+            let own = taker
+                .addresses(&MidnightNetwork::from_chain_id(CHAIN))
+                .unwrap();
+            let maker_tx = sealed(maker(offer(vec![give()], vec![change(), want()]), None));
+            let complement =
+                sealed_maker_complement(CHAIN, &maker_tx, &own.unshielded, &own.shielded).unwrap();
+            // The taker pays the 50 it is asked for from an 80 coin, and gets 30 back.
+            let pool = [crate::UnshieldedUtxo {
+                token_type: hex::encode([0x22; 32]),
+                value: 80,
+                intent_hash: hex::encode([9; 32]),
+                output_index: 0,
+                owner: own.unshielded.clone(),
+                ctime_unix_secs: Some(1_000),
+                registered_for_dust_generation: false,
+            }];
+            let half = crate::dapp_connector::make_intent::plan_offer_from_pool(
+                CHAIN,
+                &taker,
+                &complement,
+                &pool,
+                None,
+                None,
+            )
+            .unwrap();
+            let built = half.mock_proven(&taker).unwrap();
+            let declared =
+                crate::dapp_connector::make_intent::request_effects(CHAIN, &taker, &complement)
+                    .unwrap();
+            let reserve = crate::UnshieldedUtxo {
+                token_type: "00".repeat(32),
+                value: 5_000,
+                intent_hash: hex::encode([8; 32]),
+                ..pool[0].clone()
+            };
+            let reserving = crate::dapp_connector::make_intent::plan_offer_from_pool(
+                CHAIN,
+                &taker,
+                &complement,
+                &pool,
+                Some(&reserve),
+                None,
+            )
+            .unwrap();
+            assert_eq!(reserving.spent().len(), 2);
+            assert_eq!(
+                crate::dapp_connector::make_intent::built_movement(
+                    CHAIN,
+                    &taker,
+                    &reserving.mock_proven(&taker).unwrap()
+                ),
+                declared
+            );
+
+            let merge = MergePlan {
+                maker_tx: maker_tx.clone(),
+                complement,
+                taker: half,
+                fee: None,
+            };
+            assert_eq!(
+                merge_segment_effects(CHAIN, &taker, &merge).unwrap(),
+                crate::balance_tx::single_segment(
+                    0,
+                    crate::dapp_connector::make_intent::built_movement(CHAIN, &taker, &built)
+                )
+            );
+
+            let mut r: &[u8] = &maker_tx;
+            let maker: TxSealed = tagged_deserialize(&mut r).unwrap();
+            let mut net: BTreeMap<LedgerTokenType, i128> = BTreeMap::new();
+            let balances = maker
+                .balance(None)
+                .unwrap()
+                .into_iter()
+                .chain(Transaction::Standard(built).balance(None).unwrap());
+            for ((token, _segment), balance) in balances {
+                if token != LedgerTokenType::Dust {
+                    *net.entry(token).or_default() += balance;
+                }
+            }
+            assert!(!net.is_empty());
+            assert!(net.values().all(|balance| *balance == 0), "{net:?}");
+        }
+
         fn plan_maker(maker_tx: &[u8]) -> Result<ConnectorPlan, std::io::Error> {
             let json = serde_json::json!({
                 "method": "balanceSealedTransaction",

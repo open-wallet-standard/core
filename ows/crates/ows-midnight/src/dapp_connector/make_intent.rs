@@ -896,6 +896,89 @@ fn build_shielded_output_offer(
         .ok_or_else(|| err("shielded Zswap offer is empty"))
 }
 
+/// The movement a built transaction makes for the wallet of `crypto_provider` on `chain_id`, read off
+/// the transaction alone: each unshielded coin the wallet's key spends is an outflow, each unshielded
+/// output to the wallet's address and each shielded output it can decrypt an inflow. It knows nothing
+/// of the request, so a test can hold the request-derived effects against what was actually built.
+/// The transaction must spend no shielded coin, whose outflow only the wallet's nullifiers tell.
+#[cfg(test)]
+pub(super) fn built_movement(
+    chain_id: &str,
+    crypto_provider: &MidnightCryptoProvider,
+    stx: &StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
+) -> Vec<TransactionEffect> {
+    let addresses = crypto_provider
+        .addresses(&MidnightNetwork::from_chain_id(chain_id))
+        .unwrap();
+    let vk = crypto_provider.unshielded_verifying_key().unwrap();
+    let wallet = UserAddress::from(vk.clone());
+    let mut moved: Vec<(TransferKind, String, i128)> = Vec::new();
+    for pair in stx.intents.iter() {
+        let (_, intent) = pair.deref();
+        assert!(
+            intent.dust_actions.is_none(),
+            "the offer carries a DUST section"
+        );
+        assert_eq!(
+            intent.actions.iter_deref().count(),
+            0,
+            "the offer calls a contract"
+        );
+        let offers = [
+            intent.guaranteed_unshielded_offer.as_ref(),
+            intent.fallible_unshielded_offer.as_ref(),
+        ];
+        for offer in offers.into_iter().flatten() {
+            for input in offer.inputs.iter_deref().filter(|i| i.owner == vk) {
+                moved.push((
+                    TransferKind::Unshielded,
+                    hex::encode(input.type_.0 .0),
+                    -(input.value as i128),
+                ));
+            }
+            for output in offer.outputs.iter_deref().filter(|o| o.owner == wallet) {
+                moved.push((
+                    TransferKind::Unshielded,
+                    hex::encode(output.type_.0 .0),
+                    output.value as i128,
+                ));
+            }
+        }
+    }
+    let fallible = stx
+        .fallible_coins
+        .iter()
+        .map(|pair| pair.deref().1.deref().clone());
+    for offer in stx
+        .guaranteed_coins
+        .iter()
+        .map(|sp| sp.deref().clone())
+        .chain(fallible)
+    {
+        assert_eq!(
+            offer.inputs.iter_deref().count(),
+            0,
+            "the offer spends a shielded coin"
+        );
+        for (token, value) in crypto_provider.recognize_shielded_inflow(&offer) {
+            moved.push((
+                TransferKind::Shielded,
+                hex::encode(token.0 .0),
+                value as i128,
+            ));
+        }
+    }
+    effects_from_movements(
+        &addresses,
+        moved.iter().map(|(kind, token_type, value)| Movement {
+            kind: *kind,
+            token_type,
+            value: *value,
+        }),
+    )
+    .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1076,6 +1159,114 @@ mod tests {
         assert_eq!(
             unshielded_legs(&standard(authorized), DEFAULT_INTENT_SEGMENT),
             planned
+        );
+    }
+
+    /// A maker offer moves exactly what its request declares. The coins the plan picks are whole and
+    /// their excess returns to the maker, outputs to anyone else are not the maker's movement, and
+    /// shielded receipts to the maker count as they would on chain, so the movement read off the offer
+    /// actually built equals the request-derived effects the policy pass gates on.
+    #[test]
+    fn request_effects_are_the_movement_of_the_offer_built() {
+        let token = |b: u8| hex::encode([b; 32]);
+        let own = provider()
+            .addresses(&MidnightNetwork::from_chain_id(CHAIN))
+            .unwrap();
+        let mut other_key = b"MNK1".to_vec();
+        other_key.extend_from_slice(&[0x22; 96]);
+        let other = MidnightSigner::preview()
+            .derive_addresses(&other_key)
+            .unwrap();
+        let req = parse_make_intent_json(&format!(
+            r#"{{"desiredInputs":[
+                {{"kind":"unshielded","type":"night","value":"250"}},
+                {{"kind":"unshielded","type":"{t}","value":"40"}}],
+              "desiredOutputs":[
+                {{"kind":"unshielded","type":"night","value":"30","recipient":"{own_u}"}},
+                {{"kind":"unshielded","type":"{u}","value":"70","recipient":"{own_u}"}},
+                {{"kind":"unshielded","type":"night","value":"500","recipient":"{other_u}"}},
+                {{"kind":"shielded","type":"{s}","value":"10","recipient":"{own_s}"}},
+                {{"kind":"shielded","type":"{s}","value":"15","recipient":"{other_s}"}}]}}"#,
+            t = token(0x5a),
+            u = token(0x5b),
+            s = token(0x5c),
+            own_u = own.unshielded,
+            own_s = own.shielded,
+            other_u = other.unshielded,
+            other_s = other.shielded,
+        ))
+        .unwrap();
+        let pool = [
+            wallet_coin(300, 1),
+            wallet_coin(200, 2),
+            crate::UnshieldedUtxo {
+                token_type: token(0x5a),
+                ..wallet_coin(50, 3)
+            },
+        ];
+
+        let plan = plan_from_pool(CHAIN, &provider(), req, &pool, None).unwrap();
+        let built = plan.offer.mock_proven(&provider()).unwrap();
+        let declared = request_effects(CHAIN, &provider(), plan.request()).unwrap();
+
+        assert_eq!(built_movement(CHAIN, &provider(), &built), declared);
+        let mut picked = unshielded_legs(&built, DEFAULT_INTENT_SEGMENT).0;
+        picked.sort();
+        assert_eq!(
+            picked,
+            vec![(1, 300), (3, 50)],
+            "whole coins, largest first"
+        );
+    }
+
+    /// A shielded input is funded the same way: the whole coins the plan picks, less the change it
+    /// mints back to the maker, are exactly the declared input.
+    #[test]
+    fn shielded_input_coins_net_to_the_declared_input() {
+        use midnight_base_crypto::hash::HashOutput;
+        use rand::Rng as _;
+        let token = ShieldedTokenType(HashOutput([0x5c; 32]));
+        let coin = |type_, value| {
+            let mut coin: QualifiedInfo = OsRng.r#gen();
+            coin.type_ = type_;
+            coin.value = value;
+            coin
+        };
+        let coins = [
+            coin(token, 20),
+            coin(token, 15),
+            coin(token, 30),
+            coin(ShieldedTokenType(HashOutput([0x5d; 32])), 99),
+        ];
+        let input = DesiredInput {
+            kind: TransferKind::Shielded,
+            token_type: hex::encode([0x5c; 32]),
+            value: 25,
+        };
+        let req = MakeIntentRequest {
+            desired_inputs: vec![input.clone()],
+            desired_outputs: vec![],
+            intent_segment: DEFAULT_INTENT_SEGMENT,
+            ttl: None,
+        };
+
+        let selection = crate::balance_tx::plan_shielded_inputs(
+            &coins,
+            &shielded_input_deficits(&[&input]).unwrap(),
+        )
+        .unwrap();
+        let spent: u128 = selection.coins.iter().map(|c| c.value).sum();
+        let change: u128 = selection.change_by_token.iter().map(|(_, v)| *v).sum();
+        assert!(selection.coins.iter().all(|c| c.type_ == token));
+
+        let declared = request_effects(CHAIN, &provider(), &req).unwrap();
+        assert_eq!(declared.len(), 1);
+        assert_eq!(
+            declared[0].diff,
+            vec![(
+                hex::encode([0x5c; 32]),
+                (change as i128 - spent as i128).to_string()
+            )]
         );
     }
 
