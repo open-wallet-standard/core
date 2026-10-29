@@ -129,6 +129,11 @@ impl TransferPlan {
     ) -> Result<Vec<crate::balance_tx::SegmentEffects>, std::io::Error> {
         self.plan.segment_effects(chain_id, crypto_provider)
     }
+
+    /// The balancing plan the transfer signs, whose fee and registrations the policy seam reports.
+    pub(super) fn balanced(&self) -> &crate::BalancedPlan {
+        &self.plan
+    }
 }
 
 /// Prove the planned outputs for real, put the proofs into the planned transaction, and sign and seal

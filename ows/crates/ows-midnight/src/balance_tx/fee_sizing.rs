@@ -265,6 +265,28 @@ impl DustFeePlan {
             DustFeePlan::Spend { plan, .. } => plan.fee_dust,
         }
     }
+
+    /// How this fee section pays, and the most DUST it can take — for a registration that is its
+    /// `allow_fee_payment`, which [`dust_outflow`](Self::dust_outflow) leaves out.
+    pub(super) fn fee_context(&self) -> FeeContext {
+        match self {
+            DustFeePlan::None => FeeContext::none(),
+            DustFeePlan::Registration(da) => FeeContext::registration(
+                da.registrations
+                    .iter_deref()
+                    .fold(0u128, |sum, reg| sum.saturating_add(reg.allow_fee_payment)),
+            ),
+            DustFeePlan::Spend { plan, .. } => FeeContext::spend(plan.fee_dust),
+        }
+    }
+
+    /// The generationless registrations this fee section signs: none unless it is a registration.
+    pub(super) fn registrations(&self) -> Vec<&DustRegistration<MnSig, InMemoryDB>> {
+        match self {
+            DustFeePlan::Registration(da) => da.registrations.iter_deref().collect(),
+            DustFeePlan::None | DustFeePlan::Spend { .. } => Vec::new(),
+        }
+    }
 }
 
 /// Whether `tx`'s DUST section covers the fee the node will charge. Mirrors the node's fee gate

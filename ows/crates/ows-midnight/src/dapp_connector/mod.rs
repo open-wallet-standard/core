@@ -6,9 +6,10 @@
 //! [`ConnectorPlan`]) → policy seam → [`ConnectorPlan::authorize`] (build + prove + sign + seal). The
 //! plan carries no bearer instrument, so the seam can gate on it before any key-bearing work happens.
 
-use ows_signer::chains::MidnightCryptoProvider;
+use ows_signer::chains::{MidnightCryptoProvider, MidnightNetwork};
 use serde::Deserialize;
 
+use crate::policy_context::{FeeContext, PolicyContext};
 use crate::BalancedPlan;
 
 mod balance_sealed;
@@ -153,16 +154,35 @@ impl ConnectorPlan {
     }
 
     /// The `chain_extra` context the policy seam gates on, serialized as an executable policy reads
-    /// it: the plan's [effects](Self::segment_effects) and its [contracts](Self::contracts). The whole
-    /// Midnight context is built here, so the caller only hands it to the gate.
+    /// it: the plan's [effects](Self::segment_effects) and its [contracts](Self::contracts), how the
+    /// wallet pays the fee and the dust registrations it signs. The whole Midnight context is built
+    /// here, so the caller only hands it to the gate.
     pub fn policy_context(
         &self,
         chain_id: &str,
         crypto_provider: &MidnightCryptoProvider,
     ) -> Result<serde_json::Value, std::io::Error> {
-        let context = crate::policy_context::PolicyContext {
+        let addresses = crypto_provider
+            .addresses(&MidnightNetwork::from_chain_id(chain_id))
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        // A maker offer is fee-free (the taker pays), and a merge's fee is always a DUST spend, so
+        // only the plans the balancer builds can register NIGHT.
+        let (fee, dust_registrations) = match self {
+            ConnectorPlan::BalanceUnsealed(plan) => {
+                (plan.fee_context(), plan.dust_registrations(&addresses))
+            }
+            ConnectorPlan::MakeTransfer(transfer) => (
+                transfer.balanced().fee_context(),
+                transfer.balanced().dust_registrations(&addresses),
+            ),
+            ConnectorPlan::MakeIntent(_) => (FeeContext::none(), Vec::new()),
+            ConnectorPlan::BalanceSealedMerge(merge) => (merge.fee_context(), Vec::new()),
+        };
+        let context = PolicyContext {
             segment_effects: self.segment_effects(chain_id, crypto_provider)?,
             contracts: self.contracts()?,
+            fee,
+            dust_registrations,
         };
         serde_json::to_value(&context).map_err(|e| std::io::Error::other(e.to_string()))
     }
@@ -357,6 +377,38 @@ mod tests {
             parse_connector_method(r#"{"method":"makeTransfer","desiredOutputs":[]}"#).unwrap(),
             ConnectorMethod::MakeTransfer
         );
+    }
+
+    fn provider() -> MidnightCryptoProvider {
+        let mut credential = b"MNK1".to_vec();
+        credential.extend_from_slice(&[0x11; 96]);
+        ows_signer::chains::MidnightSigner::mainnet()
+            .crypto_provider(&ows_signer::SecretBytes::new(credential))
+            .unwrap()
+    }
+
+    /// A maker offer plans from the request alone, so its whole policy context is built offline: the
+    /// maker's movement, no contracts, no fee (the taker pays) and no registration.
+    #[test]
+    fn a_maker_offers_policy_context_shows_no_fee_and_no_registration() {
+        let json = r#"{"method":"makeIntent","desiredInputs":[{"kind":"unshielded","type":"night","value":"5"}],"desiredOutputs":[]}"#;
+        let plan = plan_connector_tx("midnight:preview", &provider(), json).unwrap();
+
+        let context = plan
+            .policy_context("midnight:preview", &provider())
+            .unwrap();
+
+        assert_eq!(context["segment_effects"][0]["segment"], 0);
+        assert_eq!(
+            context["segment_effects"][0]["effects"][0]["diff"],
+            serde_json::json!([["00".repeat(32), "-5"]])
+        );
+        assert_eq!(context["contracts"], serde_json::json!([]));
+        assert_eq!(
+            context["fee"],
+            serde_json::json!({ "mode": "none", "dust_burned": "0" })
+        );
+        assert_eq!(context["dust_registrations"], serde_json::json!([]));
     }
 
     #[test]

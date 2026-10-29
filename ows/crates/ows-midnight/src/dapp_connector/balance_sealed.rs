@@ -348,6 +348,15 @@ impl MergePlan {
     pub(super) fn maker_tx(&self) -> &[u8] {
         &self.maker_tx
     }
+
+    /// How the taker pays the merged transaction's fee: a DUST spend when it pays one, since the merge
+    /// has no generationless registration path.
+    pub(super) fn fee_context(&self) -> crate::policy_context::FeeContext {
+        match &self.fee {
+            Some(fee) => crate::policy_context::FeeContext::spend(fee.plan.fee_dust),
+            None => crate::policy_context::FeeContext::none(),
+        }
+    }
 }
 
 /// Plan the merge: decide the taker's half and, on a live-DUST chain when the taker pays fees, size the

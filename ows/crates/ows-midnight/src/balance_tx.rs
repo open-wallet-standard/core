@@ -49,6 +49,7 @@ use ows_core::policy::TransactionEffect;
 use ows_core::sync_cache::SyncCacheScope;
 
 use crate::contracts::{contract_interactions, ContractInteraction};
+use crate::policy_context::{DustRegistrationContext, FeeContext};
 use crate::UnshieldedUtxo;
 
 mod fee_sizing;
@@ -927,6 +928,30 @@ impl BalancedPlan {
     /// action, so these are entirely the dapp's.
     pub(crate) fn contracts(&self) -> Vec<ContractInteraction> {
         contract_interactions(self.base.actions())
+    }
+
+    /// How the wallet pays this plan's DUST fee, and the most DUST that can take.
+    pub(crate) fn fee_context(&self) -> FeeContext {
+        self.dust.fee_context()
+    }
+
+    /// The dust registrations the wallet signs in this plan: its own fee registration, which rides
+    /// the balancing intent and registers the wallet's NIGHT to the wallet's own DUST address.
+    pub(crate) fn dust_registrations(
+        &self,
+        addresses: &MidnightAddresses,
+    ) -> Vec<DustRegistrationContext> {
+        self.dust
+            .registrations()
+            .into_iter()
+            .map(|reg| DustRegistrationContext {
+                intent_id: self.seg_id,
+                night_address: addresses.unshielded.clone(),
+                dust_address: addresses.dust.clone(),
+                allow_fee_payment: reg.allow_fee_payment.to_string(),
+                replaces_delegation: None,
+            })
+            .collect()
     }
 
     /// Put real proofs into a plan built over a mock-proven transaction, so the plan the policy seam
@@ -3483,6 +3508,99 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert_eq!(effects[0].segment, 2);
         assert_eq!(effects[0].effects[0].diff[0].1, "-100");
+    }
+
+    /// A plan over a transaction with no intents of its own, its balancing intent at segment 3,
+    /// paying its fee with `dust`.
+    fn plan_paying(dust: DustFeePlan) -> BalancedPlan {
+        BalancedPlan {
+            base: base_with_intents(vec![]),
+            seg_id: 3,
+            intent_in: empty_intent_skeleton(),
+            unshielded_offer: UnshieldedOffer {
+                inputs: vec![].into(),
+                outputs: vec![].into(),
+                signatures: vec![].into(),
+            },
+            fallible_offers: vec![],
+            intent_ttl: Timestamp::from_secs(0),
+            shielded: None,
+            dust,
+            consolidation: None,
+        }
+    }
+
+    /// The wallet's own fee registration reaches the policy: the fee says how it pays and the most
+    /// DUST it can take, and the registration names the NIGHT it registers, the DUST address it points
+    /// that NIGHT at and the intent carrying it. The effects, which track held DUST, show none of it.
+    #[test]
+    fn the_policy_context_shows_the_wallets_fee_registration() {
+        let provider = MidnightSigner::mainnet()
+            .crypto_provider(&packed_signing_key(UNSHIELDED_SEED_HEX))
+            .unwrap();
+        let addresses = provider
+            .addresses(&MidnightNetwork::from_chain_id("midnight:mainnet"))
+            .unwrap();
+        let vk = provider.unshielded_verifying_key().unwrap();
+        let own = provider.dust_public_key().unwrap();
+        let plan = plan_paying(DustFeePlan::Registration(dust_registration_to(
+            &vk,
+            Some(own),
+        )));
+
+        assert_eq!(plan.fee_context(), FeeContext::registration(100_000));
+        assert_eq!(
+            plan.dust_registrations(&addresses),
+            vec![DustRegistrationContext {
+                intent_id: 3,
+                night_address: addresses.unshielded.clone(),
+                dust_address: addresses.dust.clone(),
+                allow_fee_payment: "100000".to_string(),
+                replaces_delegation: None,
+            }]
+        );
+        assert!(plan
+            .segment_effects("midnight:mainnet", &provider)
+            .unwrap()
+            .is_empty());
+    }
+
+    /// A DUST spend burns exactly its fee, which the effects show too, and registers nothing; no fee
+    /// section burns nothing.
+    #[test]
+    fn a_dust_spend_fee_burns_its_fee_and_registers_nothing() {
+        use midnight_ledger::structure::INITIAL_PARAMETERS;
+        let provider = MidnightSigner::mainnet()
+            .crypto_provider(&packed_signing_key(UNSHIELDED_SEED_HEX))
+            .unwrap();
+        let addresses = provider
+            .addresses(&MidnightNetwork::from_chain_id("midnight:mainnet"))
+            .unwrap();
+        let spend = plan_paying(DustFeePlan::Spend {
+            plan: DustSpendPlan {
+                fee_dust: 42,
+                dust_ctime: Timestamp::from_secs(0),
+                intent_ttl: Timestamp::from_secs(0),
+                seg_id: 3,
+                binding_commitment: PedersenRandomness::from(0),
+            },
+            dust_state: Box::new(DustLocalState::new(INITIAL_DUST_PARAMETERS)),
+            ledger_params: Box::new(INITIAL_PARAMETERS),
+        });
+
+        assert_eq!(spend.fee_context(), FeeContext::spend(42));
+        assert!(spend.dust_registrations(&addresses).is_empty());
+        let effects = spend
+            .segment_effects("midnight:mainnet", &provider)
+            .unwrap();
+        assert_eq!(
+            effects[0].effects[0].diff,
+            vec![("dust".to_string(), "-42".to_string())]
+        );
+
+        let none = plan_paying(DustFeePlan::None);
+        assert_eq!(none.fee_context(), FeeContext::none());
+        assert!(none.dust_registrations(&addresses).is_empty());
     }
 
     /// Funding a fallible unshielded offer in its own segment nets that segment to zero — the core Gap B
