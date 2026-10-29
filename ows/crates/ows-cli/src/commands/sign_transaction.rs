@@ -47,7 +47,7 @@ pub fn run(
 
     let tx_bytes = ows_lib::decode_tx_input(&chain, tx_hex)?;
     // Owner mode: full authority, no policy gate.
-    let signable_tx = ows_lib::prepare_signable_tx(&chain, tx_bytes, &key, |_| Ok(()))?;
+    let signable_tx = ows_lib::prepare_signable_tx(&chain, tx_bytes, &key, |_| Ok(()), None)?;
 
     let signer = signer_for_chain(&chain)?;
     let signable = signer.extract_signable_bytes(&signable_tx)?;

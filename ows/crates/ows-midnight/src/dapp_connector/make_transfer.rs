@@ -7,6 +7,8 @@
 //! planned once, before the policy seam, over mock-proven outputs; `authorize` proves the same outputs
 //! for real and signs that plan, so the coins and fee the policy saw are the ones spent.
 
+use std::path::Path;
+
 use midnight_base_crypto::signatures::Signature as MnSig;
 use midnight_coin_structure::coin::Info as CoinInfo;
 use midnight_ledger::structure::{
@@ -104,6 +106,7 @@ pub(super) fn plan(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     req: &MakeTransferRequest,
+    vault_path: Option<&Path>,
 ) -> Result<TransferPlan, std::io::Error> {
     let preimage = build_make_transfer_preimage(chain_id, req)?;
     // Mock-prove into the *unsealed* proven form (`mock_prove` would seal it, and the balancer only
@@ -112,7 +115,13 @@ pub(super) fn plan(
     let mut bytes = Vec::new();
     tagged_serialize(&mock_proven, &mut bytes)
         .map_err(|e| err(format!("serialize mock-proven makeTransfer: {e}")))?;
-    let plan = crate::plan_unsealed_proven_tx(chain_id, crypto_provider, &bytes, req.pay_fees)?;
+    let plan = crate::plan_unsealed_proven_tx(
+        chain_id,
+        crypto_provider,
+        &bytes,
+        req.pay_fees,
+        vault_path,
+    )?;
     Ok(TransferPlan { preimage, plan })
 }
 
@@ -143,10 +152,11 @@ pub(super) fn authorize(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     transfer: TransferPlan,
+    vault_path: Option<&Path>,
 ) -> Result<Vec<u8>, std::io::Error> {
     let TransferPlan { preimage, mut plan } = transfer;
-    plan.replace_mock_proofs(prove_preimage(chain_id, preimage)?)?;
-    crate::authorize_proven_tx(chain_id, crypto_provider, plan)
+    plan.replace_mock_proofs(prove_preimage(chain_id, preimage, vault_path)?)?;
+    crate::authorize_proven_tx(chain_id, crypto_provider, plan, vault_path)
 }
 
 /// Construct the `proof-preimage` transaction for a `makeTransfer`: recipient outputs and no inputs.

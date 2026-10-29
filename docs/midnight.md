@@ -1520,6 +1520,15 @@ network addresses and signs correctly out of the box — you only need to add
 `midnight:feature-x` and `midnight:feature-x:node` entries so its indexer and node can be
 reached (and optionally `midnight:feature-x:prover` for a remote proof server).
 
+### Which config file
+
+The indexer and the proof server come from the config of the vault the call runs against, and the
+snapshot caches and proving keys live under that vault. For the CLI that is `~/.ows`. A caller that
+names its own vault (the Node or Python bindings, or ows-lib with an explicit `vault_path`) gets
+`{vault}/config.json` and `{vault}/chains/midnight/…`, so a `:prover` or indexer entry in the
+process's `~/.ows/config.json` cannot reach a signing call made against another vault. The node a
+`sign send-tx` broadcasts to is still looked up in `~/.ows/config.json`.
+
 ### How this differs from other chains
 
 Other chain families register one RPC endpoint per network. Midnight registers two — a read endpoint (indexer) and a write endpoint (node) — reflecting its split

@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Cursor;
+use std::path::Path;
 
 use bech32::Hrp;
 use midnight_base_crypto::hash::HashOutput;
@@ -241,8 +242,9 @@ pub(super) fn decode_shielded_recipient(
 pub(super) fn prove_preimage(
     chain_id: &str,
     preimage: PreimageTx,
+    vault_path: Option<&Path>,
 ) -> Result<ProvenTx, std::io::Error> {
-    let prover = crate::balance_tx::midnight_prover(chain_id)?;
+    let prover = crate::balance_tx::midnight_prover(chain_id, vault_path)?;
     let cost_model = &INITIAL_PARAMETERS.cost_model.runtime_cost_model;
     crate::block_on(preimage.prove(prover, cost_model))
         .map_err(|e| err(format!("prove constructed outputs: {e}")))

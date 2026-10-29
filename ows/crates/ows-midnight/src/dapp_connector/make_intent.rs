@@ -39,6 +39,7 @@
 
 use std::collections::BTreeMap;
 use std::ops::Deref as _;
+use std::path::Path;
 
 use midnight_base_crypto::signatures::{Signature as MnSig, VerifyingKey};
 use midnight_base_crypto::time::Timestamp;
@@ -346,8 +347,13 @@ pub(super) fn authorize(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     req: MakeIntentRequest,
+    vault_path: Option<&Path>,
 ) -> Result<Vec<u8>, std::io::Error> {
-    let base = plan_offer(chain_id, crypto_provider, &req)?.realize(chain_id, crypto_provider)?;
+    let base = plan_offer(chain_id, crypto_provider, &req, vault_path)?.realize(
+        chain_id,
+        crypto_provider,
+        vault_path,
+    )?;
     let mut out = Vec::new();
     tagged_serialize(&Transaction::Standard(base), &mut out)
         .map_err(|e| err(format!("serialize proven tx: {e}")))?;
@@ -370,6 +376,7 @@ pub(super) fn plan_offer(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     req: &MakeIntentRequest,
+    vault_path: Option<&Path>,
 ) -> Result<OfferPlan, std::io::Error> {
     let signer = MidnightSigner::from_chain_id(chain_id);
 
@@ -392,6 +399,7 @@ pub(super) fn plan_offer(
         &shielded_out,
         !shielded_in.is_empty(),
         req.ttl,
+        vault_path,
     )?;
     let funding = if shielded_in.is_empty() {
         None
@@ -401,6 +409,7 @@ pub(super) fn plan_offer(
             crypto_provider,
             GUARANTEED_SEGMENT,
             &shielded_in,
+            vault_path,
         )?)
     };
     Ok(OfferPlan { frame, funding })
@@ -439,15 +448,17 @@ impl OfferPlan {
         self,
         chain_id: &str,
         crypto_provider: &MidnightCryptoProvider,
+        vault_path: Option<&Path>,
     ) -> Result<
         StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
         std::io::Error,
     > {
-        let Transaction::Standard(mut base) = prove_preimage(chain_id, self.frame)? else {
+        let Transaction::Standard(mut base) = prove_preimage(chain_id, self.frame, vault_path)?
+        else {
             return Err(err("makeIntent frame is not a Standard transaction"));
         };
         if let Some(funding) = &self.funding {
-            authorize_shielded_inputs(chain_id, crypto_provider, funding, &mut base)?;
+            authorize_shielded_inputs(chain_id, crypto_provider, funding, &mut base, vault_path)?;
         }
         Ok(base)
     }
@@ -469,6 +480,7 @@ fn build_make_intent_frame(
     shielded_out: &[&DesiredOutput],
     has_shielded_in: bool,
     ttl: Option<Timestamp>,
+    vault_path: Option<&Path>,
 ) -> Result<PreimageTx, std::io::Error> {
     let sender_vk = crypto_provider
         .unshielded_verifying_key()
@@ -484,6 +496,7 @@ fn build_make_intent_frame(
         &sender_vk,
         unshielded_in,
         unshielded_out,
+        vault_path,
     )?;
     let zswap_offer = build_shielded_output_offer(signer, GUARANTEED_SEGMENT, shielded_out)?;
     if unshielded_offer.is_none() && zswap_offer.is_none() && !has_shielded_in {
@@ -524,14 +537,12 @@ fn plan_shielded_input_funding(
     crypto_provider: &MidnightCryptoProvider,
     segment: u16,
     shielded_in: &[&DesiredInput],
+    vault_path: Option<&Path>,
 ) -> Result<crate::balance_tx::ShieldedFundingPlan, std::io::Error> {
     let deficits = shielded_input_deficits(shielded_in)?;
 
-    let indexer_url = crate::wallet::resolve_indexer_url(chain_id)?;
-    let scope = SyncCacheScope {
-        chain_id: Some(chain_id.to_string()),
-        ..Default::default()
-    };
+    let indexer_url = crate::wallet::resolve_indexer_url(chain_id, vault_path)?;
+    let scope = crate::wallet::signing_scope(chain_id, vault_path);
     let block_height = crate::tip_verify::fetch_current_block_height(&indexer_url);
     let synced = crate::block_on(crate::wallet_sync::shielded::sync_wallet(
         &indexer_url,
@@ -565,8 +576,9 @@ fn authorize_shielded_inputs(
     crypto_provider: &MidnightCryptoProvider,
     funding: &crate::balance_tx::ShieldedFundingPlan,
     base: &mut StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
+    vault_path: Option<&Path>,
 ) -> Result<(), std::io::Error> {
-    let prover = crate::balance_tx::midnight_prover(chain_id)?;
+    let prover = crate::balance_tx::midnight_prover(chain_id, vault_path)?;
     let authorized =
         crate::block_on(crypto_provider.authorize_shielded(&funding.plans, &funding.tree, prover))
             .map_err(|e| err(e.to_string()))?;
@@ -621,6 +633,7 @@ fn build_unshielded_offer(
     sender_vk: &VerifyingKey,
     inputs_requested: &[&DesiredInput],
     outputs_requested: &[&DesiredOutput],
+    vault_path: Option<&Path>,
 ) -> Result<Option<UnshieldedOffer<MnSig, InMemoryDB>>, std::io::Error> {
     if inputs_requested.is_empty() && outputs_requested.is_empty() {
         return Ok(None);
@@ -632,9 +645,12 @@ fn build_unshielded_offer(
     if !inputs_requested.is_empty() {
         let maker = decode_unshielded_recipient(signer, sender_addr)?;
         let utxos = crate::block_on(crate::get_unshielded_utxos_for_display(
-            &crate::wallet::resolve_indexer_url(chain_id)?,
+            &crate::wallet::resolve_indexer_url(chain_id, vault_path)?,
             sender_addr,
-            &Default::default(),
+            &SyncCacheScope {
+                vault_path: vault_path.map(Path::to_path_buf),
+                ..Default::default()
+            },
         ))?;
         let (mut selected_inputs, mut change_outputs) =
             select_unshielded_inputs(&utxos, inputs_requested, sender_addr, sender_vk, maker)?;

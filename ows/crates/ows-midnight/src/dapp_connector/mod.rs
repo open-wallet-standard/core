@@ -6,6 +6,8 @@
 //! [`ConnectorPlan`]) → policy seam → [`ConnectorPlan::authorize`] (build + prove + sign + seal). The
 //! plan carries no bearer instrument, so the seam can gate on it before any key-bearing work happens.
 
+use std::path::Path;
+
 use ows_signer::chains::{MidnightCryptoProvider, MidnightNetwork};
 use serde::Deserialize;
 
@@ -90,19 +92,20 @@ impl ConnectorPlan {
         self,
         chain_id: &str,
         crypto_provider: &MidnightCryptoProvider,
+        vault_path: Option<&Path>,
     ) -> Result<Vec<u8>, std::io::Error> {
         match self {
             ConnectorPlan::BalanceUnsealed(plan) => {
-                crate::authorize_proven_tx(chain_id, crypto_provider, *plan)
+                crate::authorize_proven_tx(chain_id, crypto_provider, *plan, vault_path)
             }
             ConnectorPlan::MakeTransfer(transfer) => {
-                make_transfer::authorize(chain_id, crypto_provider, *transfer)
+                make_transfer::authorize(chain_id, crypto_provider, *transfer, vault_path)
             }
             ConnectorPlan::MakeIntent(plan) => {
-                make_intent::authorize(chain_id, crypto_provider, plan.into_request())
+                make_intent::authorize(chain_id, crypto_provider, plan.into_request(), vault_path)
             }
             ConnectorPlan::BalanceSealedMerge(merge) => {
-                balance_sealed::authorize_merge(chain_id, crypto_provider, *merge)
+                balance_sealed::authorize_merge(chain_id, crypto_provider, *merge, vault_path)
             }
         }
     }
@@ -208,18 +211,23 @@ pub fn plan_connector_tx(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     json: &str,
+    vault_path: Option<&Path>,
 ) -> Result<ConnectorPlan, std::io::Error> {
     match parse_connector_method(json)? {
-        ConnectorMethod::BalanceUnsealed => balance_unsealed::plan(chain_id, crypto_provider, json),
+        ConnectorMethod::BalanceUnsealed => {
+            balance_unsealed::plan(chain_id, crypto_provider, json, vault_path)
+        }
         ConnectorMethod::MakeTransfer => {
             let req = parse_make_transfer_json(json)?;
-            let transfer = make_transfer::plan(chain_id, crypto_provider, &req)?;
+            let transfer = make_transfer::plan(chain_id, crypto_provider, &req, vault_path)?;
             Ok(ConnectorPlan::MakeTransfer(Box::new(transfer)))
         }
         ConnectorMethod::MakeIntent => Ok(ConnectorPlan::MakeIntent(make_intent::plan(
             parse_make_intent_json(json)?,
         ))),
-        ConnectorMethod::BalanceSealed => balance_sealed::plan(chain_id, crypto_provider, json),
+        ConnectorMethod::BalanceSealed => {
+            balance_sealed::plan(chain_id, crypto_provider, json, vault_path)
+        }
         ConnectorMethod::Other(method) => Err(std::io::Error::other(format!(
             "Midnight DApp Connector method '{method}' is not yet implemented"
         ))),
@@ -408,7 +416,7 @@ mod tests {
     #[test]
     fn a_maker_offers_policy_context_shows_no_fee_and_no_registration() {
         let json = r#"{"method":"makeIntent","desiredInputs":[{"kind":"unshielded","type":"night","value":"5"}],"desiredOutputs":[]}"#;
-        let plan = plan_connector_tx("midnight:preview", &provider(), json).unwrap();
+        let plan = plan_connector_tx("midnight:preview", &provider(), json, None).unwrap();
 
         let context = plan
             .policy_context("midnight:preview", &provider())

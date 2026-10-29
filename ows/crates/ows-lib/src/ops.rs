@@ -644,7 +644,7 @@ pub fn sign_transaction(
 
     // Owner mode: passphrase-based signing — full authority, no policy gate.
     let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
-    let signable_tx = prepare_signable_tx(&chain, tx_bytes, &key, |_| Ok(()))?;
+    let signable_tx = prepare_signable_tx(&chain, tx_bytes, &key, |_| Ok(()), vault_path)?;
     let signer = signer_for_chain(&chain)?;
     let signable = signer.extract_signable_bytes(&signable_tx)?;
     let output = signer.sign_transaction(key.expose(), signable)?;
@@ -679,12 +679,14 @@ pub fn decode_tx_input(chain: &ows_core::Chain, tx_input: &str) -> Result<Vec<u8
 /// caller resolves the key first (the agent path only after the first policy pass). `gate` is the
 /// second, effect-aware policy pass, run at the plan→authorize seam over the policy context
 /// ows-midnight builds from the plan (its per-segment wallet-relative effects among it), handed in as
-/// `chain_extra`; owner callers pass a gate that always allows.
+/// `chain_extra`; owner callers pass a gate that always allows. Midnight reads its indexer and proof
+/// server from `vault_path`'s config and keeps its caches there, as for the wallet itself.
 pub fn prepare_signable_tx(
     chain: &ows_core::Chain,
     tx_bytes: Vec<u8>,
     key: &SecretBytes,
     gate: impl FnOnce(serde_json::Value) -> Result<(), OwsLibError>,
+    vault_path: Option<&Path>,
 ) -> Result<Vec<u8>, OwsLibError> {
     if chain.chain_type != ChainType::Midnight {
         return Ok(tx_bytes);
@@ -702,7 +704,7 @@ pub fn prepare_signable_tx(
         .crypto_provider(key)
         .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
 
-    let plan = ows_midnight::plan_connector_tx(chain.chain_id, &crypto_provider, json)
+    let plan = ows_midnight::plan_connector_tx(chain.chain_id, &crypto_provider, json, vault_path)
         .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
 
     // ── POLICY SEAM ── the second, effect-aware policy pass. The plan is inert (no bearer instrument),
@@ -715,7 +717,7 @@ pub fn prepare_signable_tx(
         .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
     gate(chain_extra)?;
 
-    plan.authorize(chain.chain_id, &crypto_provider)
+    plan.authorize(chain.chain_id, &crypto_provider, vault_path)
         .map_err(|e| OwsLibError::InvalidInput(e.to_string()))
 }
 
@@ -1009,22 +1011,28 @@ pub fn sign_and_send(
         )?;
         // Second, effect-aware policy pass at the plan→authorize seam: a denial drops the key unused,
         // so a transaction the policy rejects is never proved.
-        let signable_tx = prepare_signable_tx(&chain_info, tx_bytes, &key, |chain_extra| {
-            crate::key_ops::enforce_effect_policies(
-                &key_file,
-                &wallet_id,
-                &chain_info,
-                policy_tx,
-                chain_extra,
-                vault_path,
-            )
-        })?;
+        let signable_tx = prepare_signable_tx(
+            &chain_info,
+            tx_bytes,
+            &key,
+            |chain_extra| {
+                crate::key_ops::enforce_effect_policies(
+                    &key_file,
+                    &wallet_id,
+                    &chain_info,
+                    policy_tx,
+                    chain_extra,
+                    vault_path,
+                )
+            },
+            vault_path,
+        )?;
         return sign_encode_and_broadcast(key.expose(), chain, &signable_tx, rpc_url);
     }
 
     // Owner mode — full authority, no policy gate.
     let key = decrypt_signing_key(wallet, chain_info.chain_type, credential, index, vault_path)?;
-    let signable_tx = prepare_signable_tx(&chain_info, tx_bytes, &key, |_| Ok(()))?;
+    let signable_tx = prepare_signable_tx(&chain_info, tx_bytes, &key, |_| Ok(()), vault_path)?;
     sign_encode_and_broadcast(key.expose(), chain, &signable_tx, rpc_url)
 }
 
@@ -3072,6 +3080,37 @@ mod tests {
             Some(3)
         );
         assert_eq!(signing_index(&wallet, ChainType::Evm, None).unwrap(), None);
+    }
+
+    /// A caller that names a vault, as the bindings do, plans Midnight against that vault's indexer:
+    /// one it configures as plaintext to a remote host is refused, where `~/.ows` or the built-in
+    /// preview default would otherwise have been dialled.
+    #[test]
+    fn midnight_signing_reads_its_indexer_from_the_named_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        import_wallet_mnemonic("mn-vault", phrase, None, None, Some(dir.path())).unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"vault_path":"/ignored","rpc":{"midnight:preview":"http://indexer.vault.example/api/v4/graphql"}}"#,
+        )
+        .unwrap();
+        let request = r#"{"method":"makeTransfer","desiredOutputs":[{"kind":"unshielded","type":"night","value":"5","recipient":"mn_addr_preview1dwv2rta0a2skyhrvukaw2q9r2sq6yc4jhj63rf7afxpkrrv6g35q4y8xms"}]}"#;
+
+        let err = sign_transaction(
+            "mn-vault",
+            "midnight:preview",
+            request,
+            None,
+            None,
+            Some(dir.path()),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("indexer.vault.example"),
+            "the vault's indexer was not the one used: {err}"
+        );
+        assert!(err.to_string().contains("plaintext"), "{err}");
     }
 
     #[test]

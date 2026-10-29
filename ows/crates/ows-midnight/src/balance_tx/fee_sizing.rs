@@ -171,8 +171,7 @@ fn sum_dust_v_fee<P: ProofKind<InMemoryDB>>(
 }
 
 /// Sync a spendable [`DustLocalState`] for the wallet's dust key, verifying the disk snapshot against
-/// the indexer HTTP tip (reusing the same cache the fund-balance path fills). The dust key stays in
-/// the crypto provider.
+/// the indexer HTTP tip. The dust key stays in the crypto provider.
 fn sync_spendable_dust_state(
     indexer_url: &str,
     crypto_provider: &MidnightCryptoProvider,

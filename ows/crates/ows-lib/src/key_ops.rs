@@ -116,8 +116,11 @@ pub fn sign_with_api_key(
 
     // Second, effect-aware policy pass at the plan→authorize seam: a denial drops the key unused, so a
     // transaction the policy rejects is never proved.
-    let signable_tx =
-        crate::ops::prepare_signable_tx(chain, tx_bytes.to_vec(), &key, |chain_extra| {
+    let signable_tx = crate::ops::prepare_signable_tx(
+        chain,
+        tx_bytes.to_vec(),
+        &key,
+        |chain_extra| {
             enforce_effect_policies(
                 &key_file,
                 &wallet_id,
@@ -126,7 +129,9 @@ pub fn sign_with_api_key(
                 chain_extra,
                 vault_path,
             )
-        })?;
+        },
+        vault_path,
+    )?;
     let signable = signer.extract_signable_bytes(&signable_tx)?;
     let output = signer.sign_transaction(key.expose(), signable)?;
     let transaction =

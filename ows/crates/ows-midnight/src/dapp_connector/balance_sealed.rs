@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref as _;
+use std::path::Path;
 
 use midnight_base_crypto::signatures::Signature as MnSig;
 use midnight_base_crypto::time::Timestamp;
@@ -19,7 +20,6 @@ use midnight_ledger::structure::{ProofMarker, StandardTransaction, Transaction};
 use midnight_serialize::{tagged_deserialize, tagged_serialize};
 use midnight_storage::arena::Sp;
 use midnight_storage::db::InMemoryDB;
-use ows_core::sync_cache::SyncCacheScope;
 use ows_signer::chains::{MidnightCryptoProvider, MidnightNetwork};
 use serde::Deserialize;
 use transient_crypto::commitment::{PedersenRandomness, PureGeneratorPedersen};
@@ -102,6 +102,7 @@ pub(super) fn plan(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     json: &str,
+    vault_path: Option<&Path>,
 ) -> Result<ConnectorPlan, std::io::Error> {
     let request = parse_balance_sealed_json(json)?;
     let maker_tx = request.maker_tx;
@@ -130,6 +131,7 @@ pub(super) fn plan(
                 maker_tx,
                 complement,
                 request.pay_fees,
+                vault_path,
             )?;
             Ok(ConnectorPlan::BalanceSealedMerge(Box::new(merge)))
         }
@@ -373,9 +375,10 @@ fn plan_merge(
     maker_tx: Vec<u8>,
     complement: MakeIntentRequest,
     pay_fees: bool,
+    vault_path: Option<&Path>,
 ) -> Result<MergePlan, std::io::Error> {
-    let taker = super::make_intent::plan_offer(chain_id, crypto_provider, &complement)?;
-    let indexer_url = crate::wallet::resolve_indexer_url(chain_id)?;
+    let taker = super::make_intent::plan_offer(chain_id, crypto_provider, &complement, vault_path)?;
+    let indexer_url = crate::wallet::resolve_indexer_url(chain_id, vault_path)?;
     let fee = if crate::balance_tx::adding_dust(pay_fees, &indexer_url)? {
         Some(size_merge_fee(
             chain_id,
@@ -384,6 +387,7 @@ fn plan_merge(
             &taker,
             complement.intent_segment,
             &indexer_url,
+            vault_path,
         )?)
     } else {
         None
@@ -406,6 +410,7 @@ fn size_merge_fee(
     taker: &OfferPlan,
     taker_seg: u16,
     indexer_url: &str,
+    vault_path: Option<&Path>,
 ) -> Result<crate::balance_tx::MergeDustFee, std::io::Error> {
     let taker_base = taker.mock_proven(crypto_provider)?;
     let binding_commitment = taker_base
@@ -419,10 +424,7 @@ fn size_merge_fee(
     let maker: TxSealed = tagged_deserialize(&mut mr)
         .map_err(|e| std::io::Error::other(format!("failed to parse sealed maker tx: {e}")))?;
 
-    let scope = SyncCacheScope {
-        chain_id: Some(chain_id.to_string()),
-        ..Default::default()
-    };
+    let scope = crate::wallet::signing_scope(chain_id, vault_path);
     let (ledger_params, tip_secs) =
         crate::block_on(crate::ledger_params::fetch_indexer_tip(indexer_url))?;
     crate::balance_tx::size_merge_dust_fee(
@@ -454,6 +456,7 @@ pub(super) fn authorize_merge(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     merge: MergePlan,
+    vault_path: Option<&Path>,
 ) -> Result<Vec<u8>, std::io::Error> {
     let MergePlan {
         maker_tx,
@@ -464,9 +467,16 @@ pub(super) fn authorize_merge(
     // The taker's imbalanced complementary half rides a segment disjoint from the maker's (picked in
     // `complement_from_balance`); that intent carries the DUST fee.
     let taker_seg = complement.intent_segment;
-    let mut taker_base = taker.realize(chain_id, crypto_provider)?;
+    let mut taker_base = taker.realize(chain_id, crypto_provider, vault_path)?;
     if let Some(fee) = fee {
-        attach_merge_dust_fee(chain_id, crypto_provider, &mut taker_base, taker_seg, fee)?;
+        attach_merge_dust_fee(
+            chain_id,
+            crypto_provider,
+            &mut taker_base,
+            taker_seg,
+            fee,
+            vault_path,
+        )?;
     }
 
     // Return a merge envelope carrying the (proven-unsealed) taker half and the sealed maker. The sign
@@ -522,6 +532,7 @@ fn attach_merge_dust_fee(
     taker_base: &mut StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
     dust_seg: u16,
     fee: crate::balance_tx::MergeDustFee,
+    vault_path: Option<&Path>,
 ) -> Result<(), std::io::Error> {
     let mut intent = taker_base
         .intents
@@ -534,7 +545,7 @@ fn attach_merge_dust_fee(
             "the taker half is not the one its DUST fee was planned for; refusing to sign it",
         ));
     }
-    let prover = crate::balance_tx::midnight_prover(chain_id)?;
+    let prover = crate::balance_tx::midnight_prover(chain_id, vault_path)?;
     let dust_actions = crate::block_on(crypto_provider.authorize_dust(
         &fee.dust_state,
         &fee.plan,
@@ -1017,7 +1028,7 @@ mod tests {
                 "makerTx": hex::encode(maker_tx),
             })
             .to_string();
-            plan("midnight:preview", &provider(), &json)
+            plan("midnight:preview", &provider(), &json, None)
         }
 
         #[test]

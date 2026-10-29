@@ -169,7 +169,7 @@ pub fn print_fund_balance(
     // configured, and before a first sync that can take minutes.
     print_addresses(chain_id, &address, crypto_provider)?;
 
-    let indexer_url = resolve_indexer_url(chain_id)?;
+    let indexer_url = resolve_indexer_url(chain_id, vault_path)?;
     let sync_scope = sync_scope_for_wallet(wallet_id, Some(chain_id), vault_path);
 
     // One HTTP block-height read gates the snapshot fast-path for the shielded and dust streams
@@ -273,7 +273,9 @@ mod tests {
             .crypto_provider(&ows_signer::SecretBytes::new(credential))
             .unwrap();
         let chain_id = "midnight:no-indexer-here";
-        assert!(resolve_indexer_url(chain_id).is_err());
+        let vault =
+            std::env::temp_dir().join(format!("ows-midnight-no-config-{}", std::process::id()));
+        assert!(resolve_indexer_url(chain_id, Some(&vault)).is_err());
 
         let block =
             addresses_block(chain_id, "mn_addr_no-indexer-here1x", Some(&provider)).unwrap();

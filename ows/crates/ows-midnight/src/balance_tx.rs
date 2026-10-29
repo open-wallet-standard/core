@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 use std::ops::Deref as _;
+use std::path::Path;
 
 use midnight_base_crypto::signatures::{Signature as MnSig, VerifyingKey};
 use midnight_base_crypto::time::Timestamp;
@@ -1412,19 +1413,19 @@ fn reserve_for_fee_registration(
 
 /// Build a [`Prover`](crate::Prover) for authorize / prove paths.
 ///
-/// When `rpc["{chain_id}:prover"]` is set, posts to that proof server; otherwise proves in-process
-/// with keys from the vault-rooted proving-key directory. The prover holds no wallet secret of its
+/// When `rpc["{chain_id}:prover"]` is set in the vault's config, posts to that proof server; otherwise
+/// proves in-process with keys from the vault-rooted proving-key directory. The prover holds no wallet secret of its
 /// own, but each spend it proves carries one in its preimage: the coin secret key for a shielded
 /// spend, the dust secret key for a DUST spend. Proving locally keeps them in this process; a remote
 /// proof server receives them. A fresh prover is built per authorized section so their proving
 /// randomness is independent.
-pub(crate) fn midnight_prover(chain_id: &str) -> Result<crate::Prover, std::io::Error> {
-    let scope = SyncCacheScope {
-        chain_id: Some(chain_id.to_string()),
-        ..Default::default()
-    };
+pub(crate) fn midnight_prover(
+    chain_id: &str,
+    vault_path: Option<&Path>,
+) -> Result<crate::Prover, std::io::Error> {
+    let scope = crate::wallet::signing_scope(chain_id, vault_path);
     let keys_dir = crate::cache_io::proving_keys_dir(&scope);
-    if let Some(url) = crate::wallet::resolve_midnight_prover_url(chain_id) {
+    if let Some(url) = crate::wallet::resolve_midnight_prover_url(chain_id, vault_path) {
         return crate::Prover::remote(url, keys_dir);
     }
     let dir =
@@ -1916,13 +1917,14 @@ pub fn authorize_proven_tx(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     plan: BalancedPlan,
+    vault_path: Option<&Path>,
 ) -> Result<Vec<u8>, std::io::Error> {
     let mut base = plan.base;
 
     // Shielded: the signer builds + proves the witnesses; route each proven fragment to the offer the
     // signer bound it to — segment 0 into the guaranteed offer, segment N>=1 into `fallible_coins[N]`.
     if let Some(shielded) = plan.shielded {
-        let prover = midnight_prover(chain_id)?;
+        let prover = midnight_prover(chain_id, vault_path)?;
         let authorized: ShieldedAuthorized = crate::block_on(crypto_provider.authorize_shielded(
             &shielded.plans,
             &shielded.tree,
@@ -1946,7 +1948,7 @@ pub fn authorize_proven_tx(
             dust_state,
             ledger_params,
         } => {
-            let prover = midnight_prover(chain_id)?;
+            let prover = midnight_prover(chain_id, vault_path)?;
             let section = crate::block_on(crypto_provider.authorize_dust(
                 &dust_state,
                 &dust_plan,
@@ -1999,13 +2001,14 @@ pub fn authorize_proven_tx(
 
 /// Plan the balancing of an already-proven (`proof,embedded-fr`) unsealed connector transaction
 /// against the wallet's own UTXOs, deriving the sender address/vk via the crypto provider and the
-/// indexer URL and sync scope from `chain_id`. The returned [`BalancedPlan`] is inert (no bearer
+/// indexer URL and sync scope from `chain_id` and the caller's vault. The returned [`BalancedPlan`] is inert (no bearer
 /// instrument) — it is authorized into signable bytes by [`authorize_proven_tx`] after the policy seam.
 pub fn plan_unsealed_proven_tx(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     tx_bytes: &[u8],
     pay_fees: bool,
+    vault_path: Option<&Path>,
 ) -> Result<BalancedPlan, std::io::Error> {
     let sender_addr = crypto_provider
         .addresses(&MidnightNetwork::from_chain_id(chain_id))
@@ -2015,12 +2018,8 @@ pub fn plan_unsealed_proven_tx(
         .unshielded_verifying_key()
         .map_err(|e| err(e.to_string()))?;
 
-    let indexer_url = crate::wallet::resolve_indexer_url(chain_id)?;
-
-    let scope = SyncCacheScope {
-        chain_id: Some(chain_id.to_string()),
-        ..Default::default()
-    };
+    let indexer_url = crate::wallet::resolve_indexer_url(chain_id, vault_path)?;
+    let scope = crate::wallet::signing_scope(chain_id, vault_path);
 
     plan_unsealed_proven_standard_tx(
         &indexer_url,
@@ -3529,7 +3528,7 @@ mod tests {
             consolidation: None,
             carried_registrations: vec![],
         };
-        let bytes = authorize_proven_tx("midnight:mainnet", &provider, plan).unwrap();
+        let bytes = authorize_proven_tx("midnight:mainnet", &provider, plan, None).unwrap();
         let Transaction::Standard(stx) = tagged_deserialize::<TxProven>(&mut &bytes[..]).unwrap()
         else {
             panic!("not a standard transaction");

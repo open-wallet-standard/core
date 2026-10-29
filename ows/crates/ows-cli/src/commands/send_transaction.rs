@@ -54,7 +54,7 @@ pub fn run(
 
     let tx_bytes = ows_lib::decode_tx_input(&chain, tx_hex)?;
     // Owner mode: full authority, no policy gate.
-    let signable_tx = ows_lib::prepare_signable_tx(&chain, tx_bytes, &key, |_| Ok(()))?;
+    let signable_tx = ows_lib::prepare_signable_tx(&chain, tx_bytes, &key, |_| Ok(()), None)?;
 
     let result = ows_lib::sign_encode_and_broadcast(
         key.expose(),
