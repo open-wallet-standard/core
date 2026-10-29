@@ -1367,7 +1367,9 @@ A token routes balance reads through the policy-enforcing channel
 transaction to bind spending policies against, so here the token proves *access* — it lets
 an agent read shielded/dust balances without holding the owner passphrase. A bad or
 unknown token fails cleanly (`error: API key not found`, exit 1, no panic). A no-policy token
-yields the full balance.
+yields the full balance. Each token read writes a `read_balance` audit record, `outcome=allowed`
+or `outcome=denied` with the denying policy, as signing does, so an agent probing its policy
+through balance reads leaves a trail.
 
 #### `sign tx`
 

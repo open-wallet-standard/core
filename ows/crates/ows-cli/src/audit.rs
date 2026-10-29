@@ -225,6 +225,18 @@ pub fn log_transaction_signed(wallet_id: &str, chain_id: &str, actor: &Actor, ou
     );
 }
 
+/// Convenience: log an account key unsealed to read balances. A read signs nothing, but under a token
+/// the key is released by a policy decision, so the read and any denial are traced like a signing.
+pub fn log_balance_read(wallet_id: &str, chain_id: &str, actor: &Actor, outcome: &Outcome) {
+    log_wallet_event(
+        wallet_id,
+        "read_balance",
+        Some(chain_id),
+        None,
+        Some(format!("actor={}, {}", actor.as_str(), outcome.describe())),
+    );
+}
+
 /// Convenience: log a message or typed-data signing. `kind` distinguishes the two, since a typed-data
 /// signature can authorize on-chain value movement.
 pub fn log_message_signed(

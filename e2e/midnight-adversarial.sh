@@ -12,7 +12,7 @@
 # plan→authorize seam, which makeIntent reaches without a network because its effects come from the
 # request), executable policies that crash, hang, print garbage or are missing (each must deny),
 # malformed and hostile connector requests (misspelled options, unnamed tokens, a plaintext remote
-# indexer), and secret hygiene.
+# indexer), the audit record of a token's balance read, and secret hygiene.
 #
 # LIVE tier (LIVE=1): the plan-derived flows. They sync a FUNDED wallet against a live indexer and
 # mock-prove, so they use your real vault — set WALLET (and PASS, its owner passphrase, empty by
@@ -219,6 +219,20 @@ refused "second pass: a makeIntent over the movement cap is refused at the seam"
 audited "the second-pass denial is audited with the policy's reason" sign_transaction "summed movement 5000000"
 sandboxed token "$CAP_TOKEN" sign send-tx --chain "$CHAIN" --wallet guarded --json --tx "$OVER_CAP"
 refused "second pass: send-tx is refused at the same seam, before any broadcast" "summed movement 5000000"
+
+# ═══ Balance reads ════════════════════════════════════════════════════════════════════════
+say "Balance reads — a token unseals the key to read balances, and the trail shows it"
+
+sandboxed token "$CAP_TOKEN" fund balance --chain "$OTHER_CHAIN" --wallet guarded
+refused "a balance read on a chain outside the token's allowlist is refused" "not in allowlist"
+audited "the refused balance read is audited as an api_key denial" read_balance "actor=api_key, outcome=denied"
+# A loopback indexer that refuses connections: the read is allowed and audited before the sync fails.
+mkdir -p "$SANDBOX/.ows"
+printf '{"vault_path":"%s","rpc":{"%s":"http://127.0.0.1:1/api/v4/graphql"}}\n' "$SANDBOX/.ows" "$CHAIN" \
+  > "$SANDBOX/.ows/config.json"
+sandboxed token "$CAP_TOKEN" fund balance --chain "$CHAIN" --wallet guarded
+audited "an allowed balance read is audited as an api_key read" read_balance "actor=api_key, outcome=allowed"
+rm -f "$SANDBOX/.ows/config.json"
 
 # ═══ Executable policies fail closed ══════════════════════════════════════════════════════
 say "Executable policies — any failure of the program is a denial"

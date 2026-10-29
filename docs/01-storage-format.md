@@ -212,6 +212,7 @@ Current CLI audit operations:
 | `sign_transaction` | wallet | a transaction signing is **attempted**, whether or not it is broadcast |
 | `sign_message` | wallet | a message or EVM typed-data signing is **attempted** |
 | `broadcast_transaction` | wallet | signed bytes are submitted to a node |
+| `read_balance` | wallet | an API token unseals a Midnight account key to read its balances, whether the policy allows it or not |
 | `create_api_key`, `revoke_api_key` | wallet | an agent credential is minted or revoked — one record per wallet the key reaches |
 | `create_policy`, `delete_policy` | vault | the policy set changes |
 
