@@ -75,10 +75,20 @@ enum DustPlan {
     Sync,
 }
 
+/// The error a balance read ends with when one of its streams failed after the others printed: the
+/// command exits non-zero, so a caller that reads only the exit status never takes the balances it
+/// got for all of them.
+fn partial_balance(missing: String) -> std::io::Error {
+    std::io::Error::other(format!(
+        "partial balance: {missing}; the balances printed above are complete"
+    ))
+}
+
 /// Print DUST fee status: the NIGHT-UTXO registration summary (derived from the public unshielded
 /// UTXOs, so always available) and the synced DUST balance when the crypto provider was available.
 /// The dust ledger is synced by the caller alongside the other streams; `dust_balance` carries its
-/// result.
+/// result. A DUST sync that failed is printed as unavailable and then returned as an error, once the
+/// section is complete.
 fn print_dust_status(
     unshielded_utxos: &[UnshieldedUtxo],
     dust_plan: &DustPlan,
@@ -115,6 +125,7 @@ fn print_dust_status(
         }
     }
 
+    let mut failed = None;
     match dust_plan {
         DustPlan::NoProvider => {
             eprintln!("  DUST seed: unavailable (can't sync dust ledger state)")
@@ -130,14 +141,22 @@ fn print_dust_status(
                         format_dust_specks(dust_sum)
                     );
                 }
-                Some(Err(e)) => eprintln!("  DUST: unavailable ({e})"),
+                Some(Err(e)) => {
+                    eprintln!("  DUST: unavailable ({e})");
+                    failed = Some(e);
+                }
                 None => {}
             }
         }
         DustPlan::Skip => {}
     }
     eprintln!();
-    Ok(())
+    match failed {
+        Some(e) => Err(partial_balance(format!(
+            "the DUST balance did not sync ({e})"
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Wait for one balance stream's thread, re-raising its panic here if it had one.
@@ -181,7 +200,8 @@ pub fn print_fund_balance(
     // name: probe the indexer's dust ledger and treat dust as applicable only when its stream
     // reports a live tip. A network activates dust automatically here — no code change when a new
     // one (mainnet included) turns it on.
-    let needs_dust = block_on(dust::dust_ledger_is_live(&indexer_url));
+    let dust_liveness = block_on(dust::dust_ledger_liveness(&indexer_url));
+    let needs_dust = matches!(dust_liveness, Ok(true));
     let dust_plan = if !needs_dust {
         DustPlan::Skip
     } else if crypto_provider.is_some() {
@@ -256,6 +276,12 @@ pub fn print_fund_balance(
     if needs_dust {
         print_dust_status(&unshielded_utxos, &dust_plan, dust_balance)?;
     }
+    if let Err(e) = dust_liveness {
+        eprintln!("Dust status (fees):\n  DUST: unavailable ({e})\n");
+        return Err(partial_balance(format!(
+            "the DUST ledger could not be reached ({e})"
+        )));
+    }
 
     Ok(())
 }
@@ -263,6 +289,35 @@ pub fn print_fund_balance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A DUST sync that fails ends the read with an error once the section is printed, so the command
+    /// exits non-zero; a read with no credential to sync with is not a failure.
+    #[test]
+    fn a_failed_dust_sync_fails_the_balance_read() {
+        let failed = print_dust_status(
+            &[],
+            &DustPlan::Sync,
+            Some(Err(std::io::Error::other("dust stream closed"))),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(failed.starts_with("partial balance:"), "{failed}");
+        assert!(failed.contains("dust stream closed"), "{failed}");
+
+        assert!(print_dust_status(&[], &DustPlan::Sync, Some(Ok((2, 5)))).is_ok());
+        assert!(print_dust_status(&[], &DustPlan::NoProvider, None).is_ok());
+        assert!(print_dust_status(&[], &DustPlan::Skip, None).is_ok());
+    }
+
+    /// An indexer the DUST probe cannot reach is told apart from a network with no live DUST ledger,
+    /// which `fund balance` reads as complete without a DUST section.
+    #[test]
+    fn an_unreachable_dust_ledger_is_not_read_as_absent() {
+        let probe = block_on(dust::dust_ledger_liveness(
+            "http://127.0.0.1:1/api/v4/graphql",
+        ));
+        assert!(probe.is_err(), "{probe:?}");
+    }
 
     /// A network no config names: the addresses still derive, under its own HRPs.
     #[test]

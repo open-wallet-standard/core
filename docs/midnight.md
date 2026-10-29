@@ -311,7 +311,8 @@ An `OWS_PASSPHRASE` that is set but does not open the wallet is an error, not a 
 ### What it prints
 
 Amounts print to **stdout** as `{amount:>24} {token_type}`; status, addresses, and headers go
-to **stderr**, so balances pipe out cleanly. A Preview run (values illustrative):
+to **stderr**, so balances pipe out cleanly. Check the exit status as well: a balance stream that
+failed exits non-zero (see [Dust (fees)](#dust-fees)). A Preview run (values illustrative):
 
 ```
 Addresses:
@@ -387,9 +388,15 @@ own unspent coins, tracked by nullifier. First sync is slow (full replay); the s
 
 The dust-fee section shows only when the **network's dust ledger is live** — decided at run time,
 not by network name. OWS probes the indexer's `dustLedgerEvents` tip cursor: a positive `maxId`
-means an active ledger (shown); a missing, empty, or unreachable stream hides it. So dust appears
+means an active ledger (shown); a missing or empty stream hides it. So dust appears
 wherever the ledger is active — Preview/Preprod today, **mainnet automatically once its ledger
-goes live**, no OWS change. The probe needs no wallet key (the tip is chain-global) and fails safe.
+goes live**, no OWS change. The probe needs no wallet key (the tip is chain-global).
+
+A DUST read that fails does not pass for a complete one. When the dust stream cannot be opened for
+the probe, or the DUST ledger does not sync, the command still prints the unshielded and shielded
+balances (and `DUST: unavailable (…)` in the dust section), then exits non-zero with
+`error: partial balance: …` on stderr. Having no credential to sync the DUST ledger with is not a
+failure: that shows `DUST seed: unavailable` and exits 0.
 
 The ledger is replayed through the provider (`fold_dust`) and the balance is computed against the
 wall clock as read when the command starts, since DUST decays — hence

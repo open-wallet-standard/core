@@ -549,13 +549,19 @@ pub async fn get_dust_balance_for_display(
 /// tip is chain-global. Fail-safe — a missing or empty stream, a GraphQL/transport error, or a
 /// silent socket all read as not live.
 pub(crate) async fn dust_ledger_is_live(indexer_url: &str) -> bool {
-    match probe_dust_stream_tip(indexer_url).await {
-        Ok(max_id) => is_dust_live(max_id),
+    match dust_ledger_liveness(indexer_url).await {
+        Ok(live) => live,
         Err(e) => {
             eprintln!("[ows-midnight] dust liveness probe failed ({e}); hiding dust section");
             false
         }
     }
+}
+
+/// [`dust_ledger_is_live`], with a probe that could not reach the indexer kept apart from a ledger
+/// that is not live: `Err` when the dust stream could not be opened at all.
+pub(crate) async fn dust_ledger_liveness(indexer_url: &str) -> Result<bool, std::io::Error> {
+    probe_dust_stream_tip(indexer_url).await.map(is_dust_live)
 }
 
 /// True when a dust stream tip cursor marks a live ledger (a positive `maxId`).
