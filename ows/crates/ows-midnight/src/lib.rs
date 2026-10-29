@@ -14,6 +14,8 @@ mod ledger_params;
 mod midnight_env;
 #[cfg(test)]
 mod mock_indexer;
+#[cfg(test)]
+mod mock_prover;
 mod policy_context;
 mod prover;
 mod submit;

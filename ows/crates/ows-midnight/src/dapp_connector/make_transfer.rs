@@ -504,6 +504,114 @@ mod tests {
         ));
     }
 
+    /// `authorize` proves the planned outputs and spends the planned balancing as it stands: the
+    /// wallet's NIGHT coin and change in the transfer's fallible segment, a DUST fee of exactly the
+    /// planned amount, and the planned TTL. The vault names an indexer nothing listens on, so an
+    /// authorize that re-synced would fail, and a loopback proof server proves the DUST spend.
+    #[test]
+    fn authorize_spends_exactly_the_planned_transfer() {
+        use midnight_base_crypto::hash::HashOutput;
+        use midnight_base_crypto::time::Timestamp;
+        use midnight_coin_structure::coin::{UserAddress, NIGHT};
+        use midnight_ledger::structure::{IntentHash, UtxoSpend};
+        use midnight_serialize::tagged_deserialize;
+
+        let mut blob = b"MNK1".to_vec();
+        blob.extend_from_slice(&[0x44u8; 32]);
+        blob.extend_from_slice(&[0x55u8; 32]);
+        blob.extend_from_slice(&[0x66u8; 32]);
+        let provider = MidnightSigner::preview()
+            .crypto_provider(&ows_signer::SecretBytes::new(blob))
+            .unwrap();
+        let vault = crate::mock_prover::vault("midnight:preview", "planned-transfer");
+        let req = MakeTransferRequest {
+            desired_outputs: vec![DesiredOutput {
+                kind: TransferKind::Unshielded,
+                token_type: "night".into(),
+                value: 250,
+                recipient: preview_unshielded_address(),
+            }],
+            pay_fees: true,
+        };
+        let preimage = build_make_transfer_preimage("midnight:preview", &req).unwrap();
+        let Transaction::Standard(base) = mock_prove_unsealed(preimage.clone()).unwrap() else {
+            panic!("not a standard transaction");
+        };
+
+        // The wallet funds the 250 from a 300 coin, with 50 back, inside the transfer's fallible offer.
+        let vk = provider.unshielded_verifying_key().unwrap();
+        let mut outputs: Vec<UtxoOutput> = base
+            .intents
+            .get(&MAKE_TRANSFER_INTENT_SEGMENT)
+            .and_then(|intent| intent.fallible_unshielded_offer.clone())
+            .map(|offer| offer.outputs.iter_deref().cloned().collect())
+            .unwrap();
+        outputs.push(UtxoOutput {
+            value: 50,
+            owner: UserAddress::from(vk.clone()),
+            type_: NIGHT,
+        });
+        outputs.sort();
+        let inputs = vec![UtxoSpend {
+            value: 300,
+            owner: vk,
+            type_: NIGHT,
+            intent_hash: IntentHash(HashOutput([1; 32])),
+            output_no: 0,
+        }];
+        let funding = UnshieldedOffer {
+            inputs: inputs.clone().into(),
+            outputs: outputs.clone().into(),
+            signatures: vec![].into(),
+        };
+        let ttl = Timestamp::from_secs(3_600);
+        let plan = crate::BalancedPlan::spending_dust(
+            base,
+            MAKE_TRANSFER_INTENT_SEGMENT,
+            vec![(MAKE_TRANSFER_INTENT_SEGMENT, funding)],
+            ttl,
+            42,
+            Timestamp::from_secs(4_600),
+            crate::balance_tx::dust_state_with_one_note(
+                &[0x66; 32],
+                midnight_ledger::structure::STARS_PER_NIGHT,
+                Timestamp::from_secs(1_000),
+            ),
+        );
+
+        let signable = authorize(
+            "midnight:preview",
+            &provider,
+            TransferPlan { preimage, plan },
+            Some(&vault),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&vault);
+        let Transaction::Standard(stx) =
+            tagged_deserialize::<super::super::build::ProvenTx>(&mut &signable[..]).unwrap()
+        else {
+            panic!("not a standard transaction");
+        };
+        assert_eq!(stx.intents.iter().count(), 1);
+        let intent = stx.intents.get(&MAKE_TRANSFER_INTENT_SEGMENT).unwrap();
+        assert!(intent.guaranteed_unshielded_offer.is_none());
+        let leg = intent.fallible_unshielded_offer.as_ref().unwrap();
+        assert_eq!(leg.inputs.iter_deref().cloned().collect::<Vec<_>>(), inputs);
+        assert_eq!(
+            leg.outputs.iter_deref().cloned().collect::<Vec<_>>(),
+            outputs
+        );
+        assert_eq!(intent.ttl, ttl);
+        let dust = intent.dust_actions.as_ref().unwrap();
+        assert_eq!(dust.spends.iter_deref().map(|s| s.v_fee).sum::<u128>(), 42);
+        assert!(
+            dust.spends
+                .iter_deref()
+                .all(|s| s.proof.0.iter().all(|b| *b == 0xde)),
+            "proved by the vault's proof server"
+        );
+    }
+
     #[test]
     fn rejects_recipient_with_wrong_network_hrp() {
         // A mainnet-HRP address handed to a preview transfer is rejected at decode time.

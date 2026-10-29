@@ -1055,6 +1055,107 @@ impl BalancedPlan {
     }
 }
 
+#[cfg(test)]
+impl BalancedPlan {
+    /// A plan over `base` whose balancing intent `seg_id` funds each of `fallible_offers` in its own
+    /// segment and pays a `fee_dust` fee by spending the DUST in `dust_state` at `dust_ctime`, the
+    /// intent expiring at `intent_ttl`: what the planner decides, given whole, for a test outside this
+    /// module that has no indexer to plan against.
+    pub(crate) fn spending_dust(
+        base: StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
+        seg_id: u16,
+        fallible_offers: Vec<(u16, UnshieldedOffer<MnSig, InMemoryDB>)>,
+        intent_ttl: Timestamp,
+        fee_dust: u128,
+        dust_ctime: Timestamp,
+        dust_state: DustLocalState<InMemoryDB>,
+    ) -> Self {
+        let intent_in = base
+            .intents
+            .get(&seg_id)
+            .map(|intent| (*intent).clone())
+            .unwrap_or_else(empty_intent_skeleton);
+        let dust = DustFeePlan::Spend {
+            plan: DustSpendPlan {
+                fee_dust,
+                dust_ctime,
+                intent_ttl,
+                seg_id,
+                binding_commitment: intent_in.binding_commitment,
+            },
+            dust_state: Box::new(dust_state),
+            ledger_params: Box::new(midnight_ledger::structure::INITIAL_PARAMETERS),
+        };
+        BalancedPlan {
+            base,
+            seg_id,
+            intent_in,
+            unshielded_offer: UnshieldedOffer {
+                inputs: vec![].into(),
+                outputs: vec![].into(),
+                signatures: vec![].into(),
+            },
+            fallible_offers,
+            intent_ttl,
+            shielded: None,
+            dust,
+            consolidation: None,
+            carried_registrations: vec![],
+        }
+    }
+}
+
+/// A DUST state holding one note, generated since `ctime` by `night_value` NIGHT, owned by the wallet
+/// whose dust seed is `dust_seed`. Replayed from the ledger's own `DustInitialUtxo` event, so its trees
+/// line up as a synced state's do and the signer can spend from it with no indexer.
+#[cfg(test)]
+pub(crate) fn dust_state_with_one_note(
+    dust_seed: &[u8; 32],
+    night_value: u128,
+    ctime: Timestamp,
+) -> DustLocalState<InMemoryDB> {
+    use midnight_base_crypto::hash::HashOutput;
+    use midnight_ledger::dust::{
+        dust_nonce, DustGenerationInfo, DustSecretKey, InitialNonce, QualifiedDustOutput,
+    };
+    use midnight_ledger::events::{Event, EventDetails, EventSource};
+    use midnight_ledger::structure::TransactionHash;
+
+    let dsk = DustSecretKey::derive_secret_key(dust_seed);
+    let owner = DustPublicKey::from(dsk.clone());
+    let backing_night = InitialNonce(HashOutput([7u8; 32]));
+    let event = Event {
+        source: EventSource {
+            transaction_hash: TransactionHash(HashOutput([0u8; 32])),
+            logical_segment: 0,
+            physical_segment: 0,
+        },
+        content: EventDetails::DustInitialUtxo {
+            output: QualifiedDustOutput {
+                initial_value: night_value
+                    .saturating_mul(INITIAL_DUST_PARAMETERS.night_dust_ratio as u128),
+                owner,
+                nonce: dust_nonce(&backing_night, 0, &dsk),
+                seq: 0,
+                ctime,
+                backing_night,
+                mt_index: 0,
+            },
+            generation: DustGenerationInfo {
+                value: night_value,
+                owner,
+                nonce: backing_night,
+                dtime: Timestamp::from_secs(u64::MAX),
+            },
+            generation_index: 0,
+            block_time: ctime,
+        },
+    };
+    DustLocalState::new(INITIAL_DUST_PARAMETERS)
+        .replay_events(&dsk, std::iter::once(&event))
+        .expect("replay the initial dust utxo")
+}
+
 /// Whether two proven transactions are the same apart from their proof bytes. Compared with every
 /// proof erased, so a transaction proven for real matches the mock-proven one built from the same
 /// preimage, and a rebuilt preimage (fresh randomness) does not.
@@ -3572,6 +3673,184 @@ mod tests {
             panic!("not a standard transaction");
         };
         assert_eq!(stx.intents.iter().count(), 0);
+    }
+
+    /// An unshielded offer's inputs and outputs, in the order the ledger keeps them.
+    fn legs(
+        offer: Option<&Sp<UnshieldedOffer<MnSig, InMemoryDB>>>,
+    ) -> (Vec<UtxoSpend>, Vec<UtxoOutput>) {
+        offer.map_or_else(Default::default, |offer| {
+            (
+                offer.inputs.iter_deref().cloned().collect(),
+                offer.outputs.iter_deref().cloned().collect(),
+            )
+        })
+    }
+
+    /// `authorize_proven_tx` spends what the plan decided and nothing else: the coins and change of the
+    /// guaranteed and fallible offers, the consolidation, the planned DUST fee, as a spend of exactly
+    /// `fee_dust` or as the planned registration, and the planned TTLs. The coins are picked with the
+    /// planner's own selection from a fixed pool; the vault names an indexer nothing listens on, so an
+    /// authorize that synced or re-selected would fail, and a loopback proof server proves the DUST
+    /// spend.
+    #[test]
+    fn authorize_spends_exactly_the_balanced_plan() {
+        let provider = MidnightSigner::mainnet()
+            .crypto_provider(&packed_signing_key(UNSHIELDED_SEED_HEX))
+            .unwrap();
+        let vault = crate::mock_prover::vault("midnight:mainnet", "balanced-plan");
+        let vk = wallet_vk();
+        let recipient = UserAddress::from(
+            MidnightSigningKey::from_bytes(&hex::decode(OTHER_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
+        let pay = |value| UtxoOutput {
+            value,
+            owner: recipient,
+            type_: NIGHT,
+        };
+        // A dapp's intent 1 pays 250 NIGHT in the guaranteed section and 120 in its fallible one.
+        let mut dapp = intent_with(
+            Some(UnshieldedOffer {
+                inputs: vec![].into(),
+                outputs: vec![pay(250)].into(),
+                signatures: vec![].into(),
+            }),
+            None,
+        );
+        dapp.fallible_unshielded_offer = Some(Sp::new(UnshieldedOffer {
+            inputs: vec![].into(),
+            outputs: vec![pay(120)].into(),
+            signatures: vec![].into(),
+        }));
+        let base = base_with_intents(vec![(1, dapp.clone())]);
+        let pool = [300, 200, 100, 90]
+            .into_iter()
+            .zip(1u8..)
+            .map(|(value, ih)| night_pool_utxo(&sender_vk_hex(), value, ih, 0))
+            .collect::<Vec<_>>();
+        let mut claimed = Vec::new();
+        let (guaranteed, _) = build_unshielded_balancing_offer(
+            &pool,
+            &mut claimed,
+            &vk,
+            "sender",
+            &[(NIGHT, 250)],
+            guaranteed_outputs_of(&dapp),
+            None,
+        )
+        .unwrap();
+        let (fallible, _) = build_unshielded_balancing_offer(
+            &pool,
+            &mut claimed,
+            &vk,
+            "sender",
+            &[(NIGHT, 120)],
+            fallible_outputs_of(&dapp),
+            None,
+        )
+        .unwrap();
+        let leftovers = consolidation_leftovers(&pool, &claimed, "sender", &vk).unwrap();
+        let consolidation = Consolidation {
+            segment: 2,
+            offer: build_fallible_consolidation_offer(&leftovers, &mut claimed, &vk, "sender")
+                .unwrap(),
+            ttl: Timestamp::from_secs(7_200),
+        };
+        assert_eq!(
+            legs(Some(&Sp::new(guaranteed.clone()))).0[0].value,
+            300,
+            "the planner's largest-first pick"
+        );
+
+        let dust_ctime = Timestamp::from_secs(4_600);
+        let spend = DustFeePlan::Spend {
+            plan: DustSpendPlan {
+                fee_dust: 42,
+                dust_ctime,
+                intent_ttl: Timestamp::from_secs(3_600),
+                seg_id: 1,
+                binding_commitment: dapp.binding_commitment,
+            },
+            dust_state: Box::new(dust_state_with_one_note(
+                &[0x22; 32],
+                midnight_ledger::structure::STARS_PER_NIGHT,
+                Timestamp::from_secs(1_000),
+            )),
+            ledger_params: Box::new(midnight_ledger::structure::INITIAL_PARAMETERS),
+        };
+        let registration = DustFeePlan::Registration(dust_fee_registration(&vk));
+
+        for (fee, dust) in [("spend", spend), ("registration", registration)] {
+            let plan = BalancedPlan {
+                base: base.clone(),
+                seg_id: 1,
+                intent_in: dapp.clone(),
+                unshielded_offer: guaranteed.clone(),
+                fallible_offers: vec![(1, fallible.clone())],
+                intent_ttl: Timestamp::from_secs(3_600),
+                shielded: None,
+                dust,
+                consolidation: Some(consolidation.clone()),
+                carried_registrations: vec![],
+            };
+            let bytes = authorize_proven_tx("midnight:mainnet", &provider, plan, Some(&vault))
+                .unwrap_or_else(|e| panic!("{fee}: {e}"));
+            let Transaction::Standard(stx) =
+                tagged_deserialize::<TxProven>(&mut &bytes[..]).unwrap()
+            else {
+                panic!("not a standard transaction");
+            };
+            assert_eq!(stx.intents.iter().count(), 2, "{fee}");
+
+            let balancing = stx.intents.get(&1).unwrap();
+            let planned = Sp::new(guaranteed.clone());
+            assert_eq!(
+                legs(balancing.guaranteed_unshielded_offer.as_ref()),
+                legs(Some(&planned)),
+                "{fee}"
+            );
+            let planned = Sp::new(fallible.clone());
+            assert_eq!(
+                legs(balancing.fallible_unshielded_offer.as_ref()),
+                legs(Some(&planned)),
+                "{fee}"
+            );
+            assert_eq!(balancing.ttl, Timestamp::from_secs(3_600), "{fee}");
+            let dust = balancing.dust_actions.as_ref().unwrap();
+            match fee {
+                "spend" => {
+                    let paid: u128 = dust.spends.iter_deref().map(|s| s.v_fee).sum();
+                    assert_eq!(paid, 42);
+                    assert!(
+                        dust.spends
+                            .iter_deref()
+                            .all(|s| s.proof.0.iter().all(|b| *b == 0xde)),
+                        "proved by the vault's proof server"
+                    );
+                    assert_eq!(dust.ctime, dust_ctime);
+                    assert_eq!(dust.registrations.iter_deref().count(), 0);
+                }
+                _ => {
+                    assert_eq!(dust.spends.iter_deref().count(), 0);
+                    let regs: Vec<_> = dust.registrations.iter_deref().collect();
+                    assert_eq!(regs.len(), 1);
+                    assert_eq!(regs[0].allow_fee_payment, 100_000);
+                    assert_eq!(regs[0].night_key, vk);
+                }
+            }
+
+            let folded = stx.intents.get(&2).unwrap();
+            let planned = Sp::new(consolidation.offer.clone());
+            assert_eq!(
+                legs(folded.fallible_unshielded_offer.as_ref()),
+                legs(Some(&planned)),
+                "{fee}"
+            );
+            assert_eq!(folded.ttl, consolidation.ttl, "{fee}");
+        }
+        let _ = std::fs::remove_dir_all(&vault);
     }
 
     /// A plan with the wallet's consolidation: the transaction it balances, untouched, plus the
