@@ -125,6 +125,7 @@ pub(super) fn plan(
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             let complement =
                 sealed_maker_complement(chain_id, &maker_tx, &addrs.unshielded, &addrs.shielded)?;
+            super::maker_checks::check_maker(chain_id, &maker_tx, vault_path)?;
             let merge = plan_merge(
                 chain_id,
                 crypto_provider,

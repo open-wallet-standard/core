@@ -19,6 +19,7 @@ mod balance_unsealed;
 mod build;
 mod make_intent;
 mod make_transfer;
+mod maker_checks;
 mod swap_offer;
 
 pub use balance_sealed::{parse_balance_sealed_json, BalanceSealedRequest};

@@ -702,9 +702,9 @@ as `chain_extra.offer` (see
 [How long a maker offer stands](#how-long-a-maker-offer-stands--chain_extraoffer)), so a policy can
 cap an agent's offers without parsing the request.
 
-A taker should read the maker's TTL before completing an offer: the merged transaction has to
-land inside it, and the taker's own tip-aligned TTL does not extend it — the ledger checks each
-intent's TTL separately.
+A taker has to land the merged transaction inside the maker's TTL, and its own tip-aligned TTL does
+not extend it — the ledger checks each intent's TTL separately. So `balanceSealedTransaction` refuses
+an offer that expires within a minute of the chain tip.
 
 > `ttl` is **not** in the DApp Connector specification, which defines no expiry option on any
 > method and leaves the choice to the wallet. It is an OWS extension, kept optional precisely so
@@ -728,6 +728,21 @@ imbalance, funds the merged tx's DUST fee, seals its half, and `Transaction::mer
 - The maker must both give and want a token, in whatever form it arrives (MIP-0006): a give-only
   or want-only transaction is refused, as is one already balanced. So is a maker built for another
   network, before the taker's half is proven.
+- Before it plans its half, the taker checks the maker against the chain tip, as MIP-0005 asks of a
+  receiver. It refuses an offer whose earliest intent TTL is less than a minute past the tip, since
+  the merged transaction could not land in time. It refuses one whose proofs or signatures do not
+  verify, checked as the node's well-formedness check does: the zswap proofs against the ledger's
+  built-in verifier keys, the signature on every unshielded input and dust registration, each
+  intent's binding and the Pedersen binding of the whole, and the TTL window. And it refuses one
+  that spends an unshielded coin the indexer no longer lists as unspent: the maker has spent it to
+  withdraw the offer, or another taker has already completed it. A checked-in sealed maker whose
+  coins a submission has spent is therefore refused at planning, not by the node.
+- What needs chain state the taker does not hold is left to the node, which rejects the merged
+  transaction whole: a contract call's proof (the contract's verifier key is on chain), a DUST
+  spend's proof (it commits to tree roots the indexer does not expose), and the liveness of a
+  shielded input (the indexer has no nullifier lookup, and the Merkle root's recency window is the
+  node's). A maker whose shielded coin is already spent still fails only at submission, which is
+  why the checked-in proven makers in `e2e/shielded-movement-cap/` are single-use.
 - The taker pays the merged transaction's fee as the wallet pays its own (see
   [Fees are always dust](#fees-are-always-dust)): with a generationless registration when it holds an
   unregistered NIGHT coin that has generated enough DUST, so a wallet freshly funded with NIGHT can

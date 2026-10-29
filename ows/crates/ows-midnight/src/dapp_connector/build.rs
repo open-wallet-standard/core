@@ -214,6 +214,18 @@ pub(super) fn decode_unshielded_recipient(
     Ok(UserAddress(HashOutput(bytes)))
 }
 
+/// Encode an unshielded address as this network's Bech32m address: the inverse of
+/// [`decode_unshielded_recipient`].
+pub(super) fn encode_unshielded_address(
+    signer: &MidnightSigner,
+    address: &UserAddress,
+) -> Result<String, std::io::Error> {
+    let hrp = signer.unshielded_hrp().map_err(|e| err(e.to_string()))?;
+    let hrp = Hrp::parse(&hrp).map_err(|e| err(format!("invalid hrp: {e}")))?;
+    bech32::encode::<bech32::Bech32m>(hrp, &address.0 .0)
+        .map_err(|e| err(format!("bech32m encode: {e}")))
+}
+
 /// Decode a connector shielded recipient (Bech32m, this network's HRP) into its coin + encryption
 /// public keys.
 pub(super) fn decode_shielded_recipient(
