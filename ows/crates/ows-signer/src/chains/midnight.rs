@@ -369,22 +369,9 @@ impl MidnightSigner {
         Self::bech32m_encode(hrp, &hash)
     }
 
-    /// Shielded address payload: Wallet SDK Zswap derives the secret key set from
-    /// the 32-byte seed; the address is `coinPublicKey || encryptionPublicKey` (64
-    /// bytes), Bech32m-encoded under the given network HRP.
-    fn derive_shielded_address_with_hrp(
-        &self,
-        seed: &[u8],
-        hrp: &str,
-    ) -> Result<String, SignerError> {
-        let seed_arr = Zeroizing::new(<[u8; 32]>::try_from(seed).map_err(|_| {
-            SignerError::InvalidPrivateKey(format!(
-                "expected 32-byte shielded seed, got {} bytes",
-                seed.len()
-            ))
-        })?);
-        let keys = ZswapSecretKeys::from(ZswapSeed::from(*seed_arr));
-
+    /// Shielded address payload: the Zswap secret key set's `coinPublicKey ||
+    /// encryptionPublicKey` (64 bytes), Bech32m-encoded under the given network HRP.
+    fn shielded_address(keys: &ZswapSecretKeys, hrp: &str) -> Result<String, SignerError> {
         let coin_public = keys.coin_public_key().0 .0;
         let mut enc_public = Vec::new();
         keys.enc_public_key()
@@ -417,12 +404,10 @@ impl MidnightSigner {
         )))
     }
 
-    /// Dust address: Wallet SDK / ledger-v8 derives the dust public key (a field
-    /// element) from the 32-byte seed, SCALE-encodes it as a BigInt, and Bech32m-
-    /// encodes that payload under the network's `mn_dust{suffix}` HRP.
-    fn derive_dust_address_from_seed(&self, seed: &[u8]) -> Result<String, SignerError> {
-        let dpk = Self::dust_public_key_from_seed(seed)?;
-
+    /// Dust address: Wallet SDK / ledger-v8 SCALE-encodes the dust public key (a field
+    /// element) as a BigInt, and Bech32m-encodes that payload under the network's
+    /// `mn_dust{suffix}` HRP.
+    fn dust_address(&self, dpk: &DustPublicKey) -> Result<String, SignerError> {
         // JS `fr_to_bigint`: little-endian bytes reversed, interpreted as big-endian
         // hex. The numeric value is the same; we build it from big-endian bytes.
         let mut be = dpk.0.as_le_bytes();
@@ -436,18 +421,8 @@ impl MidnightSigner {
     /// Derive all three Midnight addresses (unshielded / shielded / dust) from
     /// the OWS `signing_key` produced by `encode_keys` / `secret_to_signing_key`.
     pub fn derive_addresses(&self, signing_key: &[u8]) -> Result<MidnightAddresses, SignerError> {
-        let seeds = Self::decode_keys(signing_key)?;
-        Ok(MidnightAddresses {
-            unshielded: self.derive_unshielded_address_with_hrp(
-                seeds.unshielded.expose(),
-                &self.network.unshielded_hrp()?,
-            )?,
-            shielded: self.derive_shielded_address_with_hrp(
-                seeds.shielded.expose(),
-                &self.network.shielded_hrp()?,
-            )?,
-            dust: self.derive_dust_address_from_seed(seeds.dust.expose())?,
-        })
+        MidnightCryptoProvider::from_credential(&SecretBytes::from_slice(signing_key))?
+            .addresses(&self.network)
     }
 
     /// Derive the Zswap (shielded) secret keys from the 32-byte shielded role seed. The keys are
@@ -605,8 +580,9 @@ impl MidnightCryptoProvider {
     }
 
     /// Derive all three Midnight addresses (unshielded / shielded / dust) for `network` from the
-    /// seeds held in this provider — equivalent to [`MidnightSigner::derive_addresses`] on the
-    /// packed blob, but the seeds are used directly.
+    /// keys held in this provider. The shielded and dust keys were derived from their seeds once,
+    /// when the provider was built; listing the addresses, which the signing path does many times,
+    /// derives no secret key again, so it leaves no fresh copy of one behind.
     pub fn addresses(&self, network: &MidnightNetwork) -> Result<MidnightAddresses, SignerError> {
         let signer = MidnightSigner {
             network: network.clone(),
@@ -616,11 +592,11 @@ impl MidnightCryptoProvider {
                 self.seeds.unshielded.expose(),
                 &network.unshielded_hrp()?,
             )?,
-            shielded: signer.derive_shielded_address_with_hrp(
-                self.seeds.shielded.expose(),
+            shielded: MidnightSigner::shielded_address(
+                &self.shielded_keys,
                 &network.shielded_hrp()?,
             )?,
-            dust: signer.derive_dust_address_from_seed(self.seeds.dust.expose())?,
+            dust: signer.dust_address(&self.dust_public_key()?)?,
         })
     }
 

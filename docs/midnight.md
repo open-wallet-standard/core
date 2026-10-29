@@ -538,6 +538,17 @@ object, `MidnightCryptoProvider`:
 `fund balance` and `sign tx` both route through `ows-lib` first — it is the only layer
 that ever touches the decrypted key.
 
+The provider derives its Zswap and dust keys from their seeds once, when it is built; listing
+addresses, which the signing path does many times, reads the held keys and derives no secret key
+again. The one place secret material passes through `ows-midnight` is proving: the signer hands
+each spend's proof preimage, whose witnesses include the coin or dust secret key, to
+`ows-midnight`'s `Prover`. Proving locally keeps it in the process. Proving remotely serializes it
+into a request buffer sized to fit, so it is never reallocated and copied, which is handed to the
+HTTP client without a copy and wiped when the client drops it; the TLS and IO layers' own buffers
+are beyond its reach. The `no_key_material_gate` test keeps that channel narrow: only the prover
+and the outputs-only mock prover take preimages, no production code Debug-formats one, and a
+remote proof server is used only when the vault's config names one.
+
 ## Sign and seal (`ows sign tx`)
 
 **Purpose:** turn a DApp Connector request into a fully proven, signed, **sealed**

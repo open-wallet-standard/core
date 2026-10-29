@@ -22,13 +22,16 @@ use std::time::Duration;
 use midnight_base_crypto::data_provider::{self, MidnightDataProvider};
 use midnight_base_crypto::rng::SplittableRng as _;
 use midnight_ledger::structure::{ProofPreimageVersioned, ProofVersioned};
-use midnight_serialize::{tagged_deserialize, tagged_serialize};
+use midnight_serialize::{
+    tagged_deserialize, tagged_serialize, tagged_serialized_size, Serializable, Tagged,
+};
 use rand::rngs::StdRng;
 use rand::SeedableRng as _;
 use transient_crypto::curve::Fr;
 use transient_crypto::proofs::{
     KeyLocation, Proof, ProofPreimage, ProvingKeyMaterial, ProvingProvider, Resolver, WrappedIr,
 };
+use zeroize::Zeroizing;
 use zkir_v2::LocalProvingProvider;
 
 use crate::urls::{is_loopback, without_credentials};
@@ -154,6 +157,15 @@ fn data_provider_for_dir(dir: std::path::PathBuf) -> MidnightDataProvider {
     }
 }
 
+/// Serialize a proof-server request into a buffer sized to fit, so the serializer never reallocates
+/// and leaves behind a copy of the preimage's witnesses (a spend's secret key among them), and wipe
+/// it once sent.
+fn request_body<T: Serializable + Tagged>(value: &T) -> Result<Zeroizing<Vec<u8>>, anyhow::Error> {
+    let mut body = Zeroizing::new(Vec::with_capacity(tagged_serialized_size(value)));
+    tagged_serialize(value, &mut *body)?;
+    Ok(body)
+}
+
 fn is_builtin_key(loc: &KeyLocation) -> bool {
     BUILTIN_KEY_LOCATIONS.contains(&loc.0.as_ref())
 }
@@ -255,33 +267,34 @@ impl Prover {
     async fn check_request_body(
         provider: &Option<MidnightDataProvider>,
         preimage: &ProofPreimage,
-    ) -> Result<Vec<u8>, anyhow::Error> {
+    ) -> Result<Zeroizing<Vec<u8>>, anyhow::Error> {
         let ir = Self::resolve_remote_key_material(provider, &preimage.key_location)
             .await?
             .map(|data| WrappedIr(data.ir_source));
         let versioned = ProofPreimageVersioned::V2(Arc::new(preimage.clone()));
-        let mut res = Vec::new();
-        tagged_serialize(&(versioned, ir), &mut res)?;
-        Ok(res)
+        request_body(&(versioned, ir))
     }
 
     async fn proving_request_body(
         provider: &Option<MidnightDataProvider>,
         preimage: &ProofPreimage,
         overwrite_binding_input: Option<Fr>,
-    ) -> Result<Vec<u8>, anyhow::Error> {
+    ) -> Result<Zeroizing<Vec<u8>>, anyhow::Error> {
         let data = Self::resolve_remote_key_material(provider, &preimage.key_location).await?;
         let versioned = ProofPreimageVersioned::V2(Arc::new(preimage.clone()));
-        let mut res = Vec::new();
-        tagged_serialize(&(versioned, data, overwrite_binding_input), &mut res)?;
-        Ok(res)
+        request_body(&(versioned, data, overwrite_binding_input))
     }
 
-    async fn post_proof_server(url: reqwest::Url, body: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
+    /// Post a serialized preimage. The body is handed over without a copy and wiped once the client
+    /// drops it; what the TLS and IO layers buffer on the way out is beyond its reach.
+    async fn post_proof_server(
+        url: reqwest::Url,
+        body: Zeroizing<Vec<u8>>,
+    ) -> Result<Vec<u8>, anyhow::Error> {
         let resp = proof_server_http_client()
             .post(url)
             .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-            .body(body)
+            .body(bytes::Bytes::from_owner(body))
             .send()
             .await
             .map_err(|e| anyhow::anyhow!("proof server request failed: {}", e.without_url()))?;
@@ -409,7 +422,8 @@ mod tests {
         assert!(!refused.to_string().contains("secret"), "{refused}");
 
         let url = reqwest::Url::parse("http://127.0.0.1:9/prove?token=secret").unwrap();
-        let unreachable = crate::block_on(Prover::post_proof_server(url, Vec::new())).unwrap_err();
+        let unreachable =
+            crate::block_on(Prover::post_proof_server(url, Zeroizing::default())).unwrap_err();
         assert!(
             !format!("{unreachable:#}").contains("secret"),
             "{unreachable:#}"
@@ -466,8 +480,11 @@ mod tests {
             return;
         };
         let url = reqwest::Url::parse(&url).unwrap();
-        let err =
-            crate::block_on(Prover::post_proof_server(url, b"preimage".to_vec())).unwrap_err();
+        let err = crate::block_on(Prover::post_proof_server(
+            url,
+            Zeroizing::new(b"preimage".to_vec()),
+        ))
+        .unwrap_err();
         assert!(err.to_string().contains("307"), "{err:#}");
     }
 
