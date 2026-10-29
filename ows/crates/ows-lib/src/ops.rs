@@ -648,9 +648,9 @@ pub fn decode_tx_input(chain: &ows_core::Chain, tx_input: &str) -> Result<Vec<u8
 /// Midnight, where the DApp Connector request carried through by `decode_tx_input` is parsed and
 /// balanced — using `key` to pull in the wallet's own inputs — into the transaction to sign. Every
 /// caller resolves the key first (the agent path only after the first policy pass). `gate` is the
-/// second, effect-aware policy pass, run at the plan→authorize seam over the plan's per-segment
-/// wallet-relative effects, handed in as the `chain_extra` policy context; owner callers pass a gate
-/// that always allows.
+/// second, effect-aware policy pass, run at the plan→authorize seam over the policy context
+/// ows-midnight builds from the plan (its per-segment wallet-relative effects among it), handed in as
+/// `chain_extra`; owner callers pass a gate that always allows.
 pub fn prepare_signable_tx(
     chain: &ows_core::Chain,
     tx_bytes: Vec<u8>,
@@ -681,20 +681,9 @@ pub fn prepare_signable_tx(
     // `chain_extra` context — to veto here, before `authorize` builds and proves any spend witness. A
     // denial returns and nothing is proved; owner callers pass a gate that always allows. Only Midnight
     // reaches this: every other chain returned above, its effects already known at the first pass.
-    let segment_effects = plan
-        .segment_effects(chain.chain_id, &crypto_provider)
+    let chain_extra = plan
+        .policy_context(chain.chain_id, &crypto_provider)
         .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
-    // The two halves of the seam's view, kept disjoint: `segment_effects` is how much the *wallet*
-    // moves, `contracts` is *who* the transaction talks to and how much value each contract declares.
-    let contracts = plan
-        .contracts()
-        .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
-    let chain_extra = serde_json::json!({
-        "segment_effects": serde_json::to_value(&segment_effects)
-            .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?,
-        "contracts": serde_json::to_value(&contracts)
-            .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?,
-    });
     gate(chain_extra)?;
 
     plan.authorize(chain.chain_id, &crypto_provider)

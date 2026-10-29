@@ -151,6 +151,21 @@ impl ConnectorPlan {
             }
         }
     }
+
+    /// The `chain_extra` context the policy seam gates on, serialized as an executable policy reads
+    /// it: the plan's [effects](Self::segment_effects) and its [contracts](Self::contracts). The whole
+    /// Midnight context is built here, so the caller only hands it to the gate.
+    pub fn policy_context(
+        &self,
+        chain_id: &str,
+        crypto_provider: &MidnightCryptoProvider,
+    ) -> Result<serde_json::Value, std::io::Error> {
+        let context = crate::policy_context::PolicyContext {
+            segment_effects: self.segment_effects(chain_id, crypto_provider)?,
+            contracts: self.contracts()?,
+        };
+        serde_json::to_value(&context).map_err(|e| std::io::Error::other(e.to_string()))
+    }
 }
 
 /// Parse a stringified connector request and plan it (inert) into a [`ConnectorPlan`], ready for the

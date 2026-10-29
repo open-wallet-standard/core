@@ -556,7 +556,8 @@ decode_tx_input            normalize the connector request (no key)
 prepare_signable_tx        the key-aware step (ows-lib):
         │   ├─ build ONE MidnightCryptoProvider from the credential (ows-lib holds the key)
         │   ├─ plan_connector_tx       → an inert ConnectorPlan (no proofs, no signatures)
-        │   ├─ plan.segment_effects(…) → the wallet-relative net movement, per segment
+        │   ├─ plan.policy_context(…)  → chain_extra: the wallet-relative movement per segment,
+        │   │                            the contracts it calls, and the rest of the plan's context
         │   ├─ ── POLICY SEAM ──       gate(chain_extra)   ← second, effect-aware policy pass
         │   └─ plan.authorize(…)       → build + prove + sign the binding + serialize
         │
@@ -774,8 +775,9 @@ exactly 1,000,000.
 ### The second policy pass in detail
 
 `enforce_effect_policies` (`ows-lib/src/key_ops.rs`) is the gate `prepare_signable_tx`
-runs at the plan→authorize seam. It fills the plan's per-segment movement into the
-transaction context under `chain_extra` — leaving the flat `effects` field empty, since
+runs at the plan→authorize seam. It fills the plan's context into the transaction context
+under `chain_extra` — built whole by `ConnectorPlan::policy_context` in `ows-midnight`, which
+`ows-lib` only hands on — leaving the flat `effects` field empty, since
 the wallet can only account for its **own** movement, not the transaction's full effects —
 and calls `evaluate_policies`, the same evaluation as the first pass. Planning can take minutes
 on a cold sync, so the key is reloaded first: a key revoked or expired since the first pass is
