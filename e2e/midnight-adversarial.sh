@@ -9,11 +9,11 @@
 # OFFLINE tier (always runs): needs no indexer, node, prover or funds, so it runs anywhere. It works
 # in a throwaway vault under a temp HOME and never reads or writes ~/.ows. It covers token scope,
 # revocation and expiry, both policy passes (the request-shape pass and the effect pass at the
-# plan→authorize seam, which makeIntent reaches without a network because its effects come from the
-# request), executable policies that crash, hang, print garbage or are missing (each must deny),
-# malformed and hostile connector requests (misspelled options, unnamed tokens, a plaintext remote
-# indexer), the audit record of a token's balance read, outages (an indexer or proof server that is
-# down, a node or proof server on another host over plaintext), and secret hygiene.
+# plan→authorize seam, which a makeIntent that spends no coin reaches without a network because its
+# effects come from the request), executable policies that crash, hang, print garbage or are missing
+# (each must deny), malformed and hostile connector requests (misspelled options, unnamed tokens, a
+# plaintext remote indexer), the audit record of a token's balance read, outages (an indexer or proof
+# server that is down, a node or proof server on another host over plaintext), and secret hygiene.
 #
 # LIVE tier (LIVE=1): the plan-derived flows. They sync a FUNDED wallet against a live indexer and
 # mock-prove, so they use your real vault — set WALLET (and PASS, its owner passphrase, empty by
@@ -187,12 +187,16 @@ done
 REVOKED_ID="$(HOME="$SANDBOX" "$OWS" key list 2>/dev/null | awk '/^ID:/{id=$2} /^Name:/{ if ($2=="revoked-agent") print id }')"
 HOME="$SANDBOX" "$OWS" key revoke --id "$REVOKED_ID" --confirm >/dev/null 2>&1 || { fail "revoke the revoked-agent key"; exit 1; }
 
-# Request fixtures. makeIntent effects come from the request itself, so its second policy pass runs
-# with no network; an over-cap request is refused there, before anything is built or proved.
+# Request fixtures. makeIntent effects come from the request itself, and an offer that spends no coin
+# plans without syncing the wallet, so its second policy pass runs with no network: an offer asking for
+# 5,000,000 NIGHT back to the wallet is over the cap and refused there, before anything is built or
+# proved. (An offer that spends coins syncs the wallet to pick them when it is planned.)
 intent() {  # intent <value> [extra options JSON, starting with a comma]
   printf '{"method":"makeIntent","desiredInputs":[{"kind":"unshielded","type":"night","value":"%s"}],"desiredOutputs":[],"options":{"intentId":1%s}}' "$1" "${2:-}"
 }
-OVER_CAP="$(intent 5000000)"
+GUARDED_ADDR="$(env -u LWS_PASSPHRASE HOME="$SANDBOX" OWS_MNEMONIC="$MNEMONIC" "$OWS" mnemonic derive --chain "$CHAIN" </dev/null 2>/dev/null | tail -n 1)"
+[ -n "$GUARDED_ADDR" ] || { fail "derive the guarded wallet's address"; exit 1; }
+OVER_CAP="$(printf '{"method":"makeIntent","desiredInputs":[],"desiredOutputs":[{"kind":"unshielded","type":"night","value":"5000000","recipient":"%s"}],"options":{"intentId":1}}' "$GUARDED_ADDR")"
 
 # ═══ Credentials: a token is the agent's only authority ═══════════════════════════════════
 say "Credentials — a token must never degrade into owner authority"
@@ -311,7 +315,7 @@ outage() {  # outage <label> <needle> <tx>
 
 outage "with every endpoint down, the policy still refuses an over-cap makeIntent" "summed movement 5000000" "$OVER_CAP"
 audited "the denial is audited as with the endpoints up" sign_transaction "summed movement 5000000"
-outage "a down indexer fails a makeIntent the policy allowed, before anything is signed" \
+outage "a down indexer fails a makeIntent that spends a coin as it is planned, before anything is signed" \
   "failed to connect to Midnight indexer" "$(intent 5)"
 outage "a makeTransfer whose indexer cannot confirm the DUST ledger is refused before it is planned" \
   "could not confirm the network's DUST ledger is live" \

@@ -4,8 +4,8 @@
 //! deliberately imbalanced** swap-offer intent — the maker side of a swap. The maker contributes real
 //! inputs and declares the outputs it wants; a counterparty completes and balances it later
 //! (`balanceSealedTransaction`). Because it is imbalanced by design, `makeIntent` does **not** run the
-//! balancing tail: `authorize` builds the maker's inputs + outputs, proves them, and returns the
-//! signable bytes for the downstream sign/seal.
+//! balancing tail: the plan picks the maker's coins and builds its inputs + outputs, and `authorize`
+//! proves them and returns the signable bytes for the downstream sign/seal.
 //!
 //! Scope: unshielded and shielded inputs (whole coins, with change back to the maker) and
 //! unshielded/shielded outputs. The maker declares how much of a token it contributes; the wallet spends
@@ -114,38 +114,60 @@ pub struct MakeIntentRequest {
     pub ttl: Option<Timestamp>,
 }
 
-/// A `makeIntent` request planned for the policy seam, with its offer's expiry fixed: the request's own
-/// `ttl`, or the wallet default taken when the plan is made. The instant the policy pass reads is then
-/// the one that gets sealed, rather than a default taken again once the policy has decided.
+/// A `makeIntent` planned for the policy seam: the request, with its offer's expiry fixed, and the offer
+/// decided, its coins picked. The expiry is the request's own `ttl`, or the wallet default taken when the
+/// plan is made, so the instant the policy pass reads is the one that gets sealed; the coins are picked
+/// once, so the ones the policy pass allowed are the ones that get spent.
 pub struct IntentPlan {
     request: MakeIntentRequest,
+    offer: OfferPlan,
     ttl: Timestamp,
     ttl_is_default: bool,
 }
 
-/// Plan a `makeIntent`: fix the offer's expiry. Needs no key and no network, since the offer's effects
-/// come from the request.
-pub(super) fn plan(request: MakeIntentRequest) -> IntentPlan {
+/// Plan a `makeIntent`: fix the offer's expiry and decide the offer, picking the coins its inputs spend
+/// from the wallet's synced coin set. The effects still come from the request, which the picked coins
+/// net to exactly: whole coins are spent and the excess returns to the maker.
+pub(super) fn plan(
+    chain_id: &str,
+    crypto_provider: &MidnightCryptoProvider,
+    request: MakeIntentRequest,
+    vault_path: Option<&Path>,
+) -> Result<IntentPlan, std::io::Error> {
+    let pool = unshielded_pool(
+        chain_id,
+        crypto_provider,
+        &request.desired_inputs,
+        vault_path,
+    )?;
+    plan_from_pool(chain_id, crypto_provider, request, &pool, vault_path)
+}
+
+fn plan_from_pool(
+    chain_id: &str,
+    crypto_provider: &MidnightCryptoProvider,
+    request: MakeIntentRequest,
+    pool: &[crate::UnshieldedUtxo],
+    vault_path: Option<&Path>,
+) -> Result<IntentPlan, std::io::Error> {
     let ttl_is_default = request.ttl.is_none();
     let ttl = request.ttl.unwrap_or_else(default_intent_ttl);
-    IntentPlan {
+    let request = MakeIntentRequest {
+        ttl: Some(ttl),
+        ..request
+    };
+    let offer = plan_offer_from_pool(chain_id, crypto_provider, &request, pool, vault_path)?;
+    Ok(IntentPlan {
         request,
+        offer,
         ttl,
         ttl_is_default,
-    }
+    })
 }
 
 impl IntentPlan {
     pub(super) fn request(&self) -> &MakeIntentRequest {
         &self.request
-    }
-
-    /// The request to build, with the expiry the policy pass saw.
-    pub(super) fn into_request(self) -> MakeIntentRequest {
-        MakeIntentRequest {
-            ttl: Some(self.ttl),
-            ..self.request
-        }
     }
 
     /// The offer the maker seals: the intent it keys at and when it expires.
@@ -341,19 +363,16 @@ pub(super) fn request_segment_effects(
     ))
 }
 
-/// Build the maker's imbalanced offer, prove it, and return the signable bytes. Runs **after** the
-/// policy seam. No balancing: the imbalance is the offer.
+/// Prove the planned maker offer and return the signable bytes. Runs **after** the policy seam, and
+/// spends exactly the coins the plan picked: nothing is re-synced or re-selected. No balancing: the
+/// imbalance is the offer.
 pub(super) fn authorize(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
-    req: MakeIntentRequest,
+    plan: IntentPlan,
     vault_path: Option<&Path>,
 ) -> Result<Vec<u8>, std::io::Error> {
-    let base = plan_offer(chain_id, crypto_provider, &req, vault_path)?.realize(
-        chain_id,
-        crypto_provider,
-        vault_path,
-    )?;
+    let base = plan.offer.realize(chain_id, crypto_provider, vault_path)?;
     let mut out = Vec::new();
     tagged_serialize(&Transaction::Standard(base), &mut out)
         .map_err(|e| err(format!("serialize proven tx: {e}")))?;
@@ -378,6 +397,42 @@ pub(super) fn plan_offer(
     req: &MakeIntentRequest,
     vault_path: Option<&Path>,
 ) -> Result<OfferPlan, std::io::Error> {
+    let pool = unshielded_pool(chain_id, crypto_provider, &req.desired_inputs, vault_path)?;
+    plan_offer_from_pool(chain_id, crypto_provider, req, &pool, vault_path)
+}
+
+/// The wallet's unshielded coins, fetched from the indexer only when the offer spends any.
+fn unshielded_pool(
+    chain_id: &str,
+    crypto_provider: &MidnightCryptoProvider,
+    inputs: &[DesiredInput],
+    vault_path: Option<&Path>,
+) -> Result<Vec<crate::UnshieldedUtxo>, std::io::Error> {
+    if !inputs.iter().any(|d| d.kind == TransferKind::Unshielded) {
+        return Ok(Vec::new());
+    }
+    let sender_addr = crypto_provider
+        .addresses(&MidnightNetwork::from_chain_id(chain_id))
+        .map_err(|e| err(e.to_string()))?
+        .unshielded;
+    crate::block_on(crate::get_unshielded_utxos_for_display(
+        &crate::wallet::resolve_indexer_url(chain_id, vault_path)?,
+        &sender_addr,
+        &SyncCacheScope {
+            vault_path: vault_path.map(Path::to_path_buf),
+            ..Default::default()
+        },
+    ))
+}
+
+/// [`plan_offer`] over an unshielded coin set already fetched.
+fn plan_offer_from_pool(
+    chain_id: &str,
+    crypto_provider: &MidnightCryptoProvider,
+    req: &MakeIntentRequest,
+    pool: &[crate::UnshieldedUtxo],
+    vault_path: Option<&Path>,
+) -> Result<OfferPlan, std::io::Error> {
     let signer = MidnightSigner::from_chain_id(chain_id);
 
     let (unshielded_in, shielded_in): (Vec<_>, Vec<_>) = req
@@ -394,12 +449,12 @@ pub(super) fn plan_offer(
         &signer,
         crypto_provider,
         req.intent_segment,
+        pool,
         &unshielded_in,
         &unshielded_out,
         &shielded_out,
         !shielded_in.is_empty(),
         req.ttl,
-        vault_path,
     )?;
     let funding = if shielded_in.is_empty() {
         None
@@ -475,12 +530,12 @@ fn build_make_intent_frame(
     signer: &MidnightSigner,
     crypto_provider: &MidnightCryptoProvider,
     segment: u16,
+    pool: &[crate::UnshieldedUtxo],
     unshielded_in: &[&DesiredInput],
     unshielded_out: &[&DesiredOutput],
     shielded_out: &[&DesiredOutput],
     has_shielded_in: bool,
     ttl: Option<Timestamp>,
-    vault_path: Option<&Path>,
 ) -> Result<PreimageTx, std::io::Error> {
     let sender_vk = crypto_provider
         .unshielded_verifying_key()
@@ -490,13 +545,12 @@ fn build_make_intent_frame(
         .map_err(|e| err(e.to_string()))?
         .unshielded;
     let unshielded_offer = build_unshielded_offer(
-        chain_id,
         signer,
         &sender_addr,
         &sender_vk,
+        pool,
         unshielded_in,
         unshielded_out,
-        vault_path,
     )?;
     let zswap_offer = build_shielded_output_offer(signer, GUARANTEED_SEGMENT, shielded_out)?;
     if unshielded_offer.is_none() && zswap_offer.is_none() && !has_shielded_in {
@@ -624,16 +678,16 @@ fn place_zswap_offer(
     }
 }
 
-/// Build the maker's unshielded offer: select real UTXOs to cover each input, spend them (returning any
-/// whole-coin excess as change back to the maker), and append the desired unshielded outputs.
+/// Build the maker's unshielded offer: select UTXOs from the wallet's `pool` to cover each input, spend
+/// them (returning any whole-coin excess as change back to the maker), and append the desired unshielded
+/// outputs.
 fn build_unshielded_offer(
-    chain_id: &str,
     signer: &MidnightSigner,
     sender_addr: &str,
     sender_vk: &VerifyingKey,
+    pool: &[crate::UnshieldedUtxo],
     inputs_requested: &[&DesiredInput],
     outputs_requested: &[&DesiredOutput],
-    vault_path: Option<&Path>,
 ) -> Result<Option<UnshieldedOffer<MnSig, InMemoryDB>>, std::io::Error> {
     if inputs_requested.is_empty() && outputs_requested.is_empty() {
         return Ok(None);
@@ -644,16 +698,8 @@ fn build_unshielded_offer(
 
     if !inputs_requested.is_empty() {
         let maker = decode_unshielded_recipient(signer, sender_addr)?;
-        let utxos = crate::block_on(crate::get_unshielded_utxos_for_display(
-            &crate::wallet::resolve_indexer_url(chain_id, vault_path)?,
-            sender_addr,
-            &SyncCacheScope {
-                vault_path: vault_path.map(Path::to_path_buf),
-                ..Default::default()
-            },
-        ))?;
         let (mut selected_inputs, mut change_outputs) =
-            select_unshielded_inputs(&utxos, inputs_requested, sender_addr, sender_vk, maker)?;
+            select_unshielded_inputs(pool, inputs_requested, sender_addr, sender_vk, maker)?;
         inputs.append(&mut selected_inputs);
         outputs.append(&mut change_outputs);
     }
@@ -831,6 +877,57 @@ mod tests {
         assert_eq!(req.ttl, None);
     }
 
+    const CHAIN: &str = "midnight:preview";
+
+    fn provider() -> MidnightCryptoProvider {
+        let mut credential = b"MNK1".to_vec();
+        credential.extend_from_slice(&[0x11; 96]);
+        MidnightSigner::mainnet()
+            .crypto_provider(&ows_signer::SecretBytes::new(credential))
+            .unwrap()
+    }
+
+    /// A NIGHT coin of the [`provider`]'s wallet on [`CHAIN`], as the indexer reports it.
+    fn wallet_coin(value: u128, ih_byte: u8) -> crate::UnshieldedUtxo {
+        crate::UnshieldedUtxo {
+            owner: provider()
+                .addresses(&MidnightNetwork::from_chain_id(CHAIN))
+                .unwrap()
+                .unshielded,
+            ..night_utxo(value, ih_byte, 0)
+        }
+    }
+
+    type ProvenTx = Transaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>;
+
+    fn standard(
+        tx: ProvenTx,
+    ) -> StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB> {
+        match tx {
+            Transaction::Standard(stx) => stx,
+            Transaction::ClaimRewards(_) => panic!("not a standard transaction"),
+        }
+    }
+
+    /// The maker intent's unshielded inputs and outputs, as `(intent hash byte, value)` and values.
+    fn unshielded_legs(
+        stx: &StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
+        segment: u16,
+    ) -> (Vec<(u8, u128)>, Vec<u128>) {
+        let intent = stx.intents.get(&segment).expect("the maker intent");
+        let offer = intent
+            .guaranteed_unshielded_offer
+            .as_ref()
+            .expect("an unshielded offer");
+        let inputs = offer
+            .inputs
+            .iter_deref()
+            .map(|i| (i.intent_hash.0 .0[0], i.value))
+            .collect();
+        let outputs = offer.outputs.iter_deref().map(|o| o.value).collect();
+        (inputs, outputs)
+    }
+
     /// The plan fixes the expiry before the policy pass: a request's own `ttl` is kept, and an omitted
     /// one becomes the wallet default once, flagged as such, and is what gets built.
     #[test]
@@ -841,6 +938,8 @@ mod tests {
             ))
             .unwrap()
         };
+        let pool = [wallet_coin(10, 1)];
+        let plan = |req| plan_from_pool(CHAIN, &provider(), req, &pool, None).unwrap();
         let requested = now_secs() + 30;
         let explicit = plan(parse(&format!(r#"{{"ttl":{requested},"intentId":7}}"#)));
         assert_eq!(
@@ -858,9 +957,44 @@ mod tests {
         assert!(offer.ttl_is_default);
         assert_eq!(offer.intent_id, DEFAULT_INTENT_SEGMENT);
         assert!(offer.ttl >= now + max_ttl_secs() && offer.ttl <= now + max_ttl_secs() + 2);
+        let built = defaulted.offer.mock_proven(&provider()).unwrap();
         assert_eq!(
-            defaulted.into_request().ttl,
-            Some(Timestamp::from_secs(offer.ttl))
+            built.intents.get(&DEFAULT_INTENT_SEGMENT).unwrap().ttl,
+            Timestamp::from_secs(offer.ttl)
+        );
+    }
+
+    /// The coins a maker offer spends are picked when it is planned, before the policy pass, and
+    /// `authorize` spends exactly those: it proves the planned offer and has no coin set to pick from
+    /// again. The movement they make is the one the policy pass saw, since the excess of the whole coin
+    /// returns to the maker.
+    #[test]
+    fn authorize_spends_the_coins_the_plan_picked() {
+        let req = parse_make_intent_json(
+            r#"{"desiredInputs":[{"kind":"unshielded","type":"night","value":"250"}],"desiredOutputs":[]}"#,
+        )
+        .unwrap();
+        let pool = [
+            wallet_coin(300, 1),
+            wallet_coin(200, 2),
+            wallet_coin(100, 3),
+        ];
+        let plan = plan_from_pool(CHAIN, &provider(), req, &pool, None).unwrap();
+        let effects = request_effects(CHAIN, &provider(), plan.request()).unwrap();
+        assert_eq!(effects[0].diff, vec![("00".repeat(32), "-250".to_string())]);
+
+        let planned = unshielded_legs(
+            &plan.offer.mock_proven(&provider()).unwrap(),
+            DEFAULT_INTENT_SEGMENT,
+        );
+        assert_eq!(planned, (vec![(1, 300)], vec![50]));
+
+        let signable = authorize(CHAIN, &provider(), plan, None).unwrap();
+        let mut r: &[u8] = &signable;
+        let authorized: ProvenTx = midnight_serialize::tagged_deserialize(&mut r).unwrap();
+        assert_eq!(
+            unshielded_legs(&standard(authorized), DEFAULT_INTENT_SEGMENT),
+            planned
         );
     }
 

@@ -74,9 +74,9 @@ pub enum ConnectorPlan {
     /// A `makeTransfer`: its outputs built and its balancing planned over their mock-proven form;
     /// `authorize` proves the same outputs and signs that plan.
     MakeTransfer(Box<make_transfer::TransferPlan>),
-    /// A `makeIntent` request with its expiry fixed; the wallet builds an imbalanced maker offer,
-    /// proved in `authorize`.
-    MakeIntent(make_intent::IntentPlan),
+    /// A `makeIntent`: the request with its expiry fixed, and the imbalanced maker offer decided, its
+    /// coins picked; `authorize` proves that offer.
+    MakeIntent(Box<make_intent::IntentPlan>),
     /// A `balanceSealedTransaction`: the maker offer is SEALED (`proof,pedersen-schnorr`).
     /// A sealed tx cannot be balanced in place (its binding fixes the value balance), so the taker
     /// completes it by MERGING: it builds its own imbalanced half — the per-token complement of the
@@ -102,7 +102,7 @@ impl ConnectorPlan {
                 make_transfer::authorize(chain_id, crypto_provider, *transfer, vault_path)
             }
             ConnectorPlan::MakeIntent(plan) => {
-                make_intent::authorize(chain_id, crypto_provider, plan.into_request(), vault_path)
+                make_intent::authorize(chain_id, crypto_provider, *plan, vault_path)
             }
             ConnectorPlan::BalanceSealedMerge(merge) => {
                 balance_sealed::authorize_merge(chain_id, crypto_provider, *merge, vault_path)
@@ -222,9 +222,11 @@ pub fn plan_connector_tx(
             let transfer = make_transfer::plan(chain_id, crypto_provider, &req, vault_path)?;
             Ok(ConnectorPlan::MakeTransfer(Box::new(transfer)))
         }
-        ConnectorMethod::MakeIntent => Ok(ConnectorPlan::MakeIntent(make_intent::plan(
-            parse_make_intent_json(json)?,
-        ))),
+        ConnectorMethod::MakeIntent => {
+            let req = parse_make_intent_json(json)?;
+            let intent = make_intent::plan(chain_id, crypto_provider, req, vault_path)?;
+            Ok(ConnectorPlan::MakeIntent(Box::new(intent)))
+        }
         ConnectorMethod::BalanceSealed => {
             balance_sealed::plan(chain_id, crypto_provider, json, vault_path)
         }
@@ -411,12 +413,19 @@ mod tests {
             .unwrap()
     }
 
-    /// A maker offer plans from the request alone, so its whole policy context is built offline: the
-    /// maker's movement, no contracts, no fee (the taker pays), no registration, and the offer itself.
+    /// A maker offer that spends no coin plans without the network, so its whole policy context is
+    /// built offline: the maker's movement, no contracts, no fee (the taker pays), no registration, and
+    /// the offer itself.
     #[test]
     fn a_maker_offers_policy_context_shows_no_fee_and_no_registration() {
-        let json = r#"{"method":"makeIntent","desiredInputs":[{"kind":"unshielded","type":"night","value":"5"}],"desiredOutputs":[]}"#;
-        let plan = plan_connector_tx("midnight:preview", &provider(), json, None).unwrap();
+        let own = provider()
+            .addresses(&MidnightNetwork::from_chain_id("midnight:preview"))
+            .unwrap()
+            .unshielded;
+        let json = format!(
+            r#"{{"method":"makeIntent","desiredInputs":[],"desiredOutputs":[{{"kind":"unshielded","type":"night","value":"5","recipient":"{own}"}}]}}"#
+        );
+        let plan = plan_connector_tx("midnight:preview", &provider(), &json, None).unwrap();
 
         let context = plan
             .policy_context("midnight:preview", &provider())
@@ -425,7 +434,7 @@ mod tests {
         assert_eq!(context["segment_effects"][0]["segment"], 0);
         assert_eq!(
             context["segment_effects"][0]["effects"][0]["diff"],
-            serde_json::json!([["00".repeat(32), "-5"]])
+            serde_json::json!([["00".repeat(32), "5"]])
         );
         assert_eq!(context["contracts"], serde_json::json!([]));
         assert_eq!(

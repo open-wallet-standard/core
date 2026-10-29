@@ -787,7 +787,10 @@ on the method:
   gate ever runs.
 - **`makeIntent`** → *request-derived*, from the declared inputs (outflow) and self-outputs
   (inflow). A maker offer is deliberately imbalanced and **pays no fee** (the taker does), so
-  the request already is the complete movement — there is nothing to plan.
+  the request already is the complete movement. Its coins are still picked before the gate: the
+  plan syncs the wallet's coins and builds the offer, and `authorize` proves that offer, so the
+  coins the policy allowed are the ones spent. Whole coins are spent and the excess returns to the
+  maker, so they net to the request exactly. An offer the wallet cannot fund fails at planning.
 - **`balanceSealedMerge`** (a fully-sealed maker completed by merging) → the taker's own half,
   request-derived like `makeIntent`, **plus the DUST fee the merge burns** (when `payFees` on a
   live-DUST chain). The fee covers the whole merged tx and the maker never pays, so it is sized
