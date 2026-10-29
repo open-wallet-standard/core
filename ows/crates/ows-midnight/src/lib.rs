@@ -27,11 +27,12 @@ mod wallet_sync;
 pub use async_runtime::block_on;
 pub use balance_tx::{authorize_proven_tx, plan_unsealed_proven_tx, BalancedPlan};
 pub use dapp_connector::{
-    classify_unsealed_payload, normalize_connector_request, parse_balance_sealed_json,
-    parse_balance_unsealed_json, parse_connector_method, parse_make_intent_json,
-    parse_make_transfer_json, plan_connector_tx, BalanceSealedRequest, BalanceUnsealedRequest,
-    ConnectorMethod, ConnectorPlan, DesiredInput, DesiredOutput, MakeIntentRequest,
-    MakeTransferRequest, TransferKind, UnsealedKind,
+    classify_unsealed_payload, connector_submission, normalize_connector_request,
+    parse_balance_sealed_json, parse_balance_unsealed_json, parse_connector_method,
+    parse_make_intent_json, parse_make_transfer_json, parse_submit_transaction_json,
+    plan_connector_tx, BalanceSealedRequest, BalanceUnsealedRequest, ConnectorMethod,
+    ConnectorPlan, DesiredInput, DesiredOutput, MakeIntentRequest, MakeTransferRequest,
+    SubmitTransactionRequest, TransferKind, UnsealedKind,
 };
 pub use fund_balance::{print_addresses, print_fund_balance};
 pub use ledger_params::fetch_indexer_ledger_parameters;

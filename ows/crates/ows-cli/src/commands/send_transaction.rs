@@ -50,18 +50,29 @@ pub fn run(
 
     // Owner mode: resolve key directly (existing behavior)
     let chain = parse_chain(chain_str)?;
-    let key = super::resolve_signing_key(wallet_name, chain.chain_type, index)?;
-
     let tx_bytes = ows_lib::decode_tx_input(&chain, tx_hex)?;
-    // Owner mode: full authority, no policy gate.
-    let signable_tx = ows_lib::prepare_signable_tx(&chain, tx_bytes, &key, |_| Ok(()), None)?;
-
-    let result = ows_lib::sign_encode_and_broadcast(
-        key.expose(),
-        chain_str,
-        &signable_tx,
-        rpc_url_override,
-    )?;
+    // A Midnight submitTransaction is already sealed, so it is relayed without asking for the key.
+    let result = match ows_lib::midnight_submission(&chain, &tx_bytes)? {
+        Some(submission) => ows_lib::submit_midnight_transaction(
+            wallet_name,
+            &chain,
+            &submission,
+            rpc_url_override,
+            None,
+        )?,
+        None => {
+            let key = super::resolve_signing_key(wallet_name, chain.chain_type, index)?;
+            // Owner mode: full authority, no policy gate.
+            let signable_tx =
+                ows_lib::prepare_signable_tx(&chain, tx_bytes, &key, |_| Ok(()), None)?;
+            ows_lib::sign_encode_and_broadcast(
+                key.expose(),
+                chain_str,
+                &signable_tx,
+                rpc_url_override,
+            )?
+        }
+    };
 
     log_signed(wallet_name, chain_str, &actor, &audit::Outcome::Allowed);
 

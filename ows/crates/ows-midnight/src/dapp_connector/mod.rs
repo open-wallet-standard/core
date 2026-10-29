@@ -2,9 +2,11 @@
 //! top-level `method` names the operation; each method is parsed and handled by its own submodule.
 //! A request with no `method` defaults to `balanceUnsealedTransaction`, the wallet's original method.
 //!
-//! Every method funnels through one diagonal: parse → [`plan_connector_tx`] (an inert
+//! Every method that signs funnels through one diagonal: parse → [`plan_connector_tx`] (an inert
 //! [`ConnectorPlan`]) → policy seam → [`ConnectorPlan::authorize`] (build + prove + sign + seal). The
 //! plan carries no bearer instrument, so the seam can gate on it before any key-bearing work happens.
+//! `submitTransaction` signs nothing: [`connector_submission`] checks the sealed transaction it
+//! carries, with no key, for the caller to broadcast.
 
 use std::path::Path;
 
@@ -20,6 +22,7 @@ mod build;
 mod make_intent;
 mod make_transfer;
 mod maker_checks;
+mod submit_transaction;
 mod swap_offer;
 
 pub use balance_sealed::{parse_balance_sealed_json, BalanceSealedRequest};
@@ -30,6 +33,7 @@ pub use balance_unsealed::{
 pub use build::{DesiredOutput, TransferKind};
 pub use make_intent::{parse_make_intent_json, DesiredInput, MakeIntentRequest};
 pub use make_transfer::{parse_make_transfer_json, MakeTransferRequest};
+pub use submit_transaction::{parse_submit_transaction_json, SubmitTransactionRequest};
 
 /// A DApp Connector method the wallet can be asked to perform, resolved from a request's `method`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +46,8 @@ pub enum ConnectorMethod {
     MakeIntent,
     /// `balanceSealedTransaction` — the wallet (taker) completes a maker's swap offer.
     BalanceSealed,
+    /// `submitTransaction` — the wallet broadcasts a transaction that is already sealed and balanced.
+    SubmitTransaction,
     /// A method name the wallet parses but does not yet handle (e.g. a sibling still to be built).
     Other(String),
 }
@@ -62,6 +68,7 @@ pub fn parse_connector_method(json: &str) -> Result<ConnectorMethod, std::io::Er
         Some("makeTransfer") => ConnectorMethod::MakeTransfer,
         Some("makeIntent") => ConnectorMethod::MakeIntent,
         Some("balanceSealedTransaction") => ConnectorMethod::BalanceSealed,
+        Some("submitTransaction") => ConnectorMethod::SubmitTransaction,
         Some(other) => ConnectorMethod::Other(other.to_string()),
     })
 }
@@ -232,9 +239,28 @@ pub fn plan_connector_tx(
         ConnectorMethod::BalanceSealed => {
             balance_sealed::plan(chain_id, crypto_provider, json, vault_path)
         }
+        ConnectorMethod::SubmitTransaction => Err(std::io::Error::other(
+            "submitTransaction broadcasts a transaction that is already sealed, so there is nothing \
+             to sign; send it with `ows sign send-tx`",
+        )),
         ConnectorMethod::Other(method) => Err(std::io::Error::other(format!(
             "Midnight DApp Connector method '{method}' is not yet implemented"
         ))),
+    }
+}
+
+/// The `submitTransaction` a connector request asks for, checked, or `None` for every other method.
+/// A submit broadcasts a transaction that is already sealed, so it is answered here, with no key and
+/// no plan, and never by [`plan_connector_tx`], which refuses it.
+pub fn connector_submission(
+    chain_id: &str,
+    json: &str,
+) -> Result<Option<SubmitTransactionRequest>, std::io::Error> {
+    match parse_connector_method(json)? {
+        ConnectorMethod::SubmitTransaction => {
+            parse_submit_transaction_json(chain_id, json).map(Some)
+        }
+        _ => Ok(None),
     }
 }
 
@@ -243,8 +269,9 @@ pub fn plan_connector_tx(
 /// into the request that carries it, so the wallet accepts an offer or a proven transaction directly
 /// without the caller writing the envelope. A fully sealed maker becomes a `balanceSealedTransaction`
 /// (it is completed by merging, not balanced in place); any other hex a `balanceUnsealedTransaction`.
-/// A MIP-0006 offer payload is not a request: it goes, stringified, in a `balanceSealedTransaction`'s
-/// `makerTx`.
+/// A sealed transaction to broadcast as it is never comes bare: it is sent as a `submitTransaction`
+/// request. A MIP-0006 offer payload is not a request: it goes, stringified, in a
+/// `balanceSealedTransaction`'s `makerTx`.
 pub fn normalize_connector_request(raw: &str) -> Result<String, std::io::Error> {
     let trimmed = raw.trim();
     if trimmed.starts_with('{') {
@@ -451,8 +478,44 @@ mod tests {
     #[test]
     fn unhandled_method_is_preserved_by_name() {
         assert_eq!(
-            parse_connector_method(r#"{"method":"submitTransaction"}"#).unwrap(),
-            ConnectorMethod::Other("submitTransaction".to_string())
+            parse_connector_method(r#"{"method":"signData"}"#).unwrap(),
+            ConnectorMethod::Other("signData".to_string())
         );
+    }
+
+    /// A submit is named, never guessed from the bytes: a bare sealed transaction is still a maker to
+    /// complete, and the methods that sign never reach the submit check.
+    #[test]
+    fn only_a_named_submit_transaction_is_a_submission() {
+        let submit = r#"{"method":"submitTransaction","tx":"00"}"#;
+        assert_eq!(method_of(submit), ConnectorMethod::SubmitTransaction);
+        assert!(connector_submission("midnight:preview", submit).is_err());
+
+        let sealed_hex =
+            hex::encode(b"midnight:transaction[v9](signature[v1],proof,pedersen-schnorr[v1]):body");
+        let bare = normalize_connector_request(&sealed_hex).unwrap();
+        assert_eq!(method_of(&bare), ConnectorMethod::BalanceSealed);
+        for request in [
+            bare.as_str(),
+            r#"{"method":"makeTransfer","desiredOutputs":[]}"#,
+        ] {
+            assert!(connector_submission("midnight:preview", request)
+                .unwrap()
+                .is_none());
+        }
+    }
+
+    /// `sign tx` plans what it signs, and a submit has nothing to sign.
+    #[test]
+    fn planning_refuses_a_submit_transaction() {
+        let e = plan_connector_tx(
+            "midnight:preview",
+            &provider(),
+            r#"{"method":"submitTransaction","tx":"00"}"#,
+            None,
+        )
+        .err()
+        .unwrap();
+        assert!(e.to_string().contains("send-tx"), "{e}");
     }
 }

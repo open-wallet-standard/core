@@ -897,7 +897,8 @@ transaction directly, with no JSON envelope. The wallet normalizes it into the e
 bare offer or a fully-sealed maker becomes `balanceSealedTransaction`, any other proven hex a
 `balanceUnsealedTransaction` (`ows sign tx` accepts the same forms). A MIP-0006 offer payload is not
 a request, so it is refused bare: pass its `offerBech32` instead, or the payload itself as
-`makerTx` (below).
+`makerTx` (below). A sealed transaction to broadcast as it is must be sent as a `submitTransaction`
+request: bare, it is a maker offer to complete.
 
 ### The connector methods
 
@@ -934,6 +935,34 @@ The request is routed by its JSON `method` field:
   its own, so a fallible segment can fail while the taker's payment in segment 0 stands. The wallet
   refuses a maker with shielded coins, unshielded inputs or outputs, or an imbalance in a fallible
   segment; a fallible contract call that moves no value is fine.
+- **`submitTransaction`** — broadcast a transaction that is already sealed and balanced, such as the one
+  `ows sign tx` returned, unchanged:
+
+  ```json
+  {"method":"submitTransaction","tx":"<hex of the sealed transaction>"}
+  ```
+
+  The wallet proves, signs and pays for nothing here, so it needs no key: in owner mode no passphrase
+  is asked for and the wallet is never decrypted. It checks the transaction as every sealed submit is
+  checked before it goes to the node: it must be sealed (`proof,pedersen-schnorr`; a proven, unsealed
+  one is refused, since `balanceUnsealedTransaction` balances and seals it), parse whole, carry the
+  chain's network id, and leave no segment short of any token. A maker offer, which a taker still has
+  to complete, is short of what it wants, so it is refused with ledger error 138
+  (`BalanceCheckOverspend`) before the node is contacted. The method has to be named: the wallet never
+  infers a submit from the bytes. Because the bytes go out as they came in, a submit that timed out can
+  be retried with the same transaction, which a re-run `send-tx` of the original request would not do:
+  that plans a new transaction, possibly from other coins.
+
+  Under an API token the submit still passes the token's policies, both passes, without the key ever
+  being decrypted: the first over the request, the second with the `chain_extra` of a request that
+  moves nothing (empty `segment_effects`, `contracts` and `dust_registrations`, `fee.mode` `none`),
+  since whatever the transaction moves was authorized when it was sealed. A token's policies cover only
+  the submits made with that token: a submit needs no key, so a policy cannot stop anyone holding the
+  sealed bytes from relaying them, whether in owner mode, which asks for no credential, or to any
+  public node. A policy can still keep its own token from relaying, by telling a submit apart by the
+  request's `method`, in `transaction.raw_hex`. Its audit records are written as for any other
+  `send-tx`. `ows sign tx`
+  refuses a submit, which has nothing to sign.
 
 Balancing brings every token back to zero in every segment, as the Midnight wallet SDK does: the
 wallet adds inputs for whatever the transaction is short of, and an output to itself for any value no
@@ -957,8 +986,9 @@ registration alike, is listed for the policy pass in `chain_extra.dust_registrat
 [How the wallet pays](#how-the-wallet-pays--chain_extrafee-and-chain_extradust_registrations)).
 
 `ows sign tx` returns the fully sealed, proven Midnight transaction on `SignResult.transaction`
-(`None` for other chains) — the seal-*without*-broadcast capability: the same bytes `send-tx`
-broadcasts, surfaced through a command that never submits.
+(`None` for other chains) — the seal-*without*-broadcast capability: the kind of bytes `send-tx`
+broadcasts, surfaced through a command that never submits. A `submitTransaction` request to
+`send-tx` broadcasts those exact bytes later.
 
 ### What it does
 
@@ -1029,7 +1059,7 @@ since the node may have accepted it: check whether it landed before retrying.
 
 | Variable | Effect |
 |---|---|
-| `OWS_PASSPHRASE` | Owner passphrase **or** api-key token; required to build the provider that signs/proves. |
+| `OWS_PASSPHRASE` | Owner passphrase **or** api-key token; required to build the provider that signs/proves. A `submitTransaction` needs no passphrase; under a token it runs the token's policies. |
 | `OWS_WALLET` | Default for `--wallet`. |
 
 ### The code path
@@ -1040,7 +1070,9 @@ since the node may have accepted it: check whether it landed before retrying.
   `balance_tx/fee_sizing.rs`, `dapp_connector/{mod,balance_unsealed}.rs`, `prover.rs`.
 - Authorization (bearer instruments): `ows-signer/src/chains/midnight.rs`
   (`authorize_shielded`, `authorize_dust`, `sign_proven_intent`, `seal_signed_proven`).
-- Submission: `ows-midnight/src/submit.rs`; node RPC config in `ows-core/src/config.rs`.
+- Submission: `ows-midnight/src/submit.rs`; node RPC config in `ows-core/src/config.rs`. A
+  `submitTransaction` is checked in `dapp_connector/submit_transaction.rs` (`connector_submission`)
+  and relayed by `sign_and_send` / `submit_midnight_transaction` (`ows-lib/src/ops.rs`) with no key.
 
 ## Message signing (`ows sign message`)
 

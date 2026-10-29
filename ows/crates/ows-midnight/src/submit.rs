@@ -23,7 +23,7 @@ const LEDGER_BALANCE_CHECK_OVERSPEND: u16 = 138;
 /// Input references a UTXO absent from ledger state (`InvalidTransaction::Custom(195)`).
 const LEDGER_INPUT_NOT_IN_UTXOS: u16 = 195;
 
-type SealedTx = midnight_ledger::structure::Transaction<
+pub(crate) type SealedTx = midnight_ledger::structure::Transaction<
     midnight_base_crypto::signatures::Signature,
     midnight_ledger::structure::ProofMarker,
     <midnight_ledger::structure::ProofMarker as midnight_ledger::structure::ProofKind<
@@ -82,7 +82,7 @@ fn is_swap_shaped_offer(
 
 /// Detect sealed txs that the ledger will reject on submit (error 138), using the ledger's own
 /// per-segment balance aggregation rather than an inputs-vs-outputs heuristic.
-fn preflight_sealed_tx_submit(tx: &SealedTx) -> Result<(), std::io::Error> {
+pub(crate) fn preflight_sealed_tx_submit(tx: &SealedTx) -> Result<(), std::io::Error> {
     use midnight_ledger::structure::Transaction;
 
     let Transaction::Standard(stx) = tx else {

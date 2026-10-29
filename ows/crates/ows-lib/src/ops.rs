@@ -965,6 +965,7 @@ pub fn sign_and_send(
     // hex-decodes. `prepare_signable_tx` then authorizes it (for Midnight: parse, balance, prove, seal;
     // a no-op passthrough elsewhere) so the bytes handed to broadcast are the wallet's real transaction.
     let tx_bytes = decode_tx_input(&chain_info, tx_hex)?;
+    let submission = midnight_submission(&chain_info, &tx_bytes)?;
 
     // Agent mode: first policy pass + key decryption, then authorize the balancing behind the second
     // (effect-aware) policy pass, then sign + broadcast.
@@ -998,6 +999,19 @@ pub fn sign_and_send(
         let rpc_url = resolved_rpc_url.as_deref();
 
         let policy_tx = signer.make_transaction_context(&tx_bytes, rpc_url)?;
+        if let Some(submission) = submission {
+            crate::key_ops::enforce_submission_policies(
+                &key_file,
+                &wallet_id,
+                &chain_info,
+                policy_tx,
+                submission
+                    .policy_context()
+                    .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?,
+                vault_path,
+            )?;
+            return broadcast_midnight_submission(&chain_info, &submission, rpc_url, vault_path);
+        }
         let (key, key_file) = crate::key_ops::enforce_policies_and_decrypt_key(
             credential,
             key_file,
@@ -1037,9 +1051,56 @@ pub fn sign_and_send(
     }
 
     // Owner mode — full authority, no policy gate.
+    if let Some(submission) = submission {
+        return submit_midnight_transaction(wallet, &chain_info, &submission, rpc_url, vault_path);
+    }
     let key = decrypt_signing_key(wallet, chain_info.chain_type, credential, index, vault_path)?;
     let signable_tx = prepare_signable_tx(&chain_info, tx_bytes, &key, |_| Ok(()), vault_path)?;
     sign_encode_and_broadcast_in(key.expose(), chain, &signable_tx, rpc_url, vault_path)
+}
+
+/// The Midnight `submitTransaction` a send request carries, checked as the node checks a sealed
+/// transaction's balance; `None` for every other request, which is signed before it is sent. A submit
+/// relays a transaction that is already sealed, so it needs no key: [`sign_and_send`] runs a token's
+/// policies over it and never decrypts the wallet.
+pub fn midnight_submission(
+    chain: &ows_core::Chain,
+    tx_bytes: &[u8],
+) -> Result<Option<ows_midnight::SubmitTransactionRequest>, OwsLibError> {
+    if chain.chain_type != ChainType::Midnight {
+        return Ok(None);
+    }
+    let json = std::str::from_utf8(tx_bytes)
+        .map_err(|e| OwsLibError::InvalidInput(format!("Midnight tx input is not UTF-8: {e}")))?;
+    ows_midnight::connector_submission(chain.chain_id, json)
+        .map_err(|e| OwsLibError::InvalidInput(e.to_string()))
+}
+
+/// Broadcast a checked Midnight `submitTransaction` for the owner of `wallet`, with no key: the
+/// transaction is already sealed, so nothing is decrypted or signed. Submitted to the node the
+/// vault's config names unless `rpc_url` names one.
+pub fn submit_midnight_transaction(
+    wallet: &str,
+    chain: &ows_core::Chain,
+    submission: &ows_midnight::SubmitTransactionRequest,
+    rpc_url: Option<&str>,
+    vault_path: Option<&Path>,
+) -> Result<SendResult, OwsLibError> {
+    vault::load_wallet_by_name_or_id(wallet, vault_path)?;
+    broadcast_midnight_submission(chain, submission, rpc_url, vault_path)
+}
+
+fn broadcast_midnight_submission(
+    chain: &ows_core::Chain,
+    submission: &ows_midnight::SubmitTransactionRequest,
+    rpc_url: Option<&str>,
+    vault_path: Option<&Path>,
+) -> Result<SendResult, OwsLibError> {
+    let rpc = resolve_midnight_node_rpc_url(chain.chain_id, rpc_url, vault_path)?;
+    let tx_hash = submission
+        .submit(&rpc)
+        .map_err(|e| OwsLibError::BroadcastFailed(e.to_string()))?;
+    Ok(SendResult { tx_hash })
 }
 
 /// Sign, encode, and broadcast a transaction using an already-resolved private key.
@@ -3158,6 +3219,211 @@ mod tests {
         );
         assert!(err.to_string().contains("plaintext"), "{err}");
         assert!(!err.to_string().contains("KEY"), "{err}");
+    }
+
+    /// A sealed, balanced preview transaction; ows-midnight's `submit_transaction` tests build it.
+    const SEALED_BALANCED_PREVIEW: &str =
+        include_str!("../../ows-midnight/src/dapp_connector/testdata/sealed_balanced_preview.hex");
+
+    fn submit_request(tx_hex: &str) -> String {
+        serde_json::json!({ "method": "submitTransaction", "tx": tx_hex.trim() }).to_string()
+    }
+
+    /// A vault holding a Midnight wallet sealed under a passphrase, whose config points the preview
+    /// node at a loopback listener that counts the connections made to it and speaks no node protocol.
+    fn vault_with_listening_node() -> (
+        tempfile::TempDir,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::io::Read as _;
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        import_wallet_mnemonic(
+            "mn-relay",
+            phrase,
+            Some("owner-pass"),
+            None,
+            Some(dir.path()),
+        )
+        .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let node = format!("ws://{}", listener.local_addr().unwrap());
+        std::fs::write(
+            dir.path().join("config.json"),
+            serde_json::json!({
+                "vault_path": "/ignored",
+                "rpc": { "midnight:preview:node": node },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&connections);
+        std::thread::spawn(move || {
+            for mut conn in listener.incoming().flatten() {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 1024];
+                let _ = conn.read(&mut buf);
+            }
+        });
+        (dir, connections)
+    }
+
+    /// A submitTransaction relays a transaction that is already sealed: the owner path never
+    /// decrypts the wallet, so it reaches the node with no passphrase given, and a transaction the
+    /// node would refuse, such as a maker offer `sign tx` sealed, never reaches it.
+    #[test]
+    fn a_midnight_submit_is_relayed_without_the_key() {
+        use std::sync::atomic::Ordering;
+        let (dir, connections) = vault_with_listening_node();
+        let send = |tx_hex: &str| {
+            sign_and_send(
+                "mn-relay",
+                "midnight:preview",
+                &submit_request(tx_hex),
+                None,
+                None,
+                None,
+                Some(dir.path()),
+            )
+        };
+
+        let wanting = r#"{"method":"makeIntent","desiredInputs":[],"desiredOutputs":[{"kind":"unshielded","type":"night","value":"5","recipient":"mn_addr_preview1dwv2rta0a2skyhrvukaw2q9r2sq6yc4jhj63rf7afxpkrrv6g35q4y8xms"}]}"#;
+        let offer = sign_transaction(
+            "mn-relay",
+            "midnight:preview",
+            wanting,
+            Some("owner-pass"),
+            None,
+            Some(dir.path()),
+        )
+        .unwrap()
+        .transaction
+        .unwrap();
+        let refused = send(&offer).unwrap_err();
+        assert!(
+            matches!(&refused, OwsLibError::InvalidInput(m) if m.contains("imbalanced")),
+            "{refused:?}"
+        );
+        assert_eq!(connections.load(Ordering::SeqCst), 0);
+
+        let sent = send(SEALED_BALANCED_PREVIEW).unwrap_err();
+        assert!(
+            matches!(&sent, OwsLibError::BroadcastFailed(m) if m.contains("Midnight node RPC")),
+            "the submit did not get as far as the node: {sent:?}"
+        );
+        assert!(connections.load(Ordering::SeqCst) >= 1);
+
+        let missing = sign_and_send(
+            "no-such-wallet",
+            "midnight:preview",
+            &submit_request(SEALED_BALANCED_PREVIEW),
+            None,
+            None,
+            None,
+            Some(dir.path()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(missing, OwsLibError::WalletNotFound(_)),
+            "{missing:?}"
+        );
+    }
+
+    /// A token's policies gate a relay as they gate a signing request: an executable runs over the
+    /// request, then over a `chain_extra` in which the wallet moves nothing. A denial keeps the
+    /// transaction from the node; an allow sends it, with the key never decrypted.
+    #[test]
+    fn a_token_relays_a_midnight_submit_only_past_its_policies() {
+        use std::sync::atomic::Ordering;
+        let (dir, connections) = vault_with_listening_node();
+        let seen = dir.path().join("seen.jsonl");
+        let script = dir.path().join("relay.py");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/usr/bin/env python3\n\
+                 import sys, json\n\
+                 ctx = json.load(sys.stdin)\n\
+                 open({seen:?}, 'a').write(json.dumps(ctx) + '\\n')\n\
+                 allow = open({flag:?}).read().strip() == 'allow'\n\
+                 print(json.dumps({{'allow': allow, 'reason': 'relay ' + ('allowed' if allow else 'refused')}}))\n",
+                seen = seen.to_str().unwrap(),
+                flag = dir.path().join("flag").to_str().unwrap(),
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let policy = ows_core::Policy {
+            id: "relay".to_string(),
+            name: "Relay".to_string(),
+            version: 1,
+            created_at: "2026-10-29T00:00:00Z".to_string(),
+            rules: vec![],
+            executable: Some(script.to_str().unwrap().to_string()),
+            config: None,
+            action: ows_core::PolicyAction::Deny,
+        };
+        crate::policy_store::save_policy(&policy, Some(dir.path())).unwrap();
+        let (token, _) = crate::key_ops::create_api_key(
+            "relay-agent",
+            &["mn-relay".to_string()],
+            &["relay".to_string()],
+            "owner-pass",
+            None,
+            Some(dir.path()),
+        )
+        .unwrap();
+        let send = || {
+            sign_and_send(
+                "mn-relay",
+                "midnight:preview",
+                &submit_request(SEALED_BALANCED_PREVIEW),
+                Some(&token),
+                None,
+                None,
+                Some(dir.path()),
+            )
+        };
+
+        std::fs::write(dir.path().join("flag"), "deny").unwrap();
+        let denied = send().unwrap_err();
+        assert!(
+            matches!(&denied, OwsLibError::Core(OwsError::PolicyDenied { reason, .. }) if reason == "relay refused"),
+            "{denied:?}"
+        );
+        assert_eq!(connections.load(Ordering::SeqCst), 0);
+
+        std::fs::write(dir.path().join("flag"), "allow").unwrap();
+        std::fs::remove_file(&seen).unwrap();
+        let sent = send().unwrap_err();
+        assert!(matches!(sent, OwsLibError::BroadcastFailed(_)), "{sent:?}");
+        assert!(connections.load(Ordering::SeqCst) >= 1);
+
+        let passes: Vec<serde_json::Value> = std::fs::read_to_string(&seen)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(passes.len(), 2, "one run per policy pass");
+        for pass in &passes {
+            assert_eq!(pass["request_type"], "sign_transaction");
+        }
+        assert!(passes[0]["transaction"].get("chain_extra").is_none());
+        assert_eq!(
+            passes[1]["transaction"]["chain_extra"],
+            serde_json::json!({
+                "segment_effects": [],
+                "contracts": [],
+                "fee": { "mode": "none", "dust_burned": "0" },
+                "dust_registrations": [],
+            })
+        );
     }
 
     #[test]

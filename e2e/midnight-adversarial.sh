@@ -13,7 +13,8 @@
 # effects come from the request), executable policies that crash, hang, print garbage or are missing
 # (each must deny), malformed and hostile connector requests (misspelled options, unnamed tokens, a
 # plaintext remote indexer), the audit record of a token's balance read, outages (an indexer or proof
-# server that is down, a node or proof server on another host over plaintext), and secret hygiene.
+# server that is down, a node or proof server on another host over plaintext), a submitTransaction
+# relay of a transaction the node would refuse, and secret hygiene.
 #
 # LIVE tier (LIVE=1): the plan-derived flows. They sync a FUNDED wallet against a live indexer and
 # mock-prove, so they use your real vault — set WALLET (and PASS, its owner passphrase, empty by
@@ -331,6 +332,27 @@ outage "a plaintext proof server on another host is refused before any witness l
 endpoints "$DOWN_INDEXER" "http://10.0.0.5:9944/?apikey=NODEKEY" "$DOWN_PROVER"
 outage "a plaintext node on another host is refused before the signed intent is sent" \
   "plaintext Midnight node" "$(receive unshielded night "$OWN_UNSHIELDED")"
+
+# ═══ Relaying a sealed transaction ════════════════════════════════════════════════════════
+say "Submit — submitTransaction relays only a balanced, sealed transaction, with no key"
+
+# A maker offer asking for funds, sealed by sign tx offline: a real sealed transaction that a taker still
+# has to complete, so the node would reject it as overspent.
+endpoints "$DOWN_INDEXER" "$DOWN_NODE" "$DOWN_PROVER"
+OFFER_HEX="$(env -u LWS_PASSPHRASE HOME="$SANDBOX" OWS_PASSPHRASE="$OWNER_PASS" "$OWS" sign tx --chain "$CHAIN" \
+  --wallet guarded --json --tx "$(receive unshielded night "$OWN_UNSHIELDED")" </dev/null 2>/dev/null \
+  | python3 -c 'import sys, json; print(json.load(sys.stdin)["transaction"])' 2>/dev/null)"
+[ -n "$OFFER_HEX" ] || { fail "seal a maker offer with sign tx"; exit 1; }
+submit() { printf '{"method":"submitTransaction","tx":"%s"}' "$1"; }
+
+sandboxed token "$CAP_TOKEN" sign send-tx --chain "$CHAIN" --wallet guarded --json --tx "$(submit "$OFFER_HEX")"
+refused "a token's submitTransaction of a sealed maker offer is refused as imbalanced, before the node" "imbalanced"
+sandboxed unset "" sign send-tx --chain "$CHAIN" --wallet guarded --json --tx "$(submit "$OFFER_HEX")"
+refused "the same submit with no credential at all is refused the same way" "imbalanced"
+sandboxed token "$CAP_TOKEN" sign send-tx --chain "$CHAIN" --wallet guarded --json --tx "$(submit deadbeef)"
+refused "a submitTransaction whose tx is not a sealed transaction is refused" "not a sealed"
+sandboxed token "$CAP_TOKEN" sign tx --chain "$CHAIN" --wallet guarded --json --tx "$(submit "$OFFER_HEX")"
+refused "sign tx refuses a submitTransaction, which has nothing to sign" "send-tx"
 rm -f "$SANDBOX/.ows/config.json"
 
 # ═══ Secret hygiene ═══════════════════════════════════════════════════════════════════════

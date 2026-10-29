@@ -394,13 +394,37 @@ pub fn enforce_policies_and_decrypt_key(
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<(SecretBytes, ApiKeyFile), OwsLibError> {
-    let policies = load_policies_for_key(&key_file, vault_path)?;
+    enforce_policies(
+        &key_file,
+        &wallet.id,
+        chain,
+        request_type,
+        transaction,
+        typed_data,
+        vault_path,
+    )?;
+    let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
+    Ok((key, key_file))
+}
+
+/// Run every policy on the key over the request, as [`enforce_policies_and_decrypt_key`] does before
+/// it releases the key.
+fn enforce_policies(
+    key_file: &ApiKeyFile,
+    wallet_id: &str,
+    chain: &ows_core::Chain,
+    request_type: PolicyRequestType,
+    transaction: Option<ows_core::policy::TransactionContext>,
+    typed_data: Option<ows_core::policy::TypedDataContext>,
+    vault_path: Option<&Path>,
+) -> Result<(), OwsLibError> {
+    let policies = load_policies_for_key(key_file, vault_path)?;
     let now = chrono::Utc::now();
     let date = now.format("%Y-%m-%d").to_string();
 
     let context = ows_core::PolicyContext {
         chain_id: chain.chain_id.to_string(),
-        wallet_id: wallet.id.clone(),
+        wallet_id: wallet_id.to_string(),
         api_key_id: key_file.id.clone(),
         request_type,
         transaction,
@@ -416,9 +440,39 @@ pub fn enforce_policies_and_decrypt_key(
             reason: result.reason.unwrap_or_else(|| "denied".into()),
         }));
     }
+    Ok(())
+}
 
-    let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
-    Ok((key, key_file))
+/// The gate of a Midnight `submitTransaction`, which relays a transaction that is already sealed and
+/// releases no key: the policies on the key decide whether the agent may relay it, over the request
+/// as the first pass sees it and again with the `chain_extra` of a request that moves nothing, as the
+/// connector seam's second pass sees it. A policy written for the two passes of a signing request
+/// therefore judges a relay the same way, and the wallet is never decrypted.
+pub(crate) fn enforce_submission_policies(
+    key_file: &ApiKeyFile,
+    wallet_id: &str,
+    chain: &ows_core::Chain,
+    transaction: ows_core::policy::TransactionContext,
+    chain_extra: serde_json::Value,
+    vault_path: Option<&Path>,
+) -> Result<(), OwsLibError> {
+    enforce_policies(
+        key_file,
+        wallet_id,
+        chain,
+        PolicyRequestType::SignTransaction,
+        Some(transaction.clone()),
+        None,
+        vault_path,
+    )?;
+    enforce_effect_policies(
+        key_file,
+        wallet_id,
+        chain,
+        transaction,
+        chain_extra,
+        vault_path,
+    )
 }
 
 /// The connector seam's second policy pass, as a gate: re-evaluate every policy on the key with the
