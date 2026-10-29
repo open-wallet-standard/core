@@ -188,4 +188,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&vault);
         let _ = std::fs::remove_dir_all(&empty);
     }
+
+    /// The indexer a vault names feeds coin selection and learns the wallet's addresses, so a
+    /// plaintext URL to another host is refused however it is spelled, without showing its API key.
+    #[test]
+    fn a_vault_naming_a_plaintext_remote_indexer_is_refused() {
+        for (name, url) in [
+            (
+                "plaintext-http",
+                "http://indexer.example/api/v4/graphql?project_id=KEY",
+            ),
+            (
+                "plaintext-ws",
+                "ws://10.0.0.5/api/v4/graphql/ws?project_id=KEY",
+            ),
+        ] {
+            let vault = vault_with_config(
+                name,
+                Some(serde_json::json!({
+                    "vault_path": "/ignored",
+                    "rpc": { "midnight:preview": url }
+                })),
+            );
+            let err = resolve_indexer_url("midnight:preview", Some(&vault))
+                .unwrap_err()
+                .to_string();
+            let _ = std::fs::remove_dir_all(&vault);
+            assert!(err.contains("plaintext"), "{url}: {err}");
+            assert!(!err.contains("KEY"), "{url}: {err}");
+        }
+
+        let local = "http://127.0.0.1:8088/api/v4/graphql";
+        let vault = vault_with_config(
+            "plaintext-local",
+            Some(serde_json::json!({
+                "vault_path": "/ignored",
+                "rpc": { "midnight:preview": local }
+            })),
+        );
+        let resolved = resolve_indexer_url("midnight:preview", Some(&vault));
+        let _ = std::fs::remove_dir_all(&vault);
+        assert_eq!(resolved.unwrap(), local);
+    }
 }

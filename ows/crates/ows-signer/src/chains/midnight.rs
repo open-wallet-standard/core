@@ -1982,4 +1982,78 @@ mod tests {
             assert!(matches!(err, SignerError::AddressMismatch), "{foreign}");
         }
     }
+
+    /// Message signatures and the ledger's intent and reward-claim signatures share the unshielded
+    /// key, so the bytes they cover must never coincide. Every ledger signing domain starts
+    /// `midnight:`, and the frame differs from that at its ninth byte whatever the payload, even one
+    /// that is itself ledger signing data.
+    #[test]
+    fn midnight_message_frame_is_disjoint_from_the_ledger_signing_domains() {
+        use midnight_base_crypto::hash::HashOutput;
+        use midnight_coin_structure::coin::Nonce;
+        use midnight_ledger::structure::{ClaimKind, ClaimRewardsTransaction};
+
+        let intent: Intent<MnSignature, ProofPreimageMarker, PedersenRandomness, InMemoryDB> =
+            Intent {
+                guaranteed_unshielded_offer: None,
+                fallible_unshielded_offer: None,
+                actions: vec![].into(),
+                dust_actions: None,
+                ttl: Timestamp::from_secs(0),
+                binding_commitment: Default::default(),
+            };
+        let intent_data = intent.erase_proofs().erase_signatures().data_to_sign(1);
+        assert!(intent_data.starts_with(b"midnight:hash-intent:"));
+
+        let owner = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_KEY_HEX).unwrap())
+            .unwrap()
+            .verifying_key();
+        let claim = ClaimRewardsTransaction::<(), InMemoryDB> {
+            network_id: "mainnet".into(),
+            value: 1,
+            owner,
+            nonce: Nonce(HashOutput([0; 32])),
+            signature: (),
+            kind: ClaimKind::Reward,
+        };
+        let claim_data = claim.data_to_sign();
+        assert!(claim_data.starts_with(b"midnight:sig-claim_rewards_transaction:"));
+
+        for payload in [
+            &intent_data[..],
+            &claim_data[..],
+            b"midnight:contract-update:",
+            b"",
+        ] {
+            let framed = signed_message_bytes(payload);
+            assert!(framed.starts_with(SIGNED_MESSAGE_PREFIX.as_bytes()));
+            assert!(!framed.starts_with(b"midnight:"));
+        }
+    }
+
+    /// The frame names no network, so a message signature speaks for the wallet on every Midnight
+    /// network: each network's signer signs with the same key, and its signature verifies under it.
+    #[test]
+    fn midnight_message_signatures_do_not_depend_on_the_network() {
+        use k256::schnorr::signature::Verifier as _;
+
+        let blob = signing_key_blob();
+        let message = b"hello midnight";
+        let signed: Vec<SignOutput> = [
+            MidnightSigner::mainnet(),
+            MidnightSigner::preview(),
+            MidnightSigner::from_chain_id("midnight:feature-x"),
+        ]
+        .iter()
+        .map(|signer| signer.sign_message(&blob, message, None).unwrap())
+        .collect();
+
+        let public_key = signed[0].public_key.clone().unwrap();
+        let vk = k256::schnorr::VerifyingKey::from_bytes(&public_key).unwrap();
+        for out in &signed {
+            assert_eq!(out.public_key.as_deref(), Some(public_key.as_slice()));
+            let sig = k256::schnorr::Signature::try_from(out.signature.as_slice()).unwrap();
+            vk.verify(&signed_message_bytes(message), &sig).unwrap();
+        }
+    }
 }
