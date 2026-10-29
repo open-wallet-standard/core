@@ -728,6 +728,13 @@ imbalance, funds the merged tx's DUST fee, seals its half, and `Transaction::mer
 - The maker must both give and want a token, in whatever form it arrives (MIP-0006): a give-only
   or want-only transaction is refused, as is one already balanced. So is a maker built for another
   network, before the taker's half is proven.
+- The taker pays the merged transaction's fee as the wallet pays its own (see
+  [Fees are always dust](#fees-are-always-dust)): with a generationless registration when it holds an
+  unregistered NIGHT coin that has generated enough DUST, so a wallet freshly funded with NIGHT can
+  complete a swap, and with a spend of DUST it holds otherwise. The registration draws only on NIGHT
+  its own intent spends, so the taker's half also spends that coin and returns it whole. A merge that
+  swaps unshielded tokens alone is small enough that the node's time-to-dismiss floor rejects it with
+  either fee section; a swap with shielded coins on either side clears it.
 
 #### `balanceUnsealedTransaction`
 
@@ -795,9 +802,11 @@ on the method:
   request-derived like `makeIntent`, **plus the DUST fee the merge burns** (when `payFees` on a
   live-DUST chain). The fee covers the whole merged tx and the maker never pays, so it is sized
   against a **mock-proven taker complement** — fixed-size proofs give the exact fee with no real
-  proving — and folded in as a dust outflow, so a `sum(|diff|)` cap sees the burn. The taker's
-  half (its coins) and that fee are decided before the gate, and `authorize` proves exactly
-  them, so nothing is re-synced or re-priced in between.
+  proving — and a DUST spend is folded in as a dust outflow, so a `sum(|diff|)` cap sees the burn.
+  A registration of the taker's NIGHT burns none of its held DUST, and the NIGHT coin it draws on
+  returns whole, so neither adds an effect; `chain_extra.fee` shows it. The taker's half (its
+  coins) and that fee are decided before the gate, and `authorize` proves exactly them, so nothing
+  is re-synced or re-priced in between.
 
 Shielded value a dapp routes back to the wallet is netted in as well: the base offers'
 outputs are trial-decrypted with the shielded viewing key and each recognized receipt is
@@ -1283,8 +1292,9 @@ that NIGHT generates DUST. Two sibling keys show both:
   the NIGHT it registers; whatever the fee leaves is credited to the wallet's DUST address. To cap
   what fees cost in DUST whichever way they are paid, cap `fee.dust_burned`.
 - **`dust_registrations`** — every dust registration the wallet signs, by intent: its own fee
-  registration (`carried: false`), which rides its balancing intent, and any the dapp's transaction
-  carries into `balanceUnsealedTransaction` (`carried: true`). Each points the wallet's NIGHT key
+  registration (`carried: false`), which rides its balancing intent (in a `balanceSealedTransaction`,
+  the taker's complement intent), and any the dapp's transaction carries into
+  `balanceUnsealedTransaction` (`carried: true`). Each points the wallet's NIGHT key
   (`night_address`) at a DUST address (`dust_address`); `own` says whether that address is the
   wallet's, and is always `true`, since the wallet refuses to sign a registration to any other, or a
   deregistration. Dust actions apply before any segment executes, whichever intent carries them, so

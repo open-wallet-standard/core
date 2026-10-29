@@ -44,7 +44,7 @@ use std::path::Path;
 use midnight_base_crypto::signatures::{Signature as MnSig, VerifyingKey};
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::coin::{
-    Info as CoinInfo, QualifiedInfo, ShieldedTokenType, UserAddress,
+    Info as CoinInfo, QualifiedInfo, ShieldedTokenType, UserAddress, NIGHT,
 };
 use midnight_ledger::structure::{
     Intent, ProofMarker, ProofPreimageMarker, StandardTransaction, Transaction, UnshieldedOffer,
@@ -86,6 +86,15 @@ const DEFAULT_INTENT_SEGMENT: u16 = 1;
 /// the other. The intent itself still keys at a fallible segment (`intentId`); only the coins move.
 /// The merge path reuses this for the taker complement's own coins, which settle guaranteed the same way.
 pub(super) const GUARANTEED_SEGMENT: u16 = 0;
+
+/// The maker's unshielded offer, if it has one, and the coins it spends.
+type OfferAndCoins = (
+    Option<UnshieldedOffer<MnSig, InMemoryDB>>,
+    Vec<crate::UnshieldedUtxo>,
+);
+
+/// The inputs selected for the maker's requested rows, their change, and the coins they spend.
+type SelectedInputs = (Vec<UtxoSpend>, Vec<UtxoOutput>, Vec<crate::UnshieldedUtxo>);
 
 /// One input the maker contributes: a `value` of `token_type` in `kind`'s domain (no recipient — the
 /// maker spends its own coins).
@@ -156,7 +165,7 @@ fn plan_from_pool(
         ttl: Some(ttl),
         ..request
     };
-    let offer = plan_offer_from_pool(chain_id, crypto_provider, &request, pool, vault_path)?;
+    let offer = plan_offer_from_pool(chain_id, crypto_provider, &request, pool, None, vault_path)?;
     Ok(IntentPlan {
         request,
         offer,
@@ -380,25 +389,15 @@ pub(super) fn authorize(
 }
 
 /// A `makeIntent` offer decided but not yet proven: the frame's preimage (the unshielded inputs it
-/// picked, with change, and its outputs) and, when the offer spends shielded coins, the coins picked to
-/// fund them. [`mock_proven`](Self::mock_proven) stands in for it before the policy seam, and
+/// picked, with change, and its outputs), the unshielded coins it spends as the indexer reported them,
+/// and, when the offer spends shielded coins, the coins picked to fund them.
+/// [`mock_proven`](Self::mock_proven) stands in for it before the policy seam, and
 /// [`realize`](Self::realize) proves exactly this offer after it, so whatever was sized against the mock
 /// still holds.
 pub(super) struct OfferPlan {
     frame: PreimageTx,
+    spent: Vec<crate::UnshieldedUtxo>,
     funding: Option<crate::balance_tx::ShieldedFundingPlan>,
-}
-
-/// Decide a maker offer: pick the unshielded coins and build the frame, and pick the shielded coins its
-/// shielded inputs spend. Inert: nothing is proven or signed.
-pub(super) fn plan_offer(
-    chain_id: &str,
-    crypto_provider: &MidnightCryptoProvider,
-    req: &MakeIntentRequest,
-    vault_path: Option<&Path>,
-) -> Result<OfferPlan, std::io::Error> {
-    let pool = unshielded_pool(chain_id, crypto_provider, &req.desired_inputs, vault_path)?;
-    plan_offer_from_pool(chain_id, crypto_provider, req, &pool, vault_path)
 }
 
 /// The wallet's unshielded coins, fetched from the indexer only when the offer spends any.
@@ -411,6 +410,15 @@ fn unshielded_pool(
     if !inputs.iter().any(|d| d.kind == TransferKind::Unshielded) {
         return Ok(Vec::new());
     }
+    wallet_unshielded_pool(chain_id, crypto_provider, vault_path)
+}
+
+/// The wallet's unshielded coins, as the indexer of the caller's vault reports them.
+pub(super) fn wallet_unshielded_pool(
+    chain_id: &str,
+    crypto_provider: &MidnightCryptoProvider,
+    vault_path: Option<&Path>,
+) -> Result<Vec<crate::UnshieldedUtxo>, std::io::Error> {
     let sender_addr = crypto_provider
         .addresses(&MidnightNetwork::from_chain_id(chain_id))
         .map_err(|e| err(e.to_string()))?
@@ -425,37 +433,25 @@ fn unshielded_pool(
     ))
 }
 
-/// [`plan_offer`] over an unshielded coin set already fetched.
-fn plan_offer_from_pool(
+/// Decide a maker offer from the wallet's unshielded coins `pool`: pick the coins its unshielded
+/// inputs spend and build the frame, and pick the shielded coins its shielded inputs spend. `reserve`
+/// is a NIGHT coin to spend as well, balance-neutrally (its whole value returns to the maker), so that a
+/// fee registration riding the offer's intent can draw on the DUST it has generated. Inert: nothing is
+/// proven or signed.
+pub(super) fn plan_offer_from_pool(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     req: &MakeIntentRequest,
     pool: &[crate::UnshieldedUtxo],
+    reserve: Option<&crate::UnshieldedUtxo>,
     vault_path: Option<&Path>,
 ) -> Result<OfferPlan, std::io::Error> {
-    let signer = MidnightSigner::from_chain_id(chain_id);
-
-    let (unshielded_in, shielded_in): (Vec<_>, Vec<_>) = req
+    let (frame, spent) = offer_frame(chain_id, crypto_provider, req, pool, reserve)?;
+    let shielded_in: Vec<&DesiredInput> = req
         .desired_inputs
         .iter()
-        .partition(|d| d.kind == TransferKind::Unshielded);
-    let (unshielded_out, shielded_out): (Vec<_>, Vec<_>) = req
-        .desired_outputs
-        .iter()
-        .partition(|d| d.kind == TransferKind::Unshielded);
-
-    let frame = build_make_intent_frame(
-        chain_id,
-        &signer,
-        crypto_provider,
-        req.intent_segment,
-        pool,
-        &unshielded_in,
-        &unshielded_out,
-        &shielded_out,
-        !shielded_in.is_empty(),
-        req.ttl,
-    )?;
+        .filter(|d| d.kind == TransferKind::Shielded)
+        .collect();
     let funding = if shielded_in.is_empty() {
         None
     } else {
@@ -467,10 +463,69 @@ fn plan_offer_from_pool(
             vault_path,
         )?)
     };
-    Ok(OfferPlan { frame, funding })
+    Ok(OfferPlan {
+        frame,
+        spent,
+        funding,
+    })
+}
+
+/// The frame of a maker offer over the wallet's unshielded coins `pool`, and the coins it spends.
+fn offer_frame(
+    chain_id: &str,
+    crypto_provider: &MidnightCryptoProvider,
+    req: &MakeIntentRequest,
+    pool: &[crate::UnshieldedUtxo],
+    reserve: Option<&crate::UnshieldedUtxo>,
+) -> Result<(PreimageTx, Vec<crate::UnshieldedUtxo>), std::io::Error> {
+    let signer = MidnightSigner::from_chain_id(chain_id);
+    let (unshielded_in, shielded_in): (Vec<_>, Vec<_>) = req
+        .desired_inputs
+        .iter()
+        .partition(|d| d.kind == TransferKind::Unshielded);
+    let (unshielded_out, shielded_out): (Vec<_>, Vec<_>) = req
+        .desired_outputs
+        .iter()
+        .partition(|d| d.kind == TransferKind::Unshielded);
+    build_make_intent_frame(
+        chain_id,
+        &signer,
+        crypto_provider,
+        req.intent_segment,
+        pool,
+        reserve,
+        &unshielded_in,
+        &unshielded_out,
+        &shielded_out,
+        !shielded_in.is_empty(),
+        req.ttl,
+    )
 }
 
 impl OfferPlan {
+    /// The same offer without a reserved coin: the frame built again from `pool` with nothing reserved,
+    /// and the shielded coins kept as they were picked.
+    pub(super) fn without_reserve(
+        self,
+        chain_id: &str,
+        crypto_provider: &MidnightCryptoProvider,
+        req: &MakeIntentRequest,
+        pool: &[crate::UnshieldedUtxo],
+    ) -> Result<OfferPlan, std::io::Error> {
+        let (frame, spent) = offer_frame(chain_id, crypto_provider, req, pool, None)?;
+        Ok(OfferPlan {
+            frame,
+            spent,
+            funding: self.funding,
+        })
+    }
+
+    /// The unshielded coins the offer spends, with the block time and DUST registration the indexer
+    /// reported for each.
+    pub(super) fn spent(&self) -> &[crate::UnshieldedUtxo] {
+        &self.spent
+    }
+
     /// The offer **mock-proven**: fixed-size, non-verifying proofs that serialize to the exact length of
     /// the real ones, so a transaction sized against it gets the real fee. No real proving happens, so it
     /// is safe **before** the policy seam; the sealed merge sizes its DUST fee against it.
@@ -520,10 +575,11 @@ impl OfferPlan {
 }
 
 /// Construct the `proof-preimage` maker frame: the maker's unshielded inputs (with change back to the
-/// maker) + unshielded/shielded outputs, deliberately imbalanced. The intent keys at `segment`
-/// (`intentId`), but the shielded outputs ride the guaranteed section (see [`GUARANTEED_SEGMENT`]).
-/// Shielded *inputs* are authorized separately, after proving, so `has_shielded_in` keeps the empty-offer
-/// guard from firing when the maker's only contribution is shielded inputs.
+/// maker) + unshielded/shielded outputs, deliberately imbalanced, and the unshielded coins it spends.
+/// The intent keys at `segment` (`intentId`), but the shielded outputs ride the guaranteed section (see
+/// [`GUARANTEED_SEGMENT`]). Shielded *inputs* are authorized separately, after proving, so
+/// `has_shielded_in` keeps the empty-offer guard from firing when the maker's only contribution is
+/// shielded inputs.
 #[allow(clippy::too_many_arguments)]
 fn build_make_intent_frame(
     chain_id: &str,
@@ -531,12 +587,13 @@ fn build_make_intent_frame(
     crypto_provider: &MidnightCryptoProvider,
     segment: u16,
     pool: &[crate::UnshieldedUtxo],
+    reserve: Option<&crate::UnshieldedUtxo>,
     unshielded_in: &[&DesiredInput],
     unshielded_out: &[&DesiredOutput],
     shielded_out: &[&DesiredOutput],
     has_shielded_in: bool,
     ttl: Option<Timestamp>,
-) -> Result<PreimageTx, std::io::Error> {
+) -> Result<(PreimageTx, Vec<crate::UnshieldedUtxo>), std::io::Error> {
     let sender_vk = crypto_provider
         .unshielded_verifying_key()
         .map_err(|e| err(e.to_string()))?;
@@ -544,11 +601,12 @@ fn build_make_intent_frame(
         .addresses(&MidnightNetwork::from_chain_id(chain_id))
         .map_err(|e| err(e.to_string()))?
         .unshielded;
-    let unshielded_offer = build_unshielded_offer(
+    let (unshielded_offer, spent) = build_unshielded_offer(
         signer,
         &sender_addr,
         &sender_vk,
         pool,
+        reserve,
         unshielded_in,
         unshielded_out,
     )?;
@@ -579,7 +637,7 @@ fn build_make_intent_frame(
         binding_randomness: Default::default(),
     };
     stx.recompute_binding_randomness();
-    Ok(Transaction::Standard(stx))
+    Ok((Transaction::Standard(stx), spent))
 }
 
 /// Sync the wallet's shielded coins and select whole coins covering each declared shielded input,
@@ -679,29 +737,49 @@ fn place_zswap_offer(
 }
 
 /// Build the maker's unshielded offer: select UTXOs from the wallet's `pool` to cover each input, spend
-/// them (returning any whole-coin excess as change back to the maker), and append the desired unshielded
-/// outputs.
+/// them (returning any whole-coin excess as change back to the maker), spend the `reserve` coin unless a
+/// row already does (all of it returning as change), and append the desired unshielded outputs. Returns
+/// the offer and the coins it spends.
 fn build_unshielded_offer(
     signer: &MidnightSigner,
     sender_addr: &str,
     sender_vk: &VerifyingKey,
     pool: &[crate::UnshieldedUtxo],
+    reserve: Option<&crate::UnshieldedUtxo>,
     inputs_requested: &[&DesiredInput],
     outputs_requested: &[&DesiredOutput],
-) -> Result<Option<UnshieldedOffer<MnSig, InMemoryDB>>, std::io::Error> {
-    if inputs_requested.is_empty() && outputs_requested.is_empty() {
-        return Ok(None);
+) -> Result<OfferAndCoins, std::io::Error> {
+    if inputs_requested.is_empty() && outputs_requested.is_empty() && reserve.is_none() {
+        return Ok((None, Vec::new()));
     }
 
     let mut inputs: Vec<UtxoSpend> = Vec::new();
     let mut outputs: Vec<UtxoOutput> = Vec::new();
+    let mut spent: Vec<crate::UnshieldedUtxo> = Vec::new();
 
-    if !inputs_requested.is_empty() {
+    if !inputs_requested.is_empty() || reserve.is_some() {
         let maker = decode_unshielded_recipient(signer, sender_addr)?;
-        let (mut selected_inputs, mut change_outputs) =
+        let (mut selected_inputs, mut change_outputs, selected) =
             select_unshielded_inputs(pool, inputs_requested, sender_addr, sender_vk, maker)?;
         inputs.append(&mut selected_inputs);
         outputs.append(&mut change_outputs);
+        spent = selected;
+        if let Some(r) = reserve.filter(|r| !spent.contains(r)) {
+            inputs.push(UtxoSpend {
+                value: r.value,
+                owner: crate::balance_tx::resolve_owner_vk(&r.owner, sender_addr, sender_vk)?,
+                type_: NIGHT,
+                intent_hash: crate::balance_tx::parse_intent_hash_hex(&r.intent_hash)?,
+                output_no: u32::try_from(r.output_index)
+                    .map_err(|_| err("output index out of range"))?,
+            });
+            outputs.push(UtxoOutput {
+                value: r.value,
+                owner: maker,
+                type_: NIGHT,
+            });
+            spent.push(r.clone());
+        }
     }
 
     for d in outputs_requested {
@@ -717,15 +795,16 @@ fn build_unshielded_offer(
 
     inputs.sort();
     outputs.sort();
-    Ok(Some(UnshieldedOffer {
+    let offer = UnshieldedOffer {
         inputs: inputs.into(),
         outputs: outputs.into(),
         signatures: vec![].into(),
-    }))
+    };
+    Ok((Some(offer), spent))
 }
 
 /// Select the maker's unshielded input coins for each requested input from `utxos`, plus the per-row
-/// whole-coin change back to `maker`.
+/// whole-coin change back to `maker`, and the coins selected.
 ///
 /// A `claimed` set threads across rows so a coin picked for one row is excluded from the next — without
 /// it, two rows of the same token both select the same largest coin and the offer double-spends it (the
@@ -737,9 +816,10 @@ fn select_unshielded_inputs(
     sender_addr: &str,
     sender_vk: &VerifyingKey,
     maker: UserAddress,
-) -> Result<(Vec<UtxoSpend>, Vec<UtxoOutput>), std::io::Error> {
+) -> Result<SelectedInputs, std::io::Error> {
     let mut inputs: Vec<UtxoSpend> = Vec::new();
     let mut change: Vec<UtxoOutput> = Vec::new();
+    let mut spent: Vec<crate::UnshieldedUtxo> = Vec::new();
     let mut claimed: Vec<(String, i64)> = Vec::new();
     for d in inputs_requested {
         if d.value == 0 {
@@ -761,6 +841,7 @@ fn select_unshielded_inputs(
         )?;
         let mut total = 0u128;
         for u in &selected {
+            spent.push(u.clone());
             claimed.push((u.intent_hash.clone(), u.output_index));
             total = total.saturating_add(u.value);
             inputs.push(UtxoSpend {
@@ -781,7 +862,7 @@ fn select_unshielded_inputs(
             });
         }
     }
-    Ok((inputs, change))
+    Ok((inputs, change, spent))
 }
 
 /// Build a Zswap offer of shielded outputs to their recipients, bound to `segment`.
@@ -854,7 +935,7 @@ mod tests {
         let pool = vec![night_utxo(100, 1, 0), night_utxo(100, 2, 1)];
         let d1 = night_input(60);
         let d2 = night_input(60);
-        let (inputs, _change) =
+        let (inputs, _change, _spent) =
             select_unshielded_inputs(&pool, &[&d1, &d2], "sender", &vk, vk.clone().into()).unwrap();
         assert_eq!(inputs.len(), 2, "one coin selected per row");
         assert_ne!(

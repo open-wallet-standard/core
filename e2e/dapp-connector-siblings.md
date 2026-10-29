@@ -98,8 +98,9 @@ $OWS sign tx --chain $CHAIN --wallet <taker-wallet> --json --tx '{
 
 > **Note:** `sign tx`'s makeIntent output is *fully sealed*, so the step-2→step-3 chain completes by
 > MERGING (above). A proven, unsealed (`proof,embedded-fr`) maker is refused: `balanceSealedTransaction`
-> takes a sealed offer, and a proven transaction is `balanceUnsealedTransaction`'s input (§4). The taker
-> needs **dust** for fees; a freshly-funded wallet with only NIGHT and no dust cannot be the taker.
+> takes a sealed offer, and a proven transaction is `balanceUnsealedTransaction`'s input (§4). A taker
+> with no dust pays the fee by registering an unregistered NIGHT coin that has generated enough DUST, as
+> `makeTransfer` does, so a freshly-funded wallet can be the taker once its NIGHT has aged.
 
 > **Segment placement.** The maker offer must keep all its value in the guaranteed section (segment 0),
 > as MIP-0006's swap offers do. A maker with shielded coins, unshielded inputs or outputs, or an

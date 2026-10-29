@@ -177,8 +177,7 @@ impl ConnectorPlan {
         let addresses = crypto_provider
             .addresses(&MidnightNetwork::from_chain_id(chain_id))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
-        // A maker offer is fee-free (the taker pays), and a merge's fee is always a DUST spend, so
-        // only the plans the balancer builds can register NIGHT.
+        // A maker offer is fee-free (the taker pays), so it registers no NIGHT.
         let (fee, dust_registrations) = match self {
             ConnectorPlan::BalanceUnsealed(plan) => {
                 (plan.fee_context(), plan.dust_registrations(&addresses))
@@ -188,7 +187,9 @@ impl ConnectorPlan {
                 transfer.balanced().dust_registrations(&addresses),
             ),
             ConnectorPlan::MakeIntent(_) => (FeeContext::none(), Vec::new()),
-            ConnectorPlan::BalanceSealedMerge(merge) => (merge.fee_context(), Vec::new()),
+            ConnectorPlan::BalanceSealedMerge(merge) => {
+                (merge.fee_context(), merge.dust_registrations(&addresses))
+            }
         };
         let offer = match self {
             ConnectorPlan::MakeIntent(plan) => Some(plan.offer_context()),

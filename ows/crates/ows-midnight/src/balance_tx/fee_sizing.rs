@@ -295,10 +295,16 @@ impl DustFeePlan {
 /// but under-covers the fee is correctly rejected. `fees(_, true)` enforces the guaranteed-compute
 /// time-to-dismiss bound; a tx still too small to satisfy it is reported as not-covered so the caller
 /// keeps growing the section (the proof-bearing spend adds the bytes that lift the bound).
-fn dust_section_covers_fee(
-    tx: &TxProven,
+fn dust_section_covers_fee<B>(
+    tx: &Transaction<MnSig, ProofMarker, B, InMemoryDB>,
     params: &LedgerParameters,
-) -> Result<bool, std::io::Error> {
+) -> Result<bool, std::io::Error>
+where
+    B: midnight_storage::Storable<InMemoryDB>
+        + midnight_ledger::structure::PedersenDowngradeable<InMemoryDB>
+        + midnight_serialize::Serializable,
+    Transaction<MnSig, ProofMarker, B, InMemoryDB>: midnight_serialize::Serializable,
+{
     use midnight_ledger::error::FeeCalculationError;
     let fee = match tx.fees(params, true) {
         Ok(f) => f,
@@ -533,6 +539,100 @@ pub(crate) struct MergeDustFee {
     pub(crate) ledger_params: LedgerParameters,
 }
 
+/// The taker's fee for a sealed-offer merge paid by a generationless registration: the registration
+/// sized against the merged transaction, the TTL the taker's intent takes with it, and the binding
+/// commitment of the intent it was sized for. It carries no proof, so it is final once sized; the signer
+/// signs it with the rest of the taker's half.
+pub(crate) struct MergeRegistrationFee {
+    pub(crate) dust_actions: DustActions<MnSig, ProofMarker, InMemoryDB>,
+    pub(crate) intent_ttl: Timestamp,
+    pub(crate) binding_commitment: PedersenRandomness,
+}
+
+impl MergeRegistrationFee {
+    /// The most DUST the fee can take: the registration's `allow_fee_payment`.
+    pub(crate) fn allow_fee_payment(&self) -> u128 {
+        self.dust_actions
+            .registrations
+            .iter_deref()
+            .fold(0u128, |sum, reg| sum.saturating_add(reg.allow_fee_payment))
+    }
+}
+
+/// Size a generationless fee registration for a sealed-offer MERGE, the merge's counterpart of
+/// [`size_registration_fee`] for the wallet's own transactions. The ledger lets the registration pay
+/// the fee from the DUST the unregistered NIGHT among its intent's guaranteed inputs has generated, so
+/// the taker's half must spend that NIGHT itself: `selected` is the NIGHT `taker_base` spends, a coin
+/// reserved for this included. It needs no DUST, no dust sync and no proof, so a wallet whose NIGHT
+/// was never registered can pay. The registration is sized against the merged transaction, like the
+/// spend in [`size_merge_dust_fee`].
+///
+/// Returns `None` when that NIGHT has not generated enough DUST to cover the fee, or when the merged
+/// transaction cannot meet the time-to-dismiss bound this way, so the caller falls back to a DUST spend.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn size_merge_registration_fee(
+    maker: &MergedTx,
+    taker_base: &StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
+    dust_seg: u16,
+    selected: &[UnshieldedUtxo],
+    dust_pk: DustPublicKey,
+    night_vk: VerifyingKey,
+    dust_ctime: Timestamp,
+    ledger_params: &LedgerParameters,
+) -> Result<Option<MergeRegistrationFee>, std::io::Error> {
+    const MAX_FEE_ITERS: usize = 8;
+    let binding_commitment = taker_base
+        .intents
+        .get(&dust_seg)
+        .ok_or_else(|| err("taker half is missing the complement intent segment"))?
+        .binding_commitment;
+    let intent_ttl = chain_aligned_intent_ttl(dust_ctime);
+
+    // First estimate: the merged fee with a zero-allowance registration in place.
+    let first = registration_dust_actions(dust_pk, night_vk.clone(), 0, dust_ctime);
+    let merged0 = merged_with_taker_dust(maker, taker_base, dust_seg, Some(first), intent_ttl)?;
+    let mut fee_target = with_drift_margin(
+        merged0
+            .fees_with_margin(ledger_params, FEE_BLOCKS_MARGIN)
+            .map_err(|e| err(format!("merged DUST fee estimate failed: {e:?}")))?,
+        merged0
+            .fees(ledger_params, false)
+            .map_err(|e| err(format!("merged DUST fee estimate failed: {e:?}")))?,
+    );
+
+    for _ in 0..MAX_FEE_ITERS {
+        let Some(reg) = try_registration_dust_actions(
+            selected,
+            fee_target,
+            dust_pk,
+            night_vk.clone(),
+            dust_ctime,
+        )?
+        else {
+            return Ok(None);
+        };
+        let merged =
+            merged_with_taker_dust(maker, taker_base, dust_seg, Some(reg.clone()), intent_ttl)?;
+        if dust_section_covers_fee(&merged, ledger_params)? {
+            return Ok(Some(MergeRegistrationFee {
+                dust_actions: reg,
+                intent_ttl,
+                binding_commitment,
+            }));
+        }
+        fee_target = with_drift_margin(
+            merged
+                .fees_with_margin(ledger_params, FEE_BLOCKS_MARGIN)
+                .map_err(|e| err(format!("merged DUST fee re-estimate failed: {e:?}")))?,
+            merged
+                .fees(ledger_params, false)
+                .map_err(|e| err(format!("merged DUST fee re-estimate failed: {e:?}")))?,
+        )
+        .max(fee_target.saturating_add(1));
+    }
+    Ok(None)
+}
+
 /// Size the taker's DUST fee for a sealed-offer MERGE. Unlike [`size_spend_fee`] (which sizes against the
 /// wallet's own balancing tx), the fee here must cover the **merged** transaction — the maker's sealed
 /// bytes plus the taker's sealed half — because the fee covers the whole tx and the maker contributes
@@ -542,9 +642,8 @@ pub(crate) struct MergeDustFee {
 /// synced dust state — the real, submittable spend is proved post-seam by
 /// [`MidnightCryptoProvider::authorize_dust`].
 ///
-/// Scope: the DUST-spend path only (the taker pays with its own generated dust). The generationless
-/// registration the balancer prefers needs the tx to spend the wallet's unregistered NIGHT, which the
-/// merge's taker complement need not do, so that path is out of scope here.
+/// The proof-bearing spend of the taker's generated dust: the fallback when
+/// [`size_merge_registration_fee`] finds no unregistered NIGHT that can cover the fee.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn size_merge_dust_fee(
     maker: &MergedTx,

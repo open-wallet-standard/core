@@ -54,7 +54,10 @@ use crate::policy_context::{DustRegistrationContext, FeeContext};
 use crate::UnshieldedUtxo;
 
 mod fee_sizing;
-pub(crate) use fee_sizing::{size_merge_dust_fee, splice_mock_shielded_for_sizing, MergeDustFee};
+pub(crate) use fee_sizing::{
+    size_merge_dust_fee, size_merge_registration_fee, splice_mock_shielded_for_sizing,
+    MergeDustFee, MergeRegistrationFee,
+};
 use fee_sizing::{DustFeeContext, DustFeePlan, RegistrationFee};
 
 type TxProven = Transaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>;
@@ -1409,6 +1412,21 @@ fn reserve_for_fee_registration(
             })
             .collect();
     fee_sizing::pick_best_unregistered_for_dust(&candidates, tip)
+}
+
+/// The NIGHT coin to reserve for the fee registration of a sealed-offer merge: the wallet's best
+/// unregistered coin, among its own coins only. Unlike [`reserve_for_fee_registration`], nothing has to
+/// be left for a fallible payment: every leg of the taker's half is guaranteed, so the coin may be one
+/// the half spends anyway, and is otherwise spent beside it and returned whole.
+pub(crate) fn reserve_for_merge_fee_registration(
+    pool: &[UnshieldedUtxo],
+    sender_vk: &VerifyingKey,
+    sender_addr: &str,
+    tip: Timestamp,
+) -> Result<Option<UnshieldedUtxo>, std::io::Error> {
+    let night_wire = crate::parse_token_type(Some("night"))?.to_wire_token_type();
+    let own = sender_utxos_sorted(pool, sender_addr, sender_vk, &night_wire)?;
+    fee_sizing::pick_best_unregistered_for_dust(&own, tip)
 }
 
 /// Build a [`Prover`](crate::Prover) for authorize / prove paths.
@@ -3501,6 +3519,26 @@ mod tests {
         let pool = vec![night_coin(&other_vk_hex(), 5_000, 1)];
         let reserve =
             reserve_for_fee_registration(&pool, &wallet_vk(), "sender", &[], &[], &[], RESERVE_TIP)
+                .unwrap();
+        assert_eq!(reserve, None);
+    }
+
+    /// A merge's taker half has no fallible payment to leave a coin for, so its fee reserve is the
+    /// wallet's best unregistered NIGHT coin, never a registered one or one another key owns.
+    #[test]
+    fn the_merge_fee_reserve_is_the_wallets_best_unregistered_coin() {
+        let small = night_coin(&sender_vk_hex(), 10, 1);
+        let best = night_coin(&sender_vk_hex(), 1_000, 2);
+        let mut registered = night_coin(&sender_vk_hex(), 5_000, 3);
+        registered.registered_for_dust_generation = true;
+        let foreign = night_coin(&other_vk_hex(), 9_000, 4);
+        let pool = vec![small, best.clone(), registered.clone(), foreign];
+        let reserve =
+            reserve_for_merge_fee_registration(&pool, &wallet_vk(), "sender", RESERVE_TIP).unwrap();
+        assert_eq!(reserve, Some(best));
+
+        let reserve =
+            reserve_for_merge_fee_registration(&[registered], &wallet_vk(), "sender", RESERVE_TIP)
                 .unwrap();
         assert_eq!(reserve, None);
     }

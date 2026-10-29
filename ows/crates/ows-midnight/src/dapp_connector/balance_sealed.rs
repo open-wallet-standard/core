@@ -345,7 +345,34 @@ pub struct MergePlan {
     maker_tx: Vec<u8>,
     complement: MakeIntentRequest,
     taker: OfferPlan,
-    fee: Option<crate::balance_tx::MergeDustFee>,
+    fee: Option<MergeFee>,
+}
+
+/// How the taker pays the merged transaction's fee, decided before the policy seam.
+enum MergeFee {
+    /// A generationless registration of NIGHT the taker's half spends: final as planned, and signed
+    /// with the rest of the half.
+    Registration(Box<crate::balance_tx::MergeRegistrationFee>),
+    /// A proof-bearing spend of DUST the taker holds, proved after the policy seam.
+    Spend(Box<crate::balance_tx::MergeDustFee>),
+}
+
+impl MergeFee {
+    /// The DUST the fee takes out of what the taker holds: a registration pays from DUST its NIGHT has
+    /// generated and not yet been credited with, so it takes none.
+    fn dust_outflow(&self) -> u128 {
+        match self {
+            MergeFee::Registration(_) => 0,
+            MergeFee::Spend(spend) => spend.plan.fee_dust,
+        }
+    }
+
+    fn binding_commitment(&self) -> PedersenRandomness {
+        match self {
+            MergeFee::Registration(reg) => reg.binding_commitment,
+            MergeFee::Spend(spend) => spend.plan.binding_commitment,
+        }
+    }
 }
 
 impl MergePlan {
@@ -355,20 +382,50 @@ impl MergePlan {
         &self.maker_tx
     }
 
-    /// How the taker pays the merged transaction's fee: a DUST spend when it pays one, since the merge
-    /// has no generationless registration path.
+    /// How the taker pays the merged transaction's fee, and the most DUST that can take.
     pub(super) fn fee_context(&self) -> crate::policy_context::FeeContext {
         match &self.fee {
-            Some(fee) => crate::policy_context::FeeContext::spend(fee.plan.fee_dust),
+            Some(MergeFee::Registration(reg)) => {
+                crate::policy_context::FeeContext::registration(reg.allow_fee_payment())
+            }
+            Some(MergeFee::Spend(spend)) => {
+                crate::policy_context::FeeContext::spend(spend.plan.fee_dust)
+            }
             None => crate::policy_context::FeeContext::none(),
         }
+    }
+
+    /// The dust registration the taker signs: its fee registration, when one pays the fee, riding its
+    /// complement intent. It registers the wallet's NIGHT to the wallet's own DUST address.
+    pub(super) fn dust_registrations(
+        &self,
+        addresses: &ows_signer::chains::midnight::MidnightAddresses,
+    ) -> Vec<crate::policy_context::DustRegistrationContext> {
+        let Some(MergeFee::Registration(reg)) = &self.fee else {
+            return Vec::new();
+        };
+        vec![crate::policy_context::DustRegistrationContext {
+            intent_id: self.complement.intent_segment,
+            carried: false,
+            night_address: addresses.unshielded.clone(),
+            dust_address: addresses.dust.clone(),
+            own: true,
+            allow_fee_payment: reg.allow_fee_payment().to_string(),
+            replaces_delegation: None,
+        }]
     }
 }
 
 /// Plan the merge: decide the taker's half and, on a live-DUST chain when the taker pays fees, size the
-/// DUST fee against the merged transaction. The fee covers the whole merged tx (the maker contributes
-/// bytes but never pays), so it is sized against the taker's half **mock-proven**: fixed-size proofs
-/// give the exact fee with no real proving, so a merge denied at the seam never reaches a real proof.
+/// fee against the merged transaction. The fee covers the whole merged tx (the maker contributes bytes
+/// but never pays), so it is sized against the taker's half **mock-proven**: fixed-size proofs give the
+/// exact fee with no real proving, so a merge denied at the seam never reaches a real proof.
+///
+/// As for the wallet's own transactions, a generationless registration pays the fee when the wallet
+/// holds unregistered NIGHT that has generated enough DUST, and a spend of DUST it holds pays it
+/// otherwise. The registration draws only on NIGHT its intent spends, so the half also spends the
+/// wallet's best unregistered coin, returning it whole; a half paying by a spend does not, since the
+/// extra coin would only add to the merged transaction's cost.
 fn plan_merge(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
@@ -377,21 +434,14 @@ fn plan_merge(
     pay_fees: bool,
     vault_path: Option<&Path>,
 ) -> Result<MergePlan, std::io::Error> {
-    let taker = super::make_intent::plan_offer(chain_id, crypto_provider, &complement, vault_path)?;
-    let indexer_url = crate::wallet::resolve_indexer_url(chain_id, vault_path)?;
-    let fee = if crate::balance_tx::adding_dust(pay_fees, &indexer_url)? {
-        Some(size_merge_fee(
-            chain_id,
-            crypto_provider,
-            &maker_tx,
-            &taker,
-            complement.intent_segment,
-            &indexer_url,
-            vault_path,
-        )?)
-    } else {
-        None
-    };
+    let (taker, fee) = plan_taker_half(
+        chain_id,
+        crypto_provider,
+        &maker_tx,
+        &complement,
+        pay_fees,
+        vault_path,
+    )?;
     Ok(MergePlan {
         maker_tx,
         complement,
@@ -400,16 +450,156 @@ fn plan_merge(
     })
 }
 
-/// Size the taker's DUST fee against the merged transaction, with the taker's half mock-proven. The DUST
-/// section rides the taker's complement intent and is proved against that intent's binding commitment, so
-/// the two stay bound together through the merge.
-fn size_merge_fee(
+/// The taker's half of [`plan_merge`] and the fee it pays.
+fn plan_taker_half(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
-    maker_bytes: &[u8],
+    maker_tx: &[u8],
+    complement: &MakeIntentRequest,
+    pay_fees: bool,
+    vault_path: Option<&Path>,
+) -> Result<(OfferPlan, Option<MergeFee>), std::io::Error> {
+    let indexer_url = crate::wallet::resolve_indexer_url(chain_id, vault_path)?;
+    let paying = crate::balance_tx::adding_dust(pay_fees, &indexer_url)?;
+    let spends_unshielded = complement
+        .desired_inputs
+        .iter()
+        .any(|d| d.kind == TransferKind::Unshielded);
+    let pool = if paying || spends_unshielded {
+        super::make_intent::wallet_unshielded_pool(chain_id, crypto_provider, vault_path)?
+    } else {
+        Vec::new()
+    };
+    if !paying {
+        let taker = super::make_intent::plan_offer_from_pool(
+            chain_id,
+            crypto_provider,
+            complement,
+            &pool,
+            None,
+            vault_path,
+        )?;
+        return Ok((taker, None));
+    }
+
+    let (ledger_params, tip_secs) =
+        crate::block_on(crate::ledger_params::fetch_indexer_tip(&indexer_url))?;
+    let tip = Timestamp::from_secs(tip_secs);
+    let mut mr: &[u8] = maker_tx;
+    let maker: TxSealed = tagged_deserialize(&mut mr)
+        .map_err(|e| std::io::Error::other(format!("failed to parse sealed maker tx: {e}")))?;
+    let sender_addr = crypto_provider
+        .addresses(&MidnightNetwork::from_chain_id(chain_id))
+        .map_err(|e| std::io::Error::other(e.to_string()))?
+        .unshielded;
+    let sender_vk = crypto_provider
+        .unshielded_verifying_key()
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let reserve = crate::balance_tx::reserve_for_merge_fee_registration(
+        &pool,
+        &sender_vk,
+        &sender_addr,
+        tip,
+    )?;
+    let taker = match &reserve {
+        Some(reserve) => {
+            let taker = super::make_intent::plan_offer_from_pool(
+                chain_id,
+                crypto_provider,
+                complement,
+                &pool,
+                Some(reserve),
+                vault_path,
+            )?;
+            if let Some(reg) = registration_fee(
+                crypto_provider,
+                &maker,
+                &taker,
+                complement.intent_segment,
+                tip,
+                &ledger_params,
+            )? {
+                return Ok((taker, Some(MergeFee::Registration(Box::new(reg)))));
+            }
+            taker.without_reserve(chain_id, crypto_provider, complement, &pool)?
+        }
+        None => super::make_intent::plan_offer_from_pool(
+            chain_id,
+            crypto_provider,
+            complement,
+            &pool,
+            None,
+            vault_path,
+        )?,
+    };
+    let spend = spend_fee(
+        chain_id,
+        crypto_provider,
+        &maker,
+        &taker,
+        complement.intent_segment,
+        &indexer_url,
+        &ledger_params,
+        tip,
+        vault_path,
+    )
+    .map_err(|e| {
+        if !e.to_string().contains("insufficient DUST") {
+            return e;
+        }
+        let registration = if reserve.is_some() {
+            "a registration of its unregistered NIGHT cannot pay the merged fee either"
+        } else {
+            "it holds no unregistered NIGHT to pay the merged fee by registration instead"
+        };
+        std::io::Error::other(format!(
+            "{e}: {registration}; wait for the wallet's DUST to accrue before completing the swap"
+        ))
+    })?;
+    Ok((taker, Some(MergeFee::Spend(Box::new(spend)))))
+}
+
+/// A generationless registration paying the merged fee from the DUST the unregistered NIGHT in the
+/// taker's half has generated, sized against the half mock-proven; `None` when that NIGHT cannot cover
+/// it (see [`crate::balance_tx::size_merge_registration_fee`]).
+fn registration_fee(
+    crypto_provider: &MidnightCryptoProvider,
+    maker: &TxSealed,
+    taker: &OfferPlan,
+    taker_seg: u16,
+    tip: Timestamp,
+    ledger_params: &midnight_ledger::structure::LedgerParameters,
+) -> Result<Option<crate::balance_tx::MergeRegistrationFee>, std::io::Error> {
+    let taker_base = taker.mock_proven(crypto_provider)?;
+    crate::balance_tx::size_merge_registration_fee(
+        maker,
+        &taker_base,
+        taker_seg,
+        taker.spent(),
+        crypto_provider
+            .dust_public_key()
+            .map_err(|e| std::io::Error::other(e.to_string()))?,
+        crypto_provider
+            .unshielded_verifying_key()
+            .map_err(|e| std::io::Error::other(e.to_string()))?,
+        tip,
+        ledger_params,
+    )
+}
+
+/// A spend of the taker's DUST paying the merged fee, sized against the half mock-proven. The section
+/// rides the taker's complement intent and is proved against that intent's binding commitment, so the
+/// two stay bound together through the merge.
+#[allow(clippy::too_many_arguments)]
+fn spend_fee(
+    chain_id: &str,
+    crypto_provider: &MidnightCryptoProvider,
+    maker: &TxSealed,
     taker: &OfferPlan,
     taker_seg: u16,
     indexer_url: &str,
+    ledger_params: &midnight_ledger::structure::LedgerParameters,
+    tip: Timestamp,
     vault_path: Option<&Path>,
 ) -> Result<crate::balance_tx::MergeDustFee, std::io::Error> {
     let taker_base = taker.mock_proven(crypto_provider)?;
@@ -419,22 +609,15 @@ fn size_merge_fee(
         .ok_or_else(|| std::io::Error::other("taker complement missing its intent segment"))?
         .deref()
         .binding_commitment;
-
-    let mut mr: &[u8] = maker_bytes;
-    let maker: TxSealed = tagged_deserialize(&mut mr)
-        .map_err(|e| std::io::Error::other(format!("failed to parse sealed maker tx: {e}")))?;
-
     let scope = crate::wallet::signing_scope(chain_id, vault_path);
-    let (ledger_params, tip_secs) =
-        crate::block_on(crate::ledger_params::fetch_indexer_tip(indexer_url))?;
     crate::balance_tx::size_merge_dust_fee(
-        &maker,
+        maker,
         &taker_base,
         taker_seg,
         binding_commitment,
         crypto_provider,
-        Timestamp::from_secs(tip_secs),
-        &ledger_params,
+        tip,
+        ledger_params,
         indexer_url,
         &scope,
     )
@@ -450,8 +633,9 @@ fn size_merge_fee(
 /// submittable whole.
 ///
 /// The maker never pays fees (`makeIntent` is imbalanced by design), so on a live-DUST chain the taker
-/// funds the merged tx's fee from its own dust. With `pay_fees` off (or a fee-less chain) the merged tx
-/// is value-balanced but fee-less, and a live-DUST network rejects the submit.
+/// funds the merged tx's fee, with a registration of its NIGHT or from its own dust. With `pay_fees` off
+/// (or a fee-less chain) the merged tx is value-balanced but fee-less, and a live-DUST network rejects
+/// the submit.
 pub(super) fn authorize_merge(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
@@ -465,11 +649,11 @@ pub(super) fn authorize_merge(
         fee,
     } = merge;
     // The taker's imbalanced complementary half rides a segment disjoint from the maker's (picked in
-    // `complement_from_balance`); that intent carries the DUST fee.
+    // `complement_from_balance`); that intent carries the fee section.
     let taker_seg = complement.intent_segment;
     let mut taker_base = taker.realize(chain_id, crypto_provider, vault_path)?;
     if let Some(fee) = fee {
-        attach_merge_dust_fee(
+        attach_merge_fee(
             chain_id,
             crypto_provider,
             &mut taker_base,
@@ -496,7 +680,8 @@ pub(super) fn authorize_merge(
 /// DUST fee it funds — all in the transaction's guaranteed section (segment 0): the taker's coins settle
 /// guaranteed just like a plain makeIntent (see [`super::make_intent::GUARANTEED_SEGMENT`]), and the fee
 /// is a guaranteed cost. The token movement is request-derived from the taker's
-/// [complement](sealed_maker_complement), exactly as a plain makeIntent; the fee is the one
+/// [complement](sealed_maker_complement), exactly as a plain makeIntent; the NIGHT coin a fee
+/// registration draws on returns whole, so it moves nothing. A fee paid by a DUST spend is the one
 /// [`plan_merge`] sized and [`authorize_merge`] pays, folded in as a DUST outflow so a `sum(|diff|)` cap
 /// at the policy seam sees the burn.
 pub(super) fn merge_segment_effects(
@@ -511,7 +696,7 @@ pub(super) fn merge_segment_effects(
             .addresses(&MidnightNetwork::from_chain_id(chain_id))
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         if let Some(effect) =
-            crate::balance_tx::dust_outflow_effect(addresses.dust, fee.plan.fee_dust)
+            crate::balance_tx::dust_outflow_effect(addresses.dust, fee.dust_outflow())
         {
             effects.push(effect);
         }
@@ -522,16 +707,17 @@ pub(super) fn merge_segment_effects(
     ))
 }
 
-/// Prove the planned DUST spend in the signer ([`MidnightCryptoProvider::authorize_dust`]) and splice the
-/// proven section into the taker's complement intent (at `dust_seg`) before sealing, with the TTL the fee
-/// was sized for. The spend is bound to the intent's binding commitment, so the planned spend only fits
-/// the planned half; anything else is refused.
-fn attach_merge_dust_fee(
+/// Splice the planned fee section into the taker's complement intent (at `dust_seg`) before sealing,
+/// with the TTL the fee was sized for: a registration as planned, a DUST spend once the signer has
+/// proved it ([`MidnightCryptoProvider::authorize_dust`]). A spend is bound to the intent's binding
+/// commitment, and either section was sized for the planned half only, so a half with another binding
+/// commitment is refused.
+fn attach_merge_fee(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     taker_base: &mut StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
     dust_seg: u16,
-    fee: crate::balance_tx::MergeDustFee,
+    fee: MergeFee,
     vault_path: Option<&Path>,
 ) -> Result<(), std::io::Error> {
     let mut intent = taker_base
@@ -540,23 +726,29 @@ fn attach_merge_dust_fee(
         .ok_or_else(|| std::io::Error::other("taker half missing the complement intent segment"))?
         .deref()
         .clone();
-    if intent.binding_commitment != fee.plan.binding_commitment {
+    if intent.binding_commitment != fee.binding_commitment() {
         return Err(std::io::Error::other(
             "the taker half is not the one its DUST fee was planned for; refusing to sign it",
         ));
     }
-    let prover = crate::balance_tx::midnight_prover(chain_id, vault_path)?;
-    let dust_actions = crate::block_on(crypto_provider.authorize_dust(
-        &fee.dust_state,
-        &fee.plan,
-        &fee.ledger_params,
-        prover,
-    ))
-    .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let (dust_actions, intent_ttl) = match fee {
+        MergeFee::Registration(reg) => (reg.dust_actions, reg.intent_ttl),
+        MergeFee::Spend(spend) => {
+            let prover = crate::balance_tx::midnight_prover(chain_id, vault_path)?;
+            let dust_actions = crate::block_on(crypto_provider.authorize_dust(
+                &spend.dust_state,
+                &spend.plan,
+                &spend.ledger_params,
+                prover,
+            ))
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+            (dust_actions, spend.plan.intent_ttl)
+        }
+    };
 
-    // The section's fee window is anchored at the plan's `dust_ctime`; the intent's TTL follows it.
+    // The section's fee window is anchored at the planned `dust_ctime`; the intent's TTL follows it.
     intent.dust_actions = Some(Sp::new(dust_actions));
-    intent.ttl = fee.plan.intent_ttl;
+    intent.ttl = intent_ttl;
     taker_base.intents = taker_base.intents.insert(dust_seg, intent);
     Ok(())
 }
@@ -696,6 +888,197 @@ mod merge_tests {
                 "token {token}: taker must negate the maker's imbalance"
             );
         }
+    }
+
+    fn provider() -> MidnightCryptoProvider {
+        let mut credential = b"MNK1".to_vec();
+        credential.extend_from_slice(&[0x11; 96]);
+        ows_signer::chains::MidnightSigner::mainnet()
+            .crypto_provider(&ows_signer::SecretBytes::new(credential))
+            .unwrap()
+    }
+
+    /// The real preprod maker, the taker's complement of it for the [`provider`]'s wallet, and a taker
+    /// half planned over `pool` with the wallet's fee-registration reserve, as of `tip`.
+    fn registration_merge(
+        pool: &[crate::UnshieldedUtxo],
+        tip: Timestamp,
+    ) -> (Vec<u8>, TxSealed, MakeIntentRequest, OfferPlan) {
+        let chain = "midnight:preprod";
+        let provider = provider();
+        let addresses = provider
+            .addresses(&MidnightNetwork::from_chain_id(chain))
+            .unwrap();
+        let hex_str = include_str!("testdata/sealed_maker_preprod.hex").trim();
+        let maker_bytes = hex::decode(hex_str.strip_prefix("0x").unwrap_or(hex_str)).unwrap();
+        let mut r: &[u8] = &maker_bytes;
+        let maker: TxSealed = tagged_deserialize(&mut r).unwrap();
+        let Transaction::Standard(base) = &maker else {
+            panic!("a standard transaction");
+        };
+        let segments: BTreeSet<u16> = base.intents.iter().map(|p| *p.deref().0.deref()).collect();
+        let complement = complement_from_balance(
+            maker.balance(None).unwrap(),
+            &segments,
+            &addresses.unshielded,
+            &addresses.shielded,
+        )
+        .unwrap();
+        let reserve = crate::balance_tx::reserve_for_merge_fee_registration(
+            pool,
+            &provider.unshielded_verifying_key().unwrap(),
+            &addresses.unshielded,
+            tip,
+        )
+        .unwrap();
+        let taker = super::super::make_intent::plan_offer_from_pool(
+            chain,
+            &provider,
+            &complement,
+            pool,
+            reserve.as_ref(),
+            None,
+        )
+        .unwrap();
+        (maker_bytes, maker, complement, taker)
+    }
+
+    /// A NIGHT coin of the [`provider`]'s wallet on preprod that was never registered and has long
+    /// since generated all the DUST it can.
+    fn unregistered_coin() -> crate::UnshieldedUtxo {
+        crate::UnshieldedUtxo {
+            token_type: "00".repeat(32),
+            value: 1_000 * midnight_ledger::structure::STARS_PER_NIGHT,
+            intent_hash: hex::encode([9u8; 32]),
+            output_index: 0,
+            owner: provider()
+                .addresses(&MidnightNetwork::from_chain_id("midnight:preprod"))
+                .unwrap()
+                .unshielded,
+            ctime_unix_secs: Some(1_000),
+            registered_for_dust_generation: false,
+        }
+    }
+
+    /// A taker whose NIGHT was never registered, and that holds no DUST, pays the merged fee with a
+    /// generationless registration of a NIGHT coin its half spends and returns whole. The policy pass
+    /// sees how: a registration fee, the registration the taker signs, and no DUST leaving the wallet.
+    ///
+    /// The fixture swaps NIGHT alone, and a merge that small falls under the node's time-to-dismiss
+    /// floor with any fee section (see the next test), so the floor is raised here to size the
+    /// registration on its own.
+    #[test]
+    fn a_taker_holding_only_unregistered_night_pays_the_merge_fee_by_registration() {
+        let chain = "midnight:preprod";
+        let provider = provider();
+        let addresses = provider
+            .addresses(&MidnightNetwork::from_chain_id(chain))
+            .unwrap();
+        let vk = provider.unshielded_verifying_key().unwrap();
+        let coin = unregistered_coin();
+        let tip = Timestamp::from_secs(10_000_000);
+        let (maker_bytes, maker, complement, taker) =
+            registration_merge(std::slice::from_ref(&coin), tip);
+        assert_eq!(taker.spent(), std::slice::from_ref(&coin));
+
+        let seg = complement.intent_segment;
+        let taker_base = taker.mock_proven(&provider).unwrap();
+        let offer = taker_base
+            .intents
+            .get(&seg)
+            .unwrap()
+            .guaranteed_unshielded_offer
+            .clone()
+            .unwrap();
+        let spent: Vec<u128> = offer.inputs.iter_deref().map(|i| i.value).collect();
+        assert_eq!(spent, vec![coin.value]);
+        assert!(offer
+            .outputs
+            .iter_deref()
+            .any(|o| o.value == coin.value && o.owner == UserAddress::from(vk.clone())));
+
+        let mut params = midnight_ledger::structure::INITIAL_PARAMETERS;
+        params.limits.min_time_to_dismiss = params.limits.min_time_to_dismiss * 100usize;
+        let fee = registration_fee(&provider, &maker, &taker, seg, tip, &params)
+            .unwrap()
+            .expect("the coin's generated DUST covers the merged fee");
+        let registration = fee.dust_actions.registrations.iter_deref().next().unwrap();
+        assert_eq!(registration.night_key, vk);
+        assert_eq!(
+            registration.dust_address.as_deref(),
+            Some(&provider.dust_public_key().unwrap())
+        );
+        let allow = fee.allow_fee_payment();
+
+        let plan = ConnectorPlan::BalanceSealedMerge(Box::new(MergePlan {
+            maker_tx: maker_bytes,
+            complement,
+            taker,
+            fee: Some(MergeFee::Registration(Box::new(fee))),
+        }));
+        let context = plan.policy_context(chain, &provider).unwrap();
+        assert_eq!(
+            context["fee"],
+            serde_json::json!({ "mode": "registration", "dust_burned": allow.to_string() })
+        );
+        assert_eq!(context["dust_registrations"].as_array().unwrap().len(), 1);
+        assert_eq!(context["dust_registrations"][0]["intent_id"], seg);
+        assert_eq!(context["dust_registrations"][0]["carried"], false);
+        assert_eq!(
+            context["dust_registrations"][0]["dust_address"],
+            addresses.dust
+        );
+        let effects = &context["segment_effects"][0]["effects"];
+        assert_eq!(effects.as_array().unwrap().len(), 1, "no DUST outflow");
+        assert_eq!(effects[0]["address"], addresses.unshielded);
+    }
+
+    /// A registration that cannot pay the merged fee declines rather than failing the merge, so the
+    /// taker falls back to a DUST spend: under the real time-to-dismiss floor the NIGHT-only fixture
+    /// cannot carry one, and a coin that generated nothing yet has no DUST to give.
+    #[test]
+    fn a_registration_that_cannot_pay_the_merge_fee_declines() {
+        let tip = Timestamp::from_secs(10_000_000);
+        let (_, maker, complement, taker) =
+            registration_merge(std::slice::from_ref(&unregistered_coin()), tip);
+        let declined = registration_fee(
+            &provider(),
+            &maker,
+            &taker,
+            complement.intent_segment,
+            tip,
+            &midnight_ledger::structure::INITIAL_PARAMETERS,
+        )
+        .unwrap();
+        assert!(declined.is_none(), "the fixture is under the floor");
+
+        let fresh = crate::UnshieldedUtxo {
+            ctime_unix_secs: Some(10_000_000),
+            ..unregistered_coin()
+        };
+        let (_, maker, complement, taker) = registration_merge(std::slice::from_ref(&fresh), tip);
+        let mut params = midnight_ledger::structure::INITIAL_PARAMETERS;
+        params.limits.min_time_to_dismiss = params.limits.min_time_to_dismiss * 100usize;
+        let declined = registration_fee(
+            &provider(),
+            &maker,
+            &taker,
+            complement.intent_segment,
+            tip,
+            &params,
+        )
+        .unwrap();
+        assert!(
+            declined.is_none(),
+            "a coin born at the tip has generated no DUST"
+        );
+
+        // The spend that pays instead does not carry the reserved coin, which would only add cost.
+        let pool = [fresh];
+        let taker = taker
+            .without_reserve("midnight:preprod", &provider(), &complement, &pool)
+            .unwrap();
+        assert!(taker.spent().is_empty());
     }
 
     #[test]
