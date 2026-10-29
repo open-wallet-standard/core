@@ -718,6 +718,31 @@ an offer that expires within a minute of the chain tip.
 > that a spec-compliant dApp that never sends it is unaffected, and proposed upstream for the
 > spec to adopt.
 
+**Withdrawing an offer before it expires.** No connector method cancels a published offer, and none
+outside the specification is added: the wallet cannot spend the inputs of one offer in particular,
+since no request names the coins it spends. What it can do is spend every coin an offer could have
+used. A `makeTransfer` to the wallet's own address of its whole balance of the offered token, read
+with `ows fund balance` just before (and of its whole NIGHT balance too, as another output of the
+same request, if the offer spends NIGHT), selects every coin of that token and returns the value in
+new coins, so every open offer that spends any of them can no longer complete:
+
+```json
+{"method":"makeTransfer","desiredOutputs":[
+  {"kind":"shielded","type":"<offered token>","value":"<whole balance>","recipient":"<own mn_shield-addr…>"}]}
+```
+
+Use `"kind":"unshielded"` and the wallet's own `mn_addr…` for an unshielded token. It withdraws all
+of the wallet's offers in that token at once, not one, and it costs a DUST fee like any transfer. A
+transfer of the wallet's whole NIGHT leaves no NIGHT coin to register for the fee, so the fee is then
+paid from DUST the wallet already holds. An unshielded transfer's leg is fallible (see
+[`makeTransfer`](#maketransfer)), so the offer is withdrawn once that leg has landed. The same
+mechanism withdraws offers by accident: any transfer that spends an offer's coin, whether to pay,
+as the coin reserved for a fee registration, or in the fallible consolidation that folds leftover
+unregistered NIGHT, leaves that offer unable to complete. The wallet keeps no record of the coins its
+open offers spend, so nothing steers any of these away from them, and when the reserved coin or the
+consolidation is the cause the policy pass sees no movement at all, since both pay the wallet back in
+full.
+
 #### `balanceSealedTransaction`
 
 *"Complete a maker's offer as the taker."* The maker offer is **fully sealed**
@@ -1107,10 +1132,42 @@ decimal, a `:`, then the message bytes. The signature is BIP-340 over the SHA-25
 a verifier rebuilds the frame from the message it asked for. The frame is what keeps a message
 signature from doubling as a transaction signature: the ledger checks intent inputs and dust
 registrations with this same key, over SHA-256 of a `data_to_sign` that never starts with the
-prefix. The result is the 32-byte x-only public key followed by the 64-byte signature, hex-encoded.
+prefix.
 
-The frame names no network, and the key is the same on every network, so a signature made on
-preview is just as valid for the wallet's mainnet address. A policy that allows message signing only
+### What it returns
+
+One hex string of 96 bytes (192 hex characters): the signer's 32-byte x-only BIP-340 public key,
+then the 64-byte BIP-340 signature (`bytes(R) ‖ bytes(s)`). `--json` prints the same string as
+`signature`, with `recovery_id` `null`: a BIP-340 signature does not recover its key, which is why
+the key comes with it. For `hello world` from the BIP-39 test wallet, printed as one line and shown
+here split:
+
+```
+# public key (32 bytes)
+c76a7f2b975d39e6d8af0e285b6805260031efeced12f17f7c7015bb13a6089c
+# signature (64 bytes)
+153af226d0b0a94ef5ac2de3fdca33d500d544bc536a8b2b97e5fcc2ca2fe2e592ed7c2ae1e1eb00d9620750058fe93b75caa100251269de94a5270455cfcb9b
+```
+
+A verifier splits it at byte 32, rebuilds MIP-0031's frame from the message it asked to have signed,
+and checks the signature with BIP-340, the 32-byte SHA-256 of the frame being BIP-340's message:
+
+```python
+out = bytes.fromhex(signature_hex)
+verifying_key, signature = out[:32], out[32:]
+frame = b"midnight_signed_message:%d:" % len(message) + message   # message: the bytes signed
+assert bip340_verify(verifying_key, hashlib.sha256(frame).digest(), signature)
+```
+
+In the connector's `Signature` terms the two halves are `verifyingKey` and `signature`, and the
+scheme is `schnorr_bip340`; OWS returns them joined rather than as MIP-0031's separate fields. A
+valid signature proves only that the holder of that key signed: to attribute it to a wallet, also
+check the key against the unshielded address you expect, which derives from it.
+
+The output is the same on every network. The frame names no network and the key is the same, and
+the signature is deterministic (BIP-340 with all-zero auxiliary randomness), so one message signed
+on preview and on mainnet gives the same 192 hex characters. A signature made on preview is
+therefore just as valid for the wallet's mainnet address. A policy that allows message signing only
 on `midnight:preview` limits which command runs, not where its signatures can be used; give an agent
 message signing only where any network's verifier may see the result.
 
