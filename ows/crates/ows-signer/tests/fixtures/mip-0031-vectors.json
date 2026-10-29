@@ -1,0 +1,564 @@
+{
+  "source": "https://github.com/midnightntwrk/midnight-improvement-proposals/blob/06948fb14691a4a9109852b8e9ccb343c8b29e43/mips/mip-0031-message-signing/vectors.json",
+  "license": "Apache-2.0",
+  "trimmed": "Only what OWS produces: the valid schnorr_bip340 vectors, the verification rejections whose genuine signature covers some other message, and the Schnorr scalars of the keys they name. The ecdsa vectors and scalars, the payload-decoding rejections and the wire-format rejections are left out. Kept vectors are unchanged.",
+  "schemaVersion": 1,
+  "warning": "The signing keys in this file are test keys with publicly known values. They exist so that every signature here can be reproduced. Never use them on any network. Each named key carries a separate scalar per scheme, and no scalar signs under both: a secret key used for Schnorr and for ECDSA alike can be recovered outright from a nonce reused across the two, so the schemes are separated here as they are separated at key derivation. Do not collapse the pair back into one scalar when adapting these vectors. No valid vector names a keyType, and that is the convention rather than an omission: absent means unshielded, which is the only key type that signs messages, so a vector for the absent case would be indistinguishable from every other vector here. The one vector that names the field names the rejected value. Read an input without a keyType as asking for an unshielded key, not as leaving the key type open. Two vectors carry an unpaired surrogate escape in input.data on purpose, to check that an implementation rejects a lone surrogate instead of substituting U+FFFD; the escape is the only way to write one, a lone surrogate having no UTF-8 form. RFC 8259 section 8.2 permits it as non-interoperable, not ungrammatical: Node and Python parse this file, jq does not. Use a parser that accepts it rather than skipping the two vectors.",
+  "keys": {
+    "key-a": {
+      "schnorrSigningKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
+      "schnorrVerifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+    },
+    "key-b": {
+      "schnorrSigningKeyHex": "b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfef",
+      "schnorrVerifyingKey": "dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659"
+    }
+  },
+  "vectors": [
+    {
+      "name": "schnorr-empty-text",
+      "description": "Empty text payload; the message is the prefix, a zero length and a colon.",
+      "input": {
+        "encoding": "text",
+        "data": ""
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "",
+      "payloadLength": 0,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a303a",
+      "messageDigestHex": "95110fab6d608d99410204176ebaeab903c027af107fad1738a8d580608bfe8d",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "08254c19e1a9d0d3e9de35894c8c7839f9a97eb2b4f19198b79660f71d7facdd",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a303a",
+        "signature": "6ad396c21a25cbe4332b7e04c8f568a8886782d86e431080c568344f03880709e246ea65e95f6b22dc106ccbb30cf53e16e2b867a8cbe5ad47ee90469fbed541",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-empty-hex",
+      "description": "Empty hex payload; the same message as the empty text payload.",
+      "input": {
+        "encoding": "hex",
+        "data": ""
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "",
+      "payloadLength": 0,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a303a",
+      "messageDigestHex": "95110fab6d608d99410204176ebaeab903c027af107fad1738a8d580608bfe8d",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "d236a6dbde598aaeb92cab0eac428ce94296128cd2e01b6ee5335282685eee01",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a303a",
+        "signature": "38f08aff0bf9d81854bef6360d497ae1b042bad5e0074e207d42444df1d16955d990408b4b42483cfd66700b5d3b7af6687c8c48505e905603cbc4c64de090ed",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-empty-base64",
+      "description": "Empty base64 payload; the same message again.",
+      "input": {
+        "encoding": "base64",
+        "data": ""
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "",
+      "payloadLength": 0,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a303a",
+      "messageDigestHex": "95110fab6d608d99410204176ebaeab903c027af107fad1738a8d580608bfe8d",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "00f217160751a8d1f421162727b929e7f507916a76136a16285cbac2510e33f4",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a303a",
+        "signature": "92329038f641e4eaf4b1d4226b7ba260d032e183f58ec7f54b7bb0dcc949b2f779a0609f3cff5ae6b703fa7e5b8f5bb12c22f59dd1635240dcfaf3a56bc417f0",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-hex-decade",
+      "description": "The three bytes de ca de, requested as hex; the length is 3, not 6.",
+      "input": {
+        "encoding": "hex",
+        "data": "decade"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "decade",
+      "payloadLength": 3,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a333adecade",
+      "messageDigestHex": "3e1a914a91ed897e6e20423b3761a6026a9cdd039867f74e509d4f8af885f0e4",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "fe85f728dc5c81dc07400700ca9d43323a9858e1447b79b1b0e3db6b7c5bda2c",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a333adecade",
+        "signature": "1b05daaa52499a57007c9d30d40e09ba3bf9ff303595af92953cfbc80c7d8338fc657f7f4d8ada49f3559ab9003806c8d7889c7e4f57618fb3b97344472fb962",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-text-decade",
+      "description": "The same six characters as text: six ASCII bytes, a different message entirely.",
+      "input": {
+        "encoding": "text",
+        "data": "decade"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "646563616465",
+      "payloadLength": 6,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a363a646563616465",
+      "messageDigestHex": "691d8be9cb28a83b8a95a46417cd51427a5a2fc1aa7b4a4420848b984794ebb5",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "866ac63dfa79424bba6baa683ad3839b3123cea40888780744cc4b6d6499ad37",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a363a646563616465",
+        "signature": "576ddd7704f6438ca27f3f21b348ce419e98dc8620870caac3b81c5accfd2913afaef5192ad5016afab587e055fc8ba2c5156d19f0ab79e7b07d094e440c2556",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-hex-decade-uppercase",
+      "description": "Uppercase hex decodes to the same bytes, so it produces the same message.",
+      "input": {
+        "encoding": "hex",
+        "data": "DECADE"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "decade",
+      "payloadLength": 3,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a333adecade",
+      "messageDigestHex": "3e1a914a91ed897e6e20423b3761a6026a9cdd039867f74e509d4f8af885f0e4",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "c34e8e31118c7b95fb4f1159401c5badd1c668f93c59582a040ec9b1dbb80a54",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a333adecade",
+        "signature": "77bdb8b0acf1f6dde87026cf2fdeffca83441ffa3d23bf28682039183f9d406a634954c7f5ee61bf4f148175c02be64ecd930e2769280831e62b7491e62482f5",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-base64-decade",
+      "description": "Base64 of those same three bytes; again the same message, so the signatures are interchangeable.",
+      "input": {
+        "encoding": "base64",
+        "data": "3sre"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "decade",
+      "payloadLength": 3,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a333adecade",
+      "messageDigestHex": "3e1a914a91ed897e6e20423b3761a6026a9cdd039867f74e509d4f8af885f0e4",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "a592ea67658a01db975a684ba52eceab2d09a0a9a09e0b8a658f71636eb41c0c",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a333adecade",
+        "signature": "0b18475857291513fccf4f75d4f1d04e4221e71c387e5a993edb8087350035908ac44d203a91ec2986c89d1f4b2554a6a9751bc91f338a09d13c692c6dde2422",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-hex-decade-second-key",
+      "description": "The same message signed by a second key, so a verifier cannot ignore the verifying key.",
+      "input": {
+        "encoding": "hex",
+        "data": "decade"
+      },
+      "valid": true,
+      "key": "key-b",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "decade",
+      "payloadLength": 3,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a333adecade",
+      "messageDigestHex": "3e1a914a91ed897e6e20423b3761a6026a9cdd039867f74e509d4f8af885f0e4",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "5e20b5753a61079edd0c746031d854160150f0e4450d40b6696021d6b14fbb2b",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a333adecade",
+        "signature": "f5741519a7b5ce7b8e36ecc2c870d152ec7acfb42f40a3940ca602403bc40332bddded68613fe188db91841bdd77e5323539cf06d82fc3e373bbe0828c4fb609",
+        "verifyingKey": "dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659"
+      }
+    },
+    {
+      "name": "schnorr-text-ascii",
+      "description": "A plain ASCII sign-in challenge, naming the party asking and carrying a nonce, over two lines.",
+      "input": {
+        "encoding": "text",
+        "data": "example.com asks you to sign in.\n\nNonce: 6f2b8d1c47a903e5b8d24f6017c3ae9b"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "6578616d706c652e636f6d2061736b7320796f7520746f207369676e20696e2e0a0a4e6f6e63653a203666326238643163343761393033653562386432346636303137633361653962",
+      "payloadLength": 73,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a37333a6578616d706c652e636f6d2061736b7320796f7520746f207369676e20696e2e0a0a4e6f6e63653a203666326238643163343761393033653562386432346636303137633361653962",
+      "messageDigestHex": "2efaad5cf8134cf1f0c94502e500cf5ecfeb33246a36b36c02d193ca0ee7b3c6",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "79c2da5905c19046096d0fc36c0339c792e98cc02d11533c17900db23f0cf8b8",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a37333a6578616d706c652e636f6d2061736b7320796f7520746f207369676e20696e2e0a0a4e6f6e63653a203666326238643163343761393033653562386432346636303137633361653962",
+        "signature": "955fce9b1a9f821fcd28351cb0c15a6090455dd63e2e8b967c8f14238095eaa248f6af195d7a770dddf6424a78a6d3ea65c27cbae2b58071c39f62f7da7ace5c",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-text-non-ascii",
+      "description": "Latin text with diacritics: 26 UTF-8 bytes over 17 characters.",
+      "input": {
+        "encoding": "text",
+        "data": "za\u017c\u00f3\u0142\u0107 g\u0119\u015bl\u0105 ja\u017a\u0144"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "7a61c5bcc3b3c582c4872067c499c59b6cc485206a61c5bac584",
+      "payloadLength": 26,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a32363a7a61c5bcc3b3c582c4872067c499c59b6cc485206a61c5bac584",
+      "messageDigestHex": "0258f12b1786e911aec91bd6001c587bdad2e1ea16445e83595ca2ed1ff7851f",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "40b9ad6b4ebffe36a0755556f5ccf8bb411e87088c95b737fdaac6f1addda5ec",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a32363a7a61c5bcc3b3c582c4872067c499c59b6cc485206a61c5bac584",
+        "signature": "6d3e1f3e3cb8c4c1a70592d3c4f9c639aa14d475662fec7dd1e961f6f479242acd535898f824ae30f379345bfa8e3ac498f51854c91238be52fbc12217e39248",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-text-astral",
+      "description": "A character outside the basic multilingual plane, encoded as one four-byte UTF-8 sequence.",
+      "input": {
+        "encoding": "text",
+        "data": "\ud83c\udf19 midnight"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "f09f8c99206d69646e69676874",
+      "payloadLength": 13,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a31333af09f8c99206d69646e69676874",
+      "messageDigestHex": "2e7cb6420bc7846b13117af8c44f9f361334367ee4c8ba8f1615834b2b31675b",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "25372aaf376757331925c79c32872307528d4d7c4a3246b4c478d9d811c42aa3",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a31333af09f8c99206d69646e69676874",
+        "signature": "6e1a3789df4b0c208e36d91a32e61e7ff3a82d7f9f15a764fb6ceaecdc3b46501f72a857c061e57b4c9a55a6e9bc928a4d7865f3ee874bb07757e153182dc694",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-text-decomposed-accent",
+      "description": "A decomposed accent (e + U+0301). An implementation applying NFC would sign two bytes, not three.",
+      "input": {
+        "encoding": "text",
+        "data": "e\u0301"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "65cc81",
+      "payloadLength": 3,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a333a65cc81",
+      "messageDigestHex": "62eddb73489a8ffd5e8c78cc216f3102bce987813d13efd8339e32df54a570e0",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "dc7802865da1e3136917282d0e2be1e5e8f155d48047cf21e397aa2f2e98aa00",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a333a65cc81",
+        "signature": "5820e55cbd46475ce49a7accc6a492bb6487c3aa64f46abb60fe0df64408cdb029197e3f746b859fd86faa7f31f7a3b1c4311a5b72eba867607d96e11afec96d",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-text-payload-resembling-a-message",
+      "description": "A payload that is itself a well-formed prefixed message; the structural parse must still be unique.",
+      "input": {
+        "encoding": "text",
+        "data": "midnight_signed_message:0:"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "6d69646e696768745f7369676e65645f6d6573736167653a303a",
+      "payloadLength": 26,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a32363a6d69646e696768745f7369676e65645f6d6573736167653a303a",
+      "messageDigestHex": "e43510717beb02ef5801bea929c488f499563767a1a55dbd5e7214d8eaf6e107",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "b63359dbe79d87fb79c40a48953bae3a9e5d922bc96f4950620e2b3df8bdd466",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a32363a6d69646e696768745f7369676e65645f6d6573736167653a303a",
+        "signature": "2b2041bf8baa73e13b3fc7c01f0f471d45200361efc5a28bbf1beeed789b3efd116af5a1d1c246c7142b63150a1f4aed847335b51f5a5dee7188ebce7b4eaa13",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-hex-single-zero-byte",
+      "description": "A one-byte payload that is NUL; the message is not NUL-terminated and is not shortened.",
+      "input": {
+        "encoding": "hex",
+        "data": "00"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "00",
+      "payloadLength": 1,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a313a00",
+      "messageDigestHex": "bf9b004198b483e5071d19529ed473b19ad6fe11a824aff83f8dd0e25f45e82e",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "9c4a3d991a7ff839054ab1d2d3ac4b81b86659fdea8fbce22eec9ee64ae0e223",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a313a00",
+        "signature": "65500b92aa677e34ee7b0946b7a09cab3e85db08c7093ac97250d70eb31d824c84edad2455febadf1934d0a5d27a4d96c601559fc3b1947349c9b6a04839b58c",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-hex-nine-bytes",
+      "description": "Nine bytes: a one-digit decimal length.",
+      "input": {
+        "encoding": "hex",
+        "data": "000102030405060708"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "000102030405060708",
+      "payloadLength": 9,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a393a000102030405060708",
+      "messageDigestHex": "1abdd8164902bcd5a19ed83391e64e7fd326cbf6388cada5ff00e2bfd7fae4b1",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "39f88ca8cbd1a05e841d6e53b7cec47c8ba807b54dbf4606b8360138cfcd545c",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a393a000102030405060708",
+        "signature": "d6a4c5319dd6c1b35e1a8b334a4383aaccf1a6199daac42a9bddf445992d64c79cc0b2aaef6b42e7d05c0895aeea9e3534017232126a82330e9bad8ff68ec993",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-hex-ten-bytes",
+      "description": "Ten bytes: the decimal length gains a digit, so the message gains a byte.",
+      "input": {
+        "encoding": "hex",
+        "data": "00010203040506070809"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "00010203040506070809",
+      "payloadLength": 10,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a31303a00010203040506070809",
+      "messageDigestHex": "54e6362d8d9ff66464ba9b8b3d4c1dd4cf77e1ba1487e1426d1dca9e61419643",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "ce68c72bf834fe79f42437c7cb2e4b5882f8bf1c016847fc246df580c1e1a9b9",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a31303a00010203040506070809",
+        "signature": "116aec832269a275d65a999464a27ac3b9b722fa74f05cb175a40f37edee70d8546dfeaaa6290fdcbe576671f0d7c60094e00aa5edbfae38421bbc83f39312cf",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-hex-ninety-nine-bytes",
+      "description": "Ninety-nine bytes: a two-digit decimal length.",
+      "input": {
+        "encoding": "hex",
+        "data": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162",
+      "payloadLength": 99,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a39393a000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162",
+      "messageDigestHex": "392237293408c71616d4ad6c925363973c1178ab87dd3fa81b62ec10da3394d6",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "8ac4318639a6b3d3a23e34eb3ba7c60cee7716858336b3116f3f9fa8abd97c16",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a39393a000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162",
+        "signature": "d7914ffb2f6701a7a35c7815db594fba58fd0060c550820a20c0935570e6c003819b4982639816b9ee66b4155604f38220cc68ea13852e2f856102f77a94206e",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-hex-one-hundred-bytes",
+      "description": "One hundred bytes: a three-digit decimal length.",
+      "input": {
+        "encoding": "hex",
+        "data": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60616263"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60616263",
+      "payloadLength": 100,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a3130303a000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60616263",
+      "messageDigestHex": "e672c5f74b5b65d6fe6b211990462b73c2f00fa660a2bb333879f63eea9430f6",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "7b8c6caa50c7842062b2cbd3a89b2ddf209e49c9e8d16a8f7cf67b3d9dcdbee5",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a3130303a000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60616263",
+        "signature": "b707d316da2631e04a60b4cc01efdb09cd2a2c767003eb082775f45c138ab63fbc27cdf4689e6e3a887d84154979dcae4f43b073933df382c6717376bedf4994",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "schnorr-hex-thirty-two-byte-challenge",
+      "description": "A 32-byte challenge whose message and verifying key match a wallet-produced vector the ledger accepted; the signature differs because the wallet\u2019s auxiliary randomness was not recorded.",
+      "input": {
+        "encoding": "hex",
+        "data": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+      "payloadLength": 32,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a33323ac0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+      "messageDigestHex": "942601bbdd0d62fdd27942db22c09ecfd4ddbc7078ed8cbba00595c99a173dbd",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "f75c4ecb76416b56a8dfba62454025bb47b93bf06100057cd3b32844c995ab7b",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a33323ac0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+        "signature": "1df03aaf3b832440b48a10833fba66eb99f8a2f34838a71a7b98403b78d8b3f70393cd3ec48a8deb8df0590713f31c656106f1d25676c6769717c2ac46230622",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      },
+      "reference": "midnightntwrk/passport experiments/bip340-wallet-gate/evidence/p1-vector-connector.json @ ac19629210c9b6e76e214ebe9755a775be5dca50"
+    },
+    {
+      "name": "schnorr-text-byte-order-mark",
+      "description": "A leading U+FEFF is ordinary content: it is encoded as ef bb bf, never stripped, and never added.",
+      "input": {
+        "encoding": "text",
+        "data": "\ufeffmidnight"
+      },
+      "valid": true,
+      "key": "key-a",
+      "scheme": "schnorr_bip340",
+      "payloadHex": "efbbbf6d69646e69676874",
+      "payloadLength": 11,
+      "messageHex": "6d69646e696768745f7369676e65645f6d6573736167653a31313aefbbbf6d69646e69676874",
+      "messageDigestHex": "05d7e0b4bd2eb25a18bb30bfc058b51a43ebaa5b06bc0063ebf65b2d34e7db80",
+      "signatureDeterminism": "bip340-aux-fixed",
+      "auxRandHex": "0064d503297f56bcbb99527fc1acdfc8abb1330528947dca07ee7d4406fb93db",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a31313aefbbbf6d69646e69676874",
+        "signature": "1b0b999156b9d5b7045d0977b4efe00245b9e4cee1487e43b9542981afe92200f84af1cd49e6cd8312dd5d3b94b274c9ba442bf659152f09a4af8f3e530105e3",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      }
+    },
+    {
+      "name": "reject-foreign-prefix",
+      "description": "A genuine signature over a message built on a different 24-byte separator: the length header, the payload and the signature are all sound, so the prefix is the only thing that refuses it. Without this vector a verifier that never compares the prefix passes the whole file, and the prefix is what keeps a message signature from being read as any other signed structure.",
+      "kind": "verification",
+      "valid": false,
+      "payloadHex": "decade",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7472616e73616374696f6e5f736967333adecade",
+        "signature": "c550d76a1b9427d00001dca39ad342ee694ba7a53322c8eb889555a85b730648a2235aa05277779780d6b51f1f2829cb47d35ed913f0a79ed835bf523043c117",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      },
+      "expectedFailureStep": 4
+    },
+    {
+      "name": "reject-leading-zero-length",
+      "description": "A genuinely signed message whose decimal length is zero-padded; the length has exactly one spelling.",
+      "kind": "verification",
+      "valid": false,
+      "payloadHex": "decade",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a30333adecade",
+        "signature": "bc053a23ab7c89d9988e77b8a119945480fd0da9294263243605f9bbcfc768f94c6d49ee1ad31758097c8db1888c683fed17917fece8aeceeb0d56b44b8db76f",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      },
+      "expectedFailureStep": 5
+    },
+    {
+      "name": "reject-unterminated-length",
+      "description": "A genuinely signed message whose digit run is not followed by a colon, so the payload never begins.",
+      "kind": "verification",
+      "valid": false,
+      "payloadHex": "decade",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a33decade",
+        "signature": "ac773c00f06f02fc0aaec92dcf1d41abf271f15dc3f37541e1e9722d78433a710b9ad103470e0b549904e9af2e71ee220c547a136ddc655f6af9fb12bfaff8f2",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      },
+      "expectedFailureStep": 5
+    },
+    {
+      "name": "reject-declared-length-mismatch",
+      "description": "A genuinely signed message declaring four bytes and carrying three; a truncating producer emits exactly this.",
+      "kind": "verification",
+      "valid": false,
+      "payloadHex": "decade",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a343adecade",
+        "signature": "fc8c118eb3b84ed6a2c98f0d48325c43c7ca1416aa6e723ba3c0dd0a8421c9df57bb39868ffece8f8dd9e50889902429b95d6f8bdbc2d80ac5d6771d198b3488",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      },
+      "expectedFailureStep": 6
+    },
+    {
+      "name": "reject-payload-is-not-the-requested-payload",
+      "description": "A structurally perfect, genuinely signed message over one byte the caller did not send.",
+      "kind": "verification",
+      "valid": false,
+      "payloadHex": "decade",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a333adecadd",
+        "signature": "7a23b7e83d5c367c4187c360d26ddd1a329bb49feab8b2340e081934b06df2037872063726e1eb08ea7c159b012f9f77a19af5c1570e650f07e0524c889f0dd0",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      },
+      "expectedFailureStep": 7
+    },
+    {
+      "name": "reject-signature-over-a-different-message",
+      "description": "Every structural check passes and the payload matches, but the signature was made over other bytes.",
+      "kind": "verification",
+      "valid": false,
+      "payloadHex": "decade",
+      "signature": {
+        "scheme": "schnorr_bip340",
+        "data": "6d69646e696768745f7369676e65645f6d6573736167653a333adecade",
+        "signature": "7a23b7e83d5c367c4187c360d26ddd1a329bb49feab8b2340e081934b06df2037872063726e1eb08ea7c159b012f9f77a19af5c1570e650f07e0524c889f0dd0",
+        "verifyingKey": "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+      },
+      "expectedFailureStep": 9
+    }
+  ]
+}

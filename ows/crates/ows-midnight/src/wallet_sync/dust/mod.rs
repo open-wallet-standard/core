@@ -514,6 +514,19 @@ row without progress"
     Ok(state)
 }
 
+/// Sync a **spendable** [`DustLocalState`] for this dust key — the same replay
+/// [`get_dust_balance_for_display`] uses, but returning the state itself so the balancer can build
+/// and prove `DustSpend`s to pay fees. Resumes from the disk snapshot when present (verified against
+/// the indexer HTTP tip), otherwise replays from genesis. The dust key stays in the crypto provider.
+pub(crate) async fn sync_spendable_dust_state(
+    indexer_url: &str,
+    crypto_provider: &MidnightCryptoProvider,
+    scope: &SyncCacheScope,
+    current_block_height: Option<i64>,
+) -> Result<DustLocalState<InMemoryDB>, std::io::Error> {
+    sync_dust_local_state(indexer_url, crypto_provider, scope, current_block_height).await
+}
+
 /// DUST balance for `ows fund balance` — resumes the dust ledger from this dust key's disk
 /// snapshot when present, otherwise replays from genesis, then applies the ledger decay rules
 /// at `dust_ctime_unix_secs`. Returns `(utxo_count, summed_specks)`.
@@ -536,13 +549,19 @@ pub async fn get_dust_balance_for_display(
 /// tip is chain-global. Fail-safe — a missing or empty stream, a GraphQL/transport error, or a
 /// silent socket all read as not live.
 pub(crate) async fn dust_ledger_is_live(indexer_url: &str) -> bool {
-    match probe_dust_stream_tip(indexer_url).await {
-        Ok(max_id) => is_dust_live(max_id),
+    match dust_ledger_liveness(indexer_url).await {
+        Ok(live) => live,
         Err(e) => {
             eprintln!("[ows-midnight] dust liveness probe failed ({e}); hiding dust section");
             false
         }
     }
+}
+
+/// [`dust_ledger_is_live`], with a probe that could not reach the indexer kept apart from a ledger
+/// that is not live: `Err` when the dust stream could not be opened at all.
+pub(crate) async fn dust_ledger_liveness(indexer_url: &str) -> Result<bool, std::io::Error> {
+    probe_dust_stream_tip(indexer_url).await.map(is_dust_live)
 }
 
 /// True when a dust stream tip cursor marks a live ledger (a positive `maxId`).

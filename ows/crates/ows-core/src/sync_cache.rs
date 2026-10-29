@@ -309,4 +309,48 @@ mod tests {
             .collect();
         assert_eq!(leftovers, ["snap.json"], "no temp file may be left behind");
     }
+
+    /// Two runs can save the same snapshot at once, a signing call and a balance read for one wallet.
+    /// Each save replaces the file whole, so a reader always finds one writer's snapshot, never a
+    /// missing, torn or mixed one, and no temp file outlives the saves.
+    #[test]
+    fn concurrent_saves_never_leave_a_torn_or_mixed_snapshot() {
+        #[derive(Serialize, Deserialize)]
+        struct Snapshot {
+            version: u32,
+            cursor: Vec<u32>,
+        }
+        let snapshot = |writer: u32| Snapshot {
+            version: writer,
+            cursor: vec![writer; 2048],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snap.json");
+        try_save(&path, &snapshot(1));
+
+        std::thread::scope(|s| {
+            for writer in [1, 2] {
+                let path = &path;
+                s.spawn(move || {
+                    for _ in 0..40 {
+                        try_save(path, &snapshot(writer));
+                    }
+                });
+            }
+            for _ in 0..200 {
+                let loaded: Snapshot =
+                    try_load_versioned(&path, 2).expect("a reader must always find a snapshot");
+                assert!(
+                    loaded.cursor.iter().all(|&c| c == loaded.version),
+                    "a snapshot mixed two writers"
+                );
+            }
+        });
+
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(leftovers, ["snap.json"], "no temp file may be left behind");
+    }
 }

@@ -108,7 +108,10 @@ MAINNET_ADDR="mn_addr1${DATA_PREFIX}w3dyt6"
 PREVIEW_ADDR="mn_addr_preview1${DATA_PREFIX}4y8xms"
 PREPROD_ADDR="mn_addr_preprod1${DATA_PREFIX}49ekgd"
 FEATUREX_ADDR="mn_addr_feature-x1${DATA_PREFIX}gl8r2t"
-PREVIEW_IDX1_ADDR="mn_addr_preview14vxp6lccnpxc2zecz5a7fls8cc63kme540jwgajrakhmvc9xkxmqpmzrx8"
+PREVIEW_IDX1_ADDR="mn_addr_preview1kpq4jf9d35tjnw0jtx7vaexaavq7xyj0x497pcqzwqetuyrc7nrq37rt92"
+# The same account's shielded and dust addresses, which derive prints on stderr from the keys alone.
+PREVIEW_SHIELDED_ADDR="mn_shield-addr_preview1ywxc2p9986usecc9xert79afzq4m9x35u62sx0a4e2tc5w6mta5ulwhc432vhrlpnvygfep3pxcdt8tgzfstesrm6tf7hjc5jgpl20g2dm5vg"
+PREVIEW_DUST_ADDR="mn_dust_preview1wwcff2ckd4n5hfj43055td8glwtzkhhf6z88xwf0rpftvgstr7zpx50t9vq"
 # For a fully custom network there is no pinned checksum, but the HRP tag + shared data part are —
 # same key, network-tagged prefix — so assert everything up to (not including) the 6-char checksum.
 CUSTOM_ADDR_PREFIX="mn_addr_${CUSTOM_NET}1${DATA_PREFIX}"
@@ -131,11 +134,13 @@ else
 fi
 [ -x "$OWS" ] || { printf '%s✗ build did not produce %s%s\n' "$RED" "$OWS" "$RESET"; exit 1; }
 
-# derive.rs reads the mnemonic from OWS_MNEMONIC and prints ONLY the address; export it once.
+# derive.rs reads the mnemonic from OWS_MNEMONIC and prints ONLY the address on stdout; export it once.
 export OWS_MNEMONIC="$MNEMONIC"
 
 # ── 2. Sanity: config (real vault path + endpoints; read-only) ────────────────────────────
-run "config: vault path + endpoints (read-only sanity)" "ows config show" "$OWS" config show
+# `ows config show` prints URLs verbatim, and an indexer or node URL can carry an API key in its query.
+config_show_redacted() { "$OWS" config show | sed -E 's/\?[^[:space:]]*/?<redacted>/'; }
+run "config: vault path + endpoints (URL queries redacted)" "ows config show" config_show_redacted
 
 # ── 3. Derive the unshielded Night address across the known networks (byte-for-byte) ──────
 say ""
@@ -156,6 +161,16 @@ expect "derive midnight:preview (HRP suffix _preview, same data part)" \
   "$PREVIEW_ADDR" \
   "$OWS" mnemonic derive --chain midnight:preview
 
+expect "derive midnight:preview also shows the shielded address, offline" \
+  "ows mnemonic derive --chain midnight:preview" \
+  "Shielded:   $PREVIEW_SHIELDED_ADDR" \
+  "$OWS" mnemonic derive --chain midnight:preview
+
+expect "derive midnight:preview also shows the dust address, offline" \
+  "ows mnemonic derive --chain midnight:preview" \
+  "Dust:       $PREVIEW_DUST_ADDR" \
+  "$OWS" mnemonic derive --chain midnight:preview
+
 expect "derive midnight:preprod (HRP suffix _preprod, same data part)" \
   "ows mnemonic derive --chain midnight:preprod" \
   "$PREPROD_ADDR" \
@@ -166,7 +181,7 @@ expect "derive midnight:feature-x (ad-hoc reference kept verbatim)" \
   "$FEATUREX_ADDR" \
   "$OWS" mnemonic derive --chain midnight:feature-x
 
-expect "derive midnight:preview --index 1 (a different address index)" \
+expect "derive midnight:preview --index 1 (account 1)" \
   "ows mnemonic derive --chain midnight:preview --index 1" \
   "$PREVIEW_IDX1_ADDR" \
   "$OWS" mnemonic derive --chain midnight:preview --index 1

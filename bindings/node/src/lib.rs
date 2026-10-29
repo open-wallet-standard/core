@@ -51,6 +51,10 @@ impl From<ows_lib::WalletInfo> for WalletInfo {
 pub struct SignResult {
     pub signature: String,
     pub recovery_id: Option<u32>,
+    /// The fully signed, sealed transaction hex — populated only for chains that assemble a
+    /// complete broadcastable artifact at sign time (Midnight). `None`/`undefined` for every
+    /// other chain and for message/hash/typed-data/authorization signing.
+    pub transaction: Option<String>,
 }
 
 /// Result from a sign-and-send operation.
@@ -215,6 +219,7 @@ pub fn sign_transaction(
     .map(|r| SignResult {
         signature: r.signature,
         recovery_id: r.recovery_id.map(|v| v as u32),
+        transaction: r.transaction,
     })
     .map_err(map_err)
 }
@@ -244,6 +249,7 @@ pub fn sign_message(
     .map(|r| SignResult {
         signature: r.signature,
         recovery_id: r.recovery_id.map(|v| v as u32),
+        transaction: r.transaction,
     })
     .map_err(map_err)
 }
@@ -271,6 +277,7 @@ pub fn sign_typed_data(
     .map(|r| SignResult {
         signature: r.signature,
         recovery_id: r.recovery_id.map(|v| v as u32),
+        transaction: r.transaction,
     })
     .map_err(map_err)
 }
@@ -296,6 +303,7 @@ pub fn sign_hash(
     .map(|r| SignResult {
         signature: r.signature,
         recovery_id: r.recovery_id.map(|v| v as u32),
+        transaction: r.transaction,
     })
     .map_err(map_err)
 }
@@ -323,6 +331,7 @@ pub fn sign_authorization(
     .map(|r| SignResult {
         signature: r.signature,
         recovery_id: r.recovery_id.map(|v| v as u32),
+        transaction: r.transaction,
     })
     .map_err(map_err)
 }

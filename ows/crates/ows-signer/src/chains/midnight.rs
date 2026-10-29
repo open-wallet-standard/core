@@ -1,13 +1,35 @@
 use bech32::{Bech32m, Hrp};
 use k256::schnorr::SigningKey;
-use midnight_ledger::dust::{DustLocalState, DustPublicKey, DustSecretKey};
+use midnight_base_crypto::signatures::{
+    Signature as MnSignature, SigningKey as MidnightSigningKey,
+};
+use midnight_base_crypto::time::Timestamp;
+use midnight_coin_structure::coin::{Info as CoinInfo, QualifiedInfo, ShieldedTokenType};
+use midnight_coin_structure::transfer;
+use midnight_ledger::dust::{
+    DustActions, DustLocalState, DustOutput, DustPublicKey, DustRegistration, DustSecretKey,
+    DustSpend,
+};
 use midnight_ledger::semantics::ZswapLocalStateExt as _;
-use midnight_serialize::{ScaleBigInt, Serializable};
+use midnight_ledger::structure::{
+    Intent, LedgerParameters, ProofMarker, ProofPreimageMarker, StandardTransaction, Transaction,
+};
+use midnight_serialize::{
+    tagged_deserialize, tagged_serialize, Deserializable, ScaleBigInt, Serializable,
+};
+use midnight_storage::arena::Sp;
 use midnight_storage::db::InMemoryDB;
+use midnight_storage::storage::HashMap as MnHashMap;
 use midnight_zswap::keys::{SecretKeys as ZswapSecretKeys, Seed as ZswapSeed};
 use midnight_zswap::local::State as ZswapLocalState;
+use midnight_zswap::{Offer as ZswapOffer, Output as ZswapOutput};
 use num_bigint::BigUint;
+use rand::rngs::{OsRng, StdRng};
+use rand::SeedableRng as _;
 use sha2::Digest;
+use std::ops::Deref as _;
+use transient_crypto::commitment::{PedersenRandomness, PureGeneratorPedersen};
+use transient_crypto::proofs::{Proof as ZswapProof, ProofPreimage, ProvingProvider};
 use zeroize::Zeroizing;
 
 use crate::curve::Curve;
@@ -15,6 +37,15 @@ use crate::hd::DerivedKey;
 use crate::traits::{ChainSigner, SignOutput, SignerError};
 use crate::zeroizing::SecretBytes;
 use ows_core::ChainType;
+
+/// A proven-but-unsealed Midnight Standard transaction (`proof,embedded-fr`).
+type TxProvenUnsealed = Transaction<MnSignature, ProofMarker, PedersenRandomness, InMemoryDB>;
+/// The sealed form of a Midnight transaction — the maker's offer, the taker's half after sealing, and
+/// their [`merge_sealed`] combination.
+type TxSealed = Transaction<MnSignature, ProofMarker, PureGeneratorPedersen, InMemoryDB>;
+type StdTxProvenUnsealed =
+    StandardTransaction<MnSignature, ProofMarker, PedersenRandomness, InMemoryDB>;
+type IntentProvenUnsealed = Intent<MnSignature, ProofMarker, PedersenRandomness, InMemoryDB>;
 
 /// Midnight network selection. Each network uses the same keys but a
 /// network-specific Bech32m HRP suffix — the unshielded, shielded, and dust
@@ -87,6 +118,13 @@ impl MidnightNetwork {
     fn dust_hrp(&self) -> Result<String, SignerError> {
         validate_network_reference(&self.reference)?;
         Ok(hrp_for_network("mn_dust", &self.reference))
+    }
+
+    /// The Midnight ledger network id stamped into a `StandardTransaction` (the `network_id` field) —
+    /// the network reference verbatim. Distinct from the address HRPs: this tags the transaction, not
+    /// an address.
+    pub fn ledger_network_id(&self) -> &str {
+        &self.reference
     }
 }
 
@@ -186,10 +224,11 @@ pub struct MidnightAddresses {
 impl MidnightSigner {
     /// SLIP-44 coin type for Midnight.
     const COIN_TYPE: u32 = 2400;
-    /// BIP-44 hardened account. OWS uses one account per wallet (single-address
-    /// model), so this is fixed; per-address selection is the address index.
-    const DEFAULT_ACCOUNT: u32 = 0;
-    /// WalletEngine roles under `m/44'/COIN_TYPE'/DEFAULT_ACCOUNT'/role/index`.
+    /// Address index under each role. Midnight wallets such as Lace number their accounts at the
+    /// hardened BIP-44 account level, which the derivation index selects, and derive every role's
+    /// key at address index 0.
+    const ADDRESS_INDEX: u32 = 0;
+    /// WalletEngine roles under `m/44'/COIN_TYPE'/account'/role/ADDRESS_INDEX`.
     const ROLE_UNSHIELDED: u32 = 0;
     const ROLE_DUST: u32 = 2;
     const ROLE_SHIELDED: u32 = 3;
@@ -226,10 +265,10 @@ impl MidnightSigner {
         }
     }
 
-    /// Build a Wallet SDK derivation path for a `role` and address `index`.
-    /// The coin type and hardened account live here as the single source of truth.
-    fn derivation_path(role: u32, index: u32) -> String {
-        let (coin, account) = (Self::COIN_TYPE, Self::DEFAULT_ACCOUNT);
+    /// Build a Wallet SDK derivation path for a `role` of BIP-44 `account`.
+    /// The coin type and address index live here as the single source of truth.
+    fn derivation_path(role: u32, account: u32) -> String {
+        let (coin, index) = (Self::COIN_TYPE, Self::ADDRESS_INDEX);
         format!("m/44'/{coin}'/{account}'/{role}/{index}")
     }
 
@@ -238,6 +277,21 @@ impl MidnightSigner {
     /// the `role` embedded by [`Self::derivation_path`].
     fn role_from_path(path: &str) -> Option<u32> {
         path.split('/').nth(4).and_then(|s| s.parse().ok())
+    }
+
+    /// The BIP-44 account a stored Midnight path was derived at — the inverse of
+    /// [`Self::derivation_path`], so the keys unsealed for a wallet's account match its stored
+    /// address. `None` for any other shape, including a path at a nonzero address index.
+    pub fn account_from_path(path: &str) -> Option<u32> {
+        let coin = format!("{}'", Self::COIN_TYPE);
+        let index = Self::ADDRESS_INDEX.to_string();
+        match path.split('/').collect::<Vec<_>>().as_slice() {
+            ["m", "44'", c, account, role, i] if *c == coin && *i == index => {
+                role.parse::<u32>().ok()?;
+                account.strip_suffix('\'')?.parse().ok()
+            }
+            _ => None,
+        }
     }
 
     /// Resolve the 32-byte seed for `role` from a derived-key bundle. Returns a
@@ -315,22 +369,9 @@ impl MidnightSigner {
         Self::bech32m_encode(hrp, &hash)
     }
 
-    /// Shielded address payload: Wallet SDK Zswap derives the secret key set from
-    /// the 32-byte seed; the address is `coinPublicKey || encryptionPublicKey` (64
-    /// bytes), Bech32m-encoded under the given network HRP.
-    fn derive_shielded_address_with_hrp(
-        &self,
-        seed: &[u8],
-        hrp: &str,
-    ) -> Result<String, SignerError> {
-        let seed_arr = Zeroizing::new(<[u8; 32]>::try_from(seed).map_err(|_| {
-            SignerError::InvalidPrivateKey(format!(
-                "expected 32-byte shielded seed, got {} bytes",
-                seed.len()
-            ))
-        })?);
-        let keys = ZswapSecretKeys::from(ZswapSeed::from(*seed_arr));
-
+    /// Shielded address payload: the Zswap secret key set's `coinPublicKey ||
+    /// encryptionPublicKey` (64 bytes), Bech32m-encoded under the given network HRP.
+    fn shielded_address(keys: &ZswapSecretKeys, hrp: &str) -> Result<String, SignerError> {
         let coin_public = keys.coin_public_key().0 .0;
         let mut enc_public = Vec::new();
         keys.enc_public_key()
@@ -349,19 +390,24 @@ impl MidnightSigner {
         Self::bech32m_encode(hrp, &payload)
     }
 
-    /// Dust address: Wallet SDK / ledger-v8 derives the dust public key (a field
-    /// element) from the 32-byte seed, SCALE-encodes it as a BigInt, and Bech32m-
-    /// encodes that payload under the network's `mn_dust{suffix}` HRP.
-    fn derive_dust_address_from_seed(&self, seed: &[u8]) -> Result<String, SignerError> {
+    /// The dust public key derived from a 32-byte dust seed: the wallet's own dust address, the only
+    /// one its DUST registrations may target.
+    fn dust_public_key_from_seed(seed: &[u8]) -> Result<DustPublicKey, SignerError> {
         let seed_arr = Zeroizing::new(<[u8; 32]>::try_from(seed).map_err(|_| {
             SignerError::InvalidPrivateKey(format!(
                 "expected 32-byte dust seed, got {} bytes",
                 seed.len()
             ))
         })?);
-        let dsk = DustSecretKey::derive_secret_key(&seed_arr);
-        let dpk = DustPublicKey::from(dsk);
+        Ok(DustPublicKey::from(DustSecretKey::derive_secret_key(
+            &seed_arr,
+        )))
+    }
 
+    /// Dust address: Wallet SDK / ledger-v8 SCALE-encodes the dust public key (a field
+    /// element) as a BigInt, and Bech32m-encodes that payload under the network's
+    /// `mn_dust{suffix}` HRP.
+    fn dust_address(&self, dpk: &DustPublicKey) -> Result<String, SignerError> {
         // JS `fr_to_bigint`: little-endian bytes reversed, interpreted as big-endian
         // hex. The numeric value is the same; we build it from big-endian bytes.
         let mut be = dpk.0.as_le_bytes();
@@ -375,18 +421,8 @@ impl MidnightSigner {
     /// Derive all three Midnight addresses (unshielded / shielded / dust) from
     /// the OWS `signing_key` produced by `encode_keys` / `secret_to_signing_key`.
     pub fn derive_addresses(&self, signing_key: &[u8]) -> Result<MidnightAddresses, SignerError> {
-        let seeds = Self::decode_keys(signing_key)?;
-        Ok(MidnightAddresses {
-            unshielded: self.derive_unshielded_address_with_hrp(
-                seeds.unshielded.expose(),
-                &self.network.unshielded_hrp()?,
-            )?,
-            shielded: self.derive_shielded_address_with_hrp(
-                seeds.shielded.expose(),
-                &self.network.shielded_hrp()?,
-            )?,
-            dust: self.derive_dust_address_from_seed(seeds.dust.expose())?,
-        })
+        MidnightCryptoProvider::from_credential(&SecretBytes::from_slice(signing_key))?
+            .addresses(&self.network)
     }
 
     /// Derive the Zswap (shielded) secret keys from the 32-byte shielded role seed. The keys are
@@ -409,6 +445,23 @@ impl MidnightSigner {
         credential: &SecretBytes,
     ) -> Result<MidnightCryptoProvider, SignerError> {
         MidnightCryptoProvider::from_credential(credential)
+    }
+
+    /// The Midnight ledger network id for this signer's network (`StandardTransaction.network_id`).
+    pub fn ledger_network_id(&self) -> &str {
+        self.network.ledger_network_id()
+    }
+
+    /// This network's Bech32m HRP for unshielded (Night) addresses — used to decode a connector
+    /// recipient address into a `UserAddress`.
+    pub fn unshielded_hrp(&self) -> Result<String, SignerError> {
+        self.network.unshielded_hrp()
+    }
+
+    /// This network's Bech32m HRP for shielded (Zswap) addresses — used to decode a connector
+    /// recipient address into its coin/encryption public keys.
+    pub fn shielded_hrp(&self) -> Result<String, SignerError> {
+        self.network.shielded_hrp()
     }
 
     /// Re-encode a Bech32m unshielded address under this network's HRP. The
@@ -441,6 +494,32 @@ fn scale_bigint_encode_biguint(n: &BigUint) -> Result<Vec<u8>, SignerError> {
     Ok(out)
 }
 
+/// A shielded input/change spend to authorize for one intent segment: the coins to spend and the
+/// outputs to mint to the wallet itself per token — change from those coins, and any surplus the
+/// transaction leaves that the wallet claims. A keyless balancer plans this — selection needs the spending key
+/// only to *detect* coins (via nullifiers), which is non-authorizing — and the authorizing witness is
+/// built from it here, in the signer.
+pub struct ShieldedSpendPlan {
+    pub segment: u16,
+    pub coins: Vec<QualifiedInfo>,
+    pub change: Vec<(ShieldedTokenType, u128)>,
+}
+
+/// The proven shielded fragments the balancer merges into the transaction's guaranteed offer, plus the
+/// summed Pedersen binding randomness to add to the transaction (a proven tx can't recompute its own).
+/// [`MidnightCryptoProvider::mock_shielded_offers`] returns the same shape, mock-proven, for fee sizing.
+pub struct ShieldedAuthorized {
+    pub proven: Vec<(u16, ZswapOffer<ZswapProof, InMemoryDB>)>,
+    pub binding_delta: PedersenRandomness,
+}
+
+/// Proof-preimage shielded offers built by [`MidnightCryptoProvider::build_preimage_shielded_offers`]:
+/// one offer per segment (tagged by segment id) plus the summed Pedersen binding-randomness delta.
+type ShieldedPreimages = (
+    Vec<(u16, ZswapOffer<ProofPreimage, InMemoryDB>)>,
+    PedersenRandomness,
+);
+
 /// Holds the decoded Midnight account seeds plus the keys derived from them once at construction.
 /// Created via [`MidnightSigner::crypto_provider`]. Keys never leave the provider — callers get
 /// public outputs only (addresses, the dust public key, a fingerprint), so balance code can hold
@@ -449,6 +528,18 @@ pub struct MidnightCryptoProvider {
     seeds: MidnightSeeds,
     shielded_keys: ZswapSecretKeys,
     dust_sk: DustSecretKey,
+}
+
+/// Prefix of the DApp Connector `signData` frame: `midnight_signed_message:<length>:` (ASCII,
+/// shortest decimal byte length of the payload), then the payload itself. Byte-exact per the
+/// connector specification and MIP-0031; every Midnight verifier rebuilds this frame.
+const SIGNED_MESSAGE_PREFIX: &str = "midnight_signed_message:";
+
+/// The bytes a Midnight message signature covers: the `signData` frame around `payload`.
+pub fn signed_message_bytes(payload: &[u8]) -> Vec<u8> {
+    let mut framed = format!("{SIGNED_MESSAGE_PREFIX}{}:", payload.len()).into_bytes();
+    framed.extend_from_slice(payload);
+    framed
 }
 
 impl MidnightCryptoProvider {
@@ -467,9 +558,31 @@ impl MidnightCryptoProvider {
         })
     }
 
+    /// Sign an arbitrary message with the unshielded (Night) BIP-340 Schnorr key — the same key
+    /// that backs the wallet's unshielded address. Returns the 64-byte signature together with the
+    /// 32-byte x-only public key: BIP-340 signatures aren't public-key-recoverable, so the verifier
+    /// needs the key (and it lets the caller re-derive the signer's address). The message is framed
+    /// as the DApp Connector `signData` requires ([`signed_message_bytes`]) and BIP-340 signs the
+    /// SHA-256 of that frame. The ledger checks intent and dust-registration signatures with this
+    /// same key over SHA-256 of a `data_to_sign` that never starts with the frame's prefix, so a
+    /// message signature can't authorize a spend.
+    pub fn sign_unshielded_message(
+        &self,
+        message: &[u8],
+    ) -> Result<(Vec<u8>, Vec<u8>), SignerError> {
+        use k256::schnorr::signature::Signer as _;
+        let sk = MidnightSigner::signing_key(self.seeds.unshielded.expose())?;
+        let signature: k256::schnorr::Signature = sk
+            .try_sign(&signed_message_bytes(message))
+            .map_err(|e| SignerError::SigningFailed(format!("midnight message sign: {e}")))?;
+        let public_key = sk.verifying_key().to_bytes().to_vec();
+        Ok((signature.to_bytes().to_vec(), public_key))
+    }
+
     /// Derive all three Midnight addresses (unshielded / shielded / dust) for `network` from the
-    /// seeds held in this provider — equivalent to [`MidnightSigner::derive_addresses`] on the
-    /// packed blob, but the seeds are used directly.
+    /// keys held in this provider. The shielded and dust keys were derived from their seeds once,
+    /// when the provider was built; listing the addresses, which the signing path does many times,
+    /// derives no secret key again, so it leaves no fresh copy of one behind.
     pub fn addresses(&self, network: &MidnightNetwork) -> Result<MidnightAddresses, SignerError> {
         let signer = MidnightSigner {
             network: network.clone(),
@@ -479,12 +592,24 @@ impl MidnightCryptoProvider {
                 self.seeds.unshielded.expose(),
                 &network.unshielded_hrp()?,
             )?,
-            shielded: signer.derive_shielded_address_with_hrp(
-                self.seeds.shielded.expose(),
+            shielded: MidnightSigner::shielded_address(
+                &self.shielded_keys,
                 &network.shielded_hrp()?,
             )?,
-            dust: signer.derive_dust_address_from_seed(self.seeds.dust.expose())?,
+            dust: signer.dust_address(&self.dust_public_key()?)?,
         })
+    }
+
+    /// Verifying key for the unshielded (Night) role — the counterpart to the signing key stored
+    /// in `seeds.unshielded`. The ledger `UtxoSpend.owner` field is this key.
+    pub fn unshielded_verifying_key(
+        &self,
+    ) -> Result<midnight_base_crypto::signatures::VerifyingKey, SignerError> {
+        midnight_base_crypto::signatures::SigningKey::from_bytes(self.seeds.unshielded.expose())
+            .map(|sk| sk.verifying_key())
+            .map_err(|e| {
+                SignerError::InvalidPrivateKey(format!("invalid midnight signing key: {e}"))
+            })
     }
 
     /// Public key for the dust (registration/fee) role derived from the dust secret key.
@@ -526,6 +651,622 @@ impl MidnightCryptoProvider {
             .replay_events(&self.shielded_keys, std::iter::once(ev))
             .map_err(|e| SignerError::SigningFailed(format!("replay zswap event failed: {e:?}")))
     }
+
+    /// Recognize the wallet-owned shielded receipts a Zswap offer routes to this wallet: trial-decrypt
+    /// each output's ciphertext with the shielded keys and keep only those whose coin commitment
+    /// reconstructs from our coin public key, returning each receipt's token and value. Recognizing a
+    /// *receipt* is a viewing-tier operation — it needs no spend authority (only recognizing a *spend*
+    /// does, since that means matching precomputed nullifiers) — and the keys never leave the provider.
+    /// Transient outputs (created and spent within the same offer) are skipped: they net to nothing for
+    /// the wallet.
+    pub fn recognize_shielded_inflow<P: midnight_storage::Storable<InMemoryDB>>(
+        &self,
+        offer: &ZswapOffer<P, InMemoryDB>,
+    ) -> Vec<(ShieldedTokenType, u128)> {
+        offer
+            .outputs
+            .iter_deref()
+            .filter_map(|o| {
+                let ci = o
+                    .ciphertext
+                    .as_ref()
+                    .and_then(|ciph| self.shielded_keys.try_decrypt(ciph))?;
+                let recipient = transfer::Recipient::User(self.shielded_keys.coin_public_key());
+                (ci.commitment(&recipient) == o.coin_com).then_some((ci.type_, ci.value))
+            })
+            .collect()
+    }
+
+    /// Build the proof-preimage shielded input offers for each segment (the key-bearing spend-witness
+    /// construction) WITHOUT proving. Shared by `authorize_shielded` (which proves each) and
+    /// `mock_shielded_offers` (which mock-proves each). The preimages carry the spending key, so they
+    /// never leave the provider.
+    fn build_preimage_shielded_offers(
+        &self,
+        plans: &[ShieldedSpendPlan],
+        tree: &ZswapLocalState<InMemoryDB>,
+    ) -> Result<ShieldedPreimages, SignerError> {
+        use rand::Rng as _;
+        let mut rng = OsRng;
+        let keys = &self.shielded_keys;
+        let cpk = keys.coin_public_key();
+
+        let mut preimages = Vec::with_capacity(plans.len());
+        let mut binding_delta = PedersenRandomness::from(0);
+
+        for plan in plans {
+            // Fresh clone per segment: each spend sees the prior spends' pending nullifiers (mirroring
+            // the signer), while the plan's tree stays pristine for the real authorization.
+            let mut working = tree.clone();
+            let mut inputs = Vec::with_capacity(plan.coins.len());
+            for coin in &plan.coins {
+                let (next, input) = working
+                    .spend(&mut rng, keys, coin, Some(plan.segment))
+                    .map_err(|e| {
+                        SignerError::SigningFailed(format!("shielded spend build failed: {e:?}"))
+                    })?;
+                working = next;
+                inputs.push(input);
+            }
+
+            let mut outputs = Vec::with_capacity(plan.change.len());
+            for (token, amount) in &plan.change {
+                let coin = CoinInfo {
+                    nonce: rng.r#gen(),
+                    type_: *token,
+                    value: *amount,
+                };
+                let out = ZswapOutput::new(
+                    &mut rng,
+                    &coin,
+                    Some(plan.segment),
+                    &cpk,
+                    Some(keys.enc_public_key()),
+                )
+                .map_err(|e| {
+                    SignerError::SigningFailed(format!("shielded change output failed: {e:?}"))
+                })?;
+                outputs.push(out);
+            }
+
+            let offer = ZswapOffer::new(inputs, outputs, vec![]).ok_or_else(|| {
+                SignerError::SigningFailed("failed to build the shielded input offer".into())
+            })?;
+            binding_delta = binding_delta + offer.binding_randomness();
+            preimages.push((plan.segment, offer));
+        }
+
+        Ok((preimages, binding_delta))
+    }
+
+    /// Authorize the wallet's shielded inputs. For each segment, builds the proof-preimage spend
+    /// witnesses (the authorizing key operation) using the already-held `shielded_keys` and the
+    /// self-change against the synced `tree`, then proves the fragment. The bearer preimage is
+    /// born and consumed here — only the proven `Offer` leaves — so this must run **after** any
+    /// policy check.
+    ///
+    /// `async` because proving is; the caller drives it with its own executor. Each segment's
+    /// proof draws from an independent RNG via `prover.split()` — cloning the prover would duplicate
+    /// its RNG state and correlate the segments' proof randomness.
+    pub async fn authorize_shielded<P: ProvingProvider>(
+        &self,
+        segments: &[ShieldedSpendPlan],
+        tree: &ZswapLocalState<InMemoryDB>,
+        mut prover: P,
+    ) -> Result<ShieldedAuthorized, SignerError> {
+        let (preimages, binding_delta) = self.build_preimage_shielded_offers(segments, tree)?;
+        let mut proven = Vec::with_capacity(preimages.len());
+        for (segment, preimage) in preimages {
+            let (_segment, proven_offer) =
+                preimage.prove(prover.split(), segment).await.map_err(|e| {
+                    SignerError::SigningFailed(format!("prove shielded inputs failed: {e:?}"))
+                })?;
+            proven.push((segment, proven_offer));
+        }
+        Ok(ShieldedAuthorized {
+            proven,
+            binding_delta,
+        })
+    }
+
+    /// Fee-sizing twin of [`Self::authorize_shielded`]: the same proof-preimage offers, mock-proved
+    /// instead of proved. `mock_prove` yields correctly-sized (non-verifying, non-submittable)
+    /// `ProofMarker` offers whose serialized size, hence fee contribution, matches the real proofs'
+    /// exactly (ZK proofs are fixed-size), so the balancer can size the DUST fee offline. Only the
+    /// mock-proven offers leave; the key-bearing preimages are dropped here.
+    pub fn mock_shielded_offers(
+        &self,
+        network_id: &str,
+        segments: &[ShieldedSpendPlan],
+        tree: &ZswapLocalState<InMemoryDB>,
+    ) -> Result<ShieldedAuthorized, SignerError> {
+        let (preimages, binding_delta) = self.build_preimage_shielded_offers(segments, tree)?;
+        let mut proven = Vec::with_capacity(preimages.len());
+        for (segment, preimage) in preimages {
+            proven.push((segment, mock_prove_shielded_offer(network_id, preimage)?));
+        }
+        Ok(ShieldedAuthorized {
+            proven,
+            binding_delta,
+        })
+    }
+
+    /// Build proof-preimage dust spends sufficient to cover `fee_dust`. Offline — no proving, no
+    /// network. Shared by [`Self::authorize_dust`] (which proves them) and [`Self::mock_dust_spends`]
+    /// (which mock-proves them). The preimages carry the dust secret key, so they never leave the
+    /// provider.
+    fn build_preimage_dust_spends(
+        &self,
+        st: DustLocalState<InMemoryDB>,
+        fee_dust: u128,
+        dust_ctime: Timestamp,
+    ) -> Result<Vec<DustSpend<ProofPreimageMarker, InMemoryDB>>, SignerError> {
+        select_dust_spends_preimage(st, &self.dust_sk, fee_dust, dust_ctime)
+    }
+
+    /// Authorize the wallet's DUST fee. Builds proof-preimage dust spends using the already-held
+    /// `dust_sk` and proves them into a submittable `DustActions` section. The bearer preimage is
+    /// born and consumed here — only the proven section leaves — so this runs **after** the policy
+    /// seam.
+    ///
+    /// `async` because proving is; the caller drives it with its own executor.
+    pub async fn authorize_dust<P: ProvingProvider>(
+        &self,
+        dust_state: &DustLocalState<InMemoryDB>,
+        plan: &DustSpendPlan,
+        ledger_params: &LedgerParameters,
+        prover: P,
+    ) -> Result<DustActions<MnSignature, ProofMarker, InMemoryDB>, SignerError> {
+        let (_seg, proven_intent) = self
+            .dust_preimage_intent(dust_state, plan)?
+            .prove(
+                plan.seg_id,
+                prover,
+                &ledger_params.cost_model.runtime_cost_model,
+            )
+            .await
+            .map_err(|e| SignerError::SigningFailed(format!("prove dust spends failed: {e:?}")))?;
+        proven_intent
+            .dust_actions
+            .as_ref()
+            .map(|sp| sp.deref().clone())
+            .ok_or_else(|| {
+                SignerError::SigningFailed("proven dust intent has no dust actions".into())
+            })
+    }
+
+    /// Fee-sizing twin of [`Self::authorize_dust`]: the same proof-preimage DUST section, mock-proved
+    /// instead of proved. `mock_prove` yields a correctly-sized (non-verifying, non-submittable)
+    /// section whose fee and serialized size match the real proof's **exactly** (proofs are
+    /// fixed-size), so the balancer's fee loop can size it offline, with no proving keys. Only the
+    /// mock-proven section leaves; the key-bearing preimage is dropped here.
+    pub fn mock_dust_spends(
+        &self,
+        dust_state: &DustLocalState<InMemoryDB>,
+        plan: &DustSpendPlan,
+        network_id: &str,
+    ) -> Result<DustActions<MnSignature, ProofMarker, InMemoryDB>, SignerError> {
+        let intents: MnHashMap<u16, _, InMemoryDB> =
+            MnHashMap::new().insert(plan.seg_id, self.dust_preimage_intent(dust_state, plan)?);
+        let tx: Transaction<MnSignature, ProofPreimageMarker, PedersenRandomness, InMemoryDB> =
+            Transaction::Standard(StandardTransaction {
+                network_id: network_id.to_string(),
+                intents,
+                guaranteed_coins: None,
+                fallible_coins: MnHashMap::new(),
+                binding_randomness: Default::default(),
+            });
+        let Transaction::Standard(mock) = tx.mock_prove().map_err(|e| {
+            SignerError::SigningFailed(format!("mock-prove dust spends failed: {e:?}"))
+        })?
+        else {
+            return Err(SignerError::SigningFailed(
+                "mock-proven dust transaction was not Standard".into(),
+            ));
+        };
+        let intent = mock.intents.get(&plan.seg_id).ok_or_else(|| {
+            SignerError::SigningFailed("mock-proven dust transaction has no intent".into())
+        })?;
+        intent
+            .deref()
+            .dust_actions
+            .as_ref()
+            .map(|sp| sp.deref().clone())
+            .ok_or_else(|| {
+                SignerError::SigningFailed("mock-proven dust intent has no dust actions".into())
+            })
+    }
+
+    /// The single-intent DUST section [`Self::authorize_dust`] proves and [`Self::mock_dust_spends`]
+    /// mock-proves: spends covering `plan.fee_dust`, at the plan's segment, ttl and binding.
+    fn dust_preimage_intent(
+        &self,
+        dust_state: &DustLocalState<InMemoryDB>,
+        plan: &DustSpendPlan,
+    ) -> Result<Intent<MnSignature, ProofPreimageMarker, PedersenRandomness, InMemoryDB>, SignerError>
+    {
+        let spends =
+            self.build_preimage_dust_spends(dust_state.clone(), plan.fee_dust, plan.dust_ctime)?;
+        let dust_preimage: DustActions<MnSignature, ProofPreimageMarker, InMemoryDB> =
+            DustActions {
+                spends: spends.into_iter().collect(),
+                registrations: vec![].into(),
+                ctime: plan.dust_ctime,
+            };
+        Ok(Intent {
+            guaranteed_unshielded_offer: None,
+            fallible_unshielded_offer: None,
+            actions: vec![].into(),
+            dust_actions: Some(Sp::new(dust_preimage)),
+            ttl: plan.intent_ttl,
+            binding_commitment: plan.binding_commitment,
+        })
+    }
+}
+
+/// Mock-prove a single proof-preimage Zswap offer into a fixed-size `ProofMarker` offer. `mock_prove`
+/// operates on a whole transaction, so the offer is wrapped as the guaranteed coins of a throwaway
+/// standard tx (one trivial intent — the shape `mock_prove` accepts) and the proven offer is lifted
+/// back out.
+fn mock_prove_shielded_offer(
+    network_id: &str,
+    preimage: ZswapOffer<ProofPreimage, InMemoryDB>,
+) -> Result<ZswapOffer<ZswapProof, InMemoryDB>, SignerError> {
+    let binding_randomness = preimage.binding_randomness();
+    let trivial_intent: Intent<MnSignature, ProofPreimageMarker, PedersenRandomness, InMemoryDB> =
+        Intent {
+            guaranteed_unshielded_offer: None,
+            fallible_unshielded_offer: None,
+            actions: vec![].into(),
+            dust_actions: None,
+            ttl: Timestamp::from_secs(0),
+            binding_commitment: Default::default(),
+        };
+    let tx: Transaction<MnSignature, ProofPreimageMarker, PedersenRandomness, InMemoryDB> =
+        Transaction::Standard(StandardTransaction {
+            network_id: network_id.to_string(),
+            intents: MnHashMap::new().insert(0, trivial_intent),
+            guaranteed_coins: Some(Sp::new(preimage)),
+            fallible_coins: MnHashMap::new(),
+            binding_randomness,
+        });
+    let Transaction::Standard(mock) = tx.mock_prove().map_err(|e| {
+        SignerError::SigningFailed(format!("mock-prove shielded inputs failed: {e:?}"))
+    })?
+    else {
+        return Err(SignerError::SigningFailed(
+            "mock-proven shielded transaction was not Standard".into(),
+        ));
+    };
+    mock.guaranteed_coins
+        .as_ref()
+        .map(|sp| sp.deref().clone())
+        .ok_or_else(|| {
+            SignerError::SigningFailed(
+                "mock-proven shielded transaction has no guaranteed coins".into(),
+            )
+        })
+}
+
+/// Select just enough of the wallet's generated dust notes to pay exactly `fee_dust`, building each
+/// spend's proof-preimage against the synced state.
+///
+/// The selected spends' `v_fee` sums to `fee_dust` and no more: every star of `v_fee` is burnt, so a
+/// cushion added here would be a silent donation *and* would understate the burn to a policy (the
+/// plan reports `fee_dust` as the wallet's DUST outflow). The cushion that covers fee drift between
+/// sizing and inclusion belongs in `fee_dust` itself — the balancer sizes it with
+/// `Transaction::fees_with_margin`, which prices the ledger's per-block fee adjustment properly
+/// rather than guessing a multiplier.
+fn select_dust_spends_preimage(
+    mut st: DustLocalState<InMemoryDB>,
+    dsk: &DustSecretKey,
+    fee_dust: u128,
+    dust_ctime: Timestamp,
+) -> Result<Vec<DustSpend<ProofPreimageMarker, InMemoryDB>>, SignerError> {
+    let mut need = fee_dust;
+    let mut spends = Vec::new();
+    for qdo in st.utxos().collect::<Vec<_>>() {
+        if need == 0 {
+            break;
+        }
+        let Some(gen_info) = st.generation_info(&qdo) else {
+            continue;
+        };
+        let value = DustOutput::from(qdo).updated_value(&gen_info, dust_ctime, &st.params);
+        if value == 0 {
+            continue;
+        }
+        let v_fee = u128::min(value, need);
+        let (st2, spend) = st
+            .spend(dsk, &qdo, v_fee, dust_ctime)
+            .map_err(|e| SignerError::SigningFailed(format!("dust spend build failed: {e}")))?;
+        st = st2;
+        spends.push(spend);
+        need = need.saturating_sub(v_fee);
+    }
+    if need > 0 {
+        return Err(SignerError::SigningFailed(
+            "insufficient DUST balance to pay fees via a proof-bearing dust spend".into(),
+        ));
+    }
+    Ok(spends)
+}
+
+/// The wallet's DUST fee plan for one intent segment: the converged fee target plus the timing/segment
+/// context the signer needs to build and prove the fee section. Sized by the balancer offline; the
+/// signer realizes it into a submittable section. `binding_commitment` is copied from the
+/// transaction's real intent so the proved section splices back in.
+pub struct DustSpendPlan {
+    pub fee_dust: u128,
+    pub dust_ctime: Timestamp,
+    pub intent_ttl: Timestamp,
+    pub seg_id: u16,
+    pub binding_commitment: PedersenRandomness,
+}
+
+/// Deserialize a balanced proven (`proof,embedded-fr`) Midnight Standard transaction and locate every
+/// intent the wallet must sign — those carrying wallet-supplied unshielded inputs (guaranteed *or*
+/// fallible) or a dust fee registration. The balancer folds the guaranteed balancing inputs + dust into
+/// one chosen intent, but a fallible unshielded offer is balanced in its own segment, so more than one
+/// intent can need the wallet's key. Returned sorted by segment id so the sign and seal steps agree on
+/// order; every other intent carries through untouched.
+fn parse_balanced_standard(
+    tx_bytes: &[u8],
+) -> Result<(StdTxProvenUnsealed, Vec<(u16, IntentProvenUnsealed)>), SignerError> {
+    let mut r: &[u8] = tx_bytes;
+    let tx: TxProvenUnsealed = tagged_deserialize(&mut r).map_err(|e| {
+        SignerError::InvalidTransaction(format!("failed to parse balanced proven tx bytes: {e}"))
+    })?;
+    let Transaction::Standard(stx) = tx else {
+        return Err(SignerError::InvalidTransaction(
+            "expected Standard transaction".into(),
+        ));
+    };
+    let mut signing: Vec<(u16, IntentProvenUnsealed)> = Vec::new();
+    for pair_sp in stx.intents.iter() {
+        let (seg_id_sp, intent_sp) = pair_sp.deref();
+        let intent = intent_sp.deref().clone();
+        if intent.guaranteed_inputs().is_empty()
+            && intent.fallible_inputs().is_empty()
+            && dust_registration_count(&intent) == 0
+        {
+            continue;
+        }
+        signing.push((*seg_id_sp.deref(), intent));
+    }
+    signing.sort_by_key(|(seg, _)| *seg);
+    Ok((stx, signing))
+}
+
+/// Count the intent's dust fee registrations — the signature path the wallet signs with its Night
+/// key. Dust *spends* are authorized by their own ZK proof (built and proved by the balancer) and
+/// carry no signature, so they pass through untouched and are not counted here.
+fn dust_registration_count(intent: &IntentProvenUnsealed) -> usize {
+    intent
+        .dust_actions
+        .as_ref()
+        .map(|da| da.deref().registrations.len())
+        .unwrap_or(0)
+}
+
+/// Sign the unshielded intent of a balanced proven (`proof,embedded-fr`) Midnight Standard
+/// transaction with the wallet's Night key. The dapp has already proven the contract calls / zswap
+/// offers, so this is pure key work — one signature per guaranteed unshielded input and one per dust
+/// fee registration, all over the intent's signing message — with no proving, no seal, and no
+/// network. The signatures are returned tagged-serialized in that order (inputs, then registrations);
+/// [`seal_signed_proven`] reattaches and seals them.
+fn sign_proven_intent(private_key: &[u8], tx_bytes: &[u8]) -> Result<Vec<u8>, SignerError> {
+    let (_stx, signing) = parse_balanced_standard(tx_bytes)?;
+    if signing.is_empty() {
+        // Nothing carries the wallet's key (no wallet unshielded inputs, no dust registration).
+        return Ok(Vec::new());
+    }
+
+    let seeds = MidnightSigner::decode_keys(private_key)?;
+    let signing_key = MidnightSigningKey::from_bytes(seeds.unshielded.expose()).map_err(|e| {
+        SignerError::InvalidPrivateKey(format!("invalid midnight signing key: {e}"))
+    })?;
+    let vk = signing_key.verifying_key();
+    let own_dust_address = MidnightSigner::dust_public_key_from_seed(seeds.dust.expose())?;
+
+    let mut rng = OsRng;
+    let mut out = Vec::new();
+    for (seg_id, intent) in &signing {
+        // Every wallet-supplied input — guaranteed first, then fallible, matching the ledger's own
+        // `Intent::sign` order — must be owned by the signing key. The ledger appends one signature per
+        // input, each verified against that input's owner.
+        let mut inputs = intent.guaranteed_inputs();
+        inputs.extend(intent.fallible_inputs());
+        for inp in &inputs {
+            if inp.owner != vk {
+                return Err(SignerError::SigningFailed(
+                    "all balancing unshielded inputs must be owned by the signing key".into(),
+                ));
+            }
+        }
+        // Each dust fee registration is likewise keyed to (and signed by) the wallet's Night key. It
+        // routes that key's DUST generation to `dust_address`, so only the wallet's own dust address
+        // is signed: any other would give the generation away, and `None` (a deregistration) would
+        // switch it off.
+        if let Some(da) = intent.dust_actions.as_ref() {
+            for reg in da.deref().registrations.iter() {
+                if reg.night_key != vk {
+                    return Err(SignerError::SigningFailed(
+                        "dust fee registration must be owned by the signing key".into(),
+                    ));
+                }
+                match reg.dust_address.as_deref() {
+                    Some(addr) if *addr == own_dust_address => {}
+                    Some(_) => {
+                        return Err(SignerError::SigningFailed(
+                            "refusing to sign a dust registration to another dust address".into(),
+                        ))
+                    }
+                    None => {
+                        return Err(SignerError::SigningFailed(
+                            "refusing to sign a dust deregistration".into(),
+                        ))
+                    }
+                }
+            }
+        }
+        let n_regs = dust_registration_count(intent);
+
+        // The signing message is the proof- and signature-erased intent for this segment — computable
+        // without the key, and identical for every input and registration in it (this is what
+        // `Intent::sign` signs internally).
+        let data = intent
+            .erase_proofs()
+            .erase_signatures()
+            .data_to_sign(*seg_id);
+
+        for _ in 0..(inputs.len() + n_regs) {
+            let sig = signing_key.sign(&mut rng, &data);
+            // Plain (untagged) serialization: tagged_deserialize insists on consuming the whole buffer,
+            // so it can't read a concatenation of signatures back one at a time — `seal_signed_proven`
+            // reads exactly the per-intent (guaranteed + fallible inputs + registrations) count of them,
+            // in the same segment order.
+            sig.serialize(&mut out)
+                .map_err(|e| SignerError::SigningFailed(format!("serialize signature: {e}")))?;
+        }
+    }
+    Ok(out)
+}
+
+/// Marker prefixing a sealed-offer **merge envelope**: `[MARKER][taker_len: u32 LE][taker][maker]`.
+/// `authorize_merge` (ows-midnight) packs the proven-unsealed taker half and the sealed maker offer into
+/// one blob; the sign pipeline signs the taker (which [`MidnightSigner::extract_signable_bytes`] returns),
+/// then [`MidnightSigner::encode_signed_transaction`] seals the taker and [`merge_sealed`]s it onto the
+/// maker. The marker is chosen not to collide with a tagged Midnight transaction header
+/// (`midnight:transaction…`), so a plain transaction is never mistaken for an envelope.
+const MERGE_ENVELOPE_MARKER: &[u8] = b"ows.midnight.merge.v1\0";
+
+/// Pack the taker half (proven-unsealed) and the sealed maker offer into a merge envelope. Public so
+/// `ows-midnight`'s `authorize_merge` can build it without re-implementing the layout; the sign pipeline
+/// unpacks it via [`unwrap_merge_envelope`].
+pub fn wrap_merge_envelope(taker: &[u8], maker: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(MERGE_ENVELOPE_MARKER.len() + 4 + taker.len() + maker.len());
+    out.extend_from_slice(MERGE_ENVELOPE_MARKER);
+    out.extend_from_slice(&(taker.len() as u32).to_le_bytes());
+    out.extend_from_slice(taker);
+    out.extend_from_slice(maker);
+    out
+}
+
+/// Split a merge envelope into its `(taker, maker)` slices, or `None` when `bytes` is not an envelope —
+/// a normal transaction is not prefixed with the marker and passes through untouched.
+fn unwrap_merge_envelope(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+    if !bytes.starts_with(MERGE_ENVELOPE_MARKER) {
+        return None;
+    }
+    let rest = &bytes[MERGE_ENVELOPE_MARKER.len()..];
+    if rest.len() < 4 {
+        return None;
+    }
+    let taker_len = u32::from_le_bytes(rest[..4].try_into().ok()?) as usize;
+    let rest = &rest[4..];
+    if rest.len() < taker_len {
+        return None;
+    }
+    Some((&rest[..taker_len], &rest[taker_len..]))
+}
+
+/// Merge the taker's freshly sealed half onto the sealed maker offer, yielding the completed, submittable
+/// swap. Both halves must be sealed for `Transaction::merge` (it combines their binding markers); the
+/// tx-level binding randomness sums across them, so the merged whole is balanced with no re-seal.
+fn merge_sealed(maker_bytes: &[u8], taker_sealed_bytes: &[u8]) -> Result<Vec<u8>, SignerError> {
+    let mut mr: &[u8] = maker_bytes;
+    let maker: TxSealed = tagged_deserialize(&mut mr)
+        .map_err(|e| SignerError::InvalidTransaction(format!("parse sealed maker offer: {e}")))?;
+    let mut tr: &[u8] = taker_sealed_bytes;
+    let taker: TxSealed = tagged_deserialize(&mut tr)
+        .map_err(|e| SignerError::InvalidTransaction(format!("parse sealed taker half: {e}")))?;
+    let merged = maker
+        .merge(&taker)
+        .map_err(|e| SignerError::SigningFailed(format!("merge maker and taker offers: {e:?}")))?;
+    let mut out = Vec::new();
+    tagged_serialize(&merged, &mut out)
+        .map_err(|e| SignerError::SigningFailed(format!("serialize merged tx: {e}")))?;
+    Ok(out)
+}
+
+/// Reattach the [`sign_proven_intent`] signatures to the balanced proven transaction and seal it.
+/// Keyless: `add_signatures` and `.seal()` take no key, only an RNG. Returns the sealed tx bytes.
+fn seal_signed_proven(tx_bytes: &[u8], signatures: &[u8]) -> Result<Vec<u8>, SignerError> {
+    let (stx, signing) = parse_balanced_standard(tx_bytes)?;
+
+    // Reattach each intent's signatures in the same segment order `sign_proven_intent` produced them;
+    // every other intent carries through untouched.
+    let mut r: &[u8] = signatures;
+    let mut intents = stx.intents.clone();
+    for (seg_id, mut intent) in signing {
+        let n_guaranteed = intent.guaranteed_inputs().len();
+        let n_fallible = intent.fallible_inputs().len();
+        let n_regs = dust_registration_count(&intent);
+
+        let mut sigs: Vec<MnSignature> = Vec::with_capacity(n_guaranteed + n_fallible + n_regs);
+        for _ in 0..(n_guaranteed + n_fallible + n_regs) {
+            sigs.push(
+                MnSignature::deserialize(&mut r, 0).map_err(|e| {
+                    SignerError::InvalidTransaction(format!("parse signature: {e}"))
+                })?,
+            );
+        }
+        // Signatures within an intent are ordered guaranteed inputs, then fallible inputs, then dust
+        // registrations — matching `sign_proven_intent` and the ledger's own `Intent::sign`.
+        let guaranteed_sigs = &sigs[..n_guaranteed];
+        let fallible_sigs = &sigs[n_guaranteed..n_guaranteed + n_fallible];
+        let reg_sigs = &sigs[n_guaranteed + n_fallible..];
+
+        if let Some(offer_sp) = intent.guaranteed_unshielded_offer.as_ref() {
+            let mut offer = offer_sp.deref().clone();
+            offer.add_signatures(guaranteed_sigs.to_vec());
+            intent.guaranteed_unshielded_offer = Some(Sp::new(offer));
+        }
+        if let Some(offer_sp) = intent.fallible_unshielded_offer.as_ref() {
+            let mut offer = offer_sp.deref().clone();
+            offer.add_signatures(fallible_sigs.to_vec());
+            intent.fallible_unshielded_offer = Some(Sp::new(offer));
+        }
+
+        // Attach one signature to each dust fee registration, in order.
+        if let Some(da_sp) = intent.dust_actions.as_ref() {
+            let da = da_sp.deref().clone();
+            let registrations: Vec<DustRegistration<MnSignature, InMemoryDB>> = da
+                .registrations
+                .iter()
+                .zip(reg_sigs)
+                .map(|(reg, sig)| {
+                    let mut reg = (*reg).clone();
+                    reg.signature = Some(Sp::new(sig.clone()));
+                    reg
+                })
+                .collect();
+            intent.dust_actions = Some(Sp::new(DustActions {
+                spends: da.spends.clone(),
+                registrations: registrations.into(),
+                ctime: da.ctime,
+            }));
+        }
+
+        // Replace only this signed intent; the dapp's other intents carry through.
+        intents = intents.insert(seg_id, intent);
+    }
+    let stx_signed = StandardTransaction {
+        network_id: stx.network_id.clone(),
+        intents,
+        guaranteed_coins: stx.guaranteed_coins.clone(),
+        fallible_coins: stx.fallible_coins.clone(),
+        binding_randomness: stx.binding_randomness,
+    };
+    let tx_signed: TxProvenUnsealed = Transaction::Standard(stx_signed);
+
+    let sealed = tx_signed.seal(StdRng::from_entropy());
+
+    let mut out = Vec::new();
+    tagged_serialize(&sealed, &mut out)
+        .map_err(|e| SignerError::SigningFailed(format!("serialize sealed tx: {e}")))?;
+    Ok(out)
 }
 
 impl ChainSigner for MidnightSigner {
@@ -560,33 +1301,70 @@ impl ChainSigner for MidnightSigner {
         )
     }
 
+    /// Midnight never signs a caller-supplied digest: the ledger's signatures are made over
+    /// `data_to_sign` by [`ChainSigner::sign_transaction`], and messages are framed by
+    /// [`ChainSigner::sign_message`]. A raw signature with the unshielded key could authorize a spend.
     fn sign(&self, _private_key: &[u8], _message: &[u8]) -> Result<SignOutput, SignerError> {
         Err(SignerError::SigningFailed(
-            "Midnight signing is not implemented yet".into(),
+            "Midnight does not sign raw digests; sign a message or a transaction instead".into(),
         ))
     }
 
     fn sign_message(
         &self,
-        _private_key: &[u8],
-        _message: &[u8],
-        _address: Option<&str>,
+        private_key: &[u8],
+        message: &[u8],
+        address: Option<&str>,
     ) -> Result<SignOutput, SignerError> {
-        Err(SignerError::SigningFailed(
-            "Midnight message signing is not implemented yet".into(),
-        ))
+        self.verify_sign_message_address(private_key, address)?;
+        let provider = self.crypto_provider(&SecretBytes::from_slice(private_key))?;
+        let (signature, public_key) = provider.sign_unshielded_message(message)?;
+        Ok(SignOutput {
+            signature,
+            recovery_id: None,
+            public_key: Some(public_key),
+        })
+    }
+
+    /// The signable portion of a `signable_tx`. Identity for a plain proven transaction; for a
+    /// sealed-offer **merge envelope** it is the taker half (the sealed maker is already finalized and
+    /// needs no signature from this wallet), which [`encode_signed_transaction`] then seals and merges.
+    fn extract_signable_bytes<'a>(&self, tx_bytes: &'a [u8]) -> Result<&'a [u8], SignerError> {
+        match unwrap_merge_envelope(tx_bytes) {
+            Some((taker, _maker)) => Ok(taker),
+            None => Ok(tx_bytes),
+        }
     }
 
     fn sign_transaction(
         &self,
-        _private_key: &[u8],
-        _tx_bytes: &[u8],
+        private_key: &[u8],
+        tx_bytes: &[u8],
     ) -> Result<SignOutput, SignerError> {
-        Err(SignerError::SigningFailed(
-            "Midnight transaction signing is not implemented yet".into(),
-        ))
+        let signature = sign_proven_intent(private_key, tx_bytes)?;
+        Ok(SignOutput {
+            signature,
+            recovery_id: None,
+            public_key: None,
+        })
     }
 
+    /// Reattach the [`sign_proven_intent`] signatures and seal the transaction. Keyless — the
+    /// `signature` blob carries everything the seal needs. For a sealed-offer **merge envelope**, seal
+    /// the signed taker half and [`merge_sealed`] it onto the sealed maker — the completed swap.
+    fn encode_signed_transaction(
+        &self,
+        tx_bytes: &[u8],
+        signature: &SignOutput,
+    ) -> Result<Vec<u8>, SignerError> {
+        if let Some((taker, maker)) = unwrap_merge_envelope(tx_bytes) {
+            let sealed_taker = seal_signed_proven(taker, &signature.signature)?;
+            return merge_sealed(maker, &sealed_taker);
+        }
+        seal_signed_proven(tx_bytes, &signature.signature)
+    }
+
+    /// `index` selects the BIP-44 account: `m/44'/2400'/{index}'/0/0`.
     fn default_derivation_path(&self, index: u32) -> String {
         Self::derivation_path(Self::ROLE_UNSHIELDED, index)
     }
@@ -667,6 +1445,152 @@ mod tests {
         assert_eq!(provider.dust_public_key().unwrap(), expect_dpk);
         // The shielded key never leaves the provider; its fingerprint is stable and non-zero.
         assert_ne!(provider.shielded_key_fingerprint().unwrap(), [0u8; 32]);
+    }
+
+    /// With an empty dust state (no generated dust notes) the spend selection can cover nothing and
+    /// errors before ever touching the prover — the reachable slice of the proof-bearing dust path
+    /// without real dust notes or proving keys.
+    #[test]
+    fn build_preimage_dust_spends_errors_when_the_wallet_has_no_dust() {
+        let provider = MidnightSigner::mainnet()
+            .crypto_provider(&SecretBytes::from_slice(&signing_key_blob()))
+            .unwrap();
+        let st = DustLocalState::new(midnight_ledger::dust::INITIAL_DUST_PARAMETERS);
+        let e = provider
+            .build_preimage_dust_spends(st, 10_000, Timestamp::from_secs(2_000))
+            .unwrap_err();
+        assert!(
+            format!("{e}").contains("insufficient DUST balance"),
+            "unexpected error: {e}"
+        );
+    }
+
+    /// A dust state holding one generated note the wallet owns, replayed from the ledger's own
+    /// `DustInitialUtxo` event so the generation and commitment trees line up the way a synced state's
+    /// do — enough for `spend` to build a proof preimage against it, with no indexer or prover.
+    fn dust_state_with_one_note(
+        dsk: &DustSecretKey,
+        night_value: u128,
+        ctime: Timestamp,
+    ) -> DustLocalState<InMemoryDB> {
+        use midnight_base_crypto::hash::HashOutput;
+        use midnight_ledger::dust::{
+            dust_nonce, DustGenerationInfo, InitialNonce, QualifiedDustOutput,
+            INITIAL_DUST_PARAMETERS,
+        };
+        use midnight_ledger::events::{Event, EventDetails, EventSource};
+        use midnight_ledger::structure::TransactionHash;
+
+        let owner = DustPublicKey::from(dsk.clone());
+        let backing_night = InitialNonce(HashOutput([7u8; 32]));
+        let event = Event {
+            source: EventSource {
+                transaction_hash: TransactionHash(HashOutput([0u8; 32])),
+                logical_segment: 0,
+                physical_segment: 0,
+            },
+            content: EventDetails::DustInitialUtxo {
+                output: QualifiedDustOutput {
+                    initial_value: night_value
+                        .saturating_mul(INITIAL_DUST_PARAMETERS.night_dust_ratio as u128),
+                    owner,
+                    nonce: dust_nonce(&backing_night, 0, dsk),
+                    seq: 0,
+                    ctime,
+                    backing_night,
+                    mt_index: 0,
+                },
+                generation: DustGenerationInfo {
+                    value: night_value,
+                    owner,
+                    nonce: backing_night,
+                    dtime: Timestamp::from_secs(u64::MAX),
+                },
+                generation_index: 0,
+                block_time: ctime,
+            },
+        };
+        DustLocalState::new(INITIAL_DUST_PARAMETERS)
+            .replay_events(dsk, std::iter::once(&event))
+            .expect("replay the initial dust utxo")
+    }
+
+    /// The selected spends pay **exactly** the requested fee — no cushion. Every star of `v_fee` is
+    /// burnt, so a cushion here is a silent donation, and it would also understate the burn to a
+    /// policy (which is shown the plan's `fee_dust`). Headroom against fee drift belongs in
+    /// `fee_dust` itself, sized by the balancer with `fees_with_margin`.
+    #[test]
+    fn dust_spends_pay_exactly_the_requested_fee() {
+        let provider = MidnightSigner::mainnet()
+            .crypto_provider(&SecretBytes::from_slice(&signing_key_blob()))
+            .unwrap();
+        let ctime = Timestamp::from_secs(1_000);
+        // A whole NIGHT backing the note, spent an hour on so it has generated well past the fee.
+        let st = dust_state_with_one_note(
+            &provider.dust_sk,
+            midnight_ledger::structure::STARS_PER_NIGHT,
+            ctime,
+        );
+        let now = Timestamp::from_secs(1_000 + 3_600);
+
+        for fee in [1u128, 10_000, 999_999] {
+            let spends = provider
+                .build_preimage_dust_spends(st.clone(), fee, now)
+                .unwrap_or_else(|e| panic!("build spends for fee {fee}: {e}"));
+            let paid: u128 = spends.iter().map(|s| s.v_fee).sum();
+            assert_eq!(paid, fee, "spends must pay exactly the requested fee");
+        }
+    }
+
+    /// `recognize_shielded_inflow` picks up exactly the zswap outputs routed to this wallet — the
+    /// viewing-tier trial-decrypt behind true-net shielded effects. An output encrypted to the wallet's
+    /// shielded key is recognized with its token and value; a foreign-keyed output in the same offer is
+    /// ignored.
+    #[test]
+    fn recognize_shielded_inflow_finds_wallet_outputs_and_rejects_foreign() {
+        use midnight_base_crypto::hash::HashOutput;
+        use rand::Rng as _;
+
+        let wallet = MidnightSigner::mainnet()
+            .crypto_provider(&SecretBytes::from_slice(&signing_key_blob()))
+            .unwrap();
+        let foreign = ZswapSecretKeys::from(ZswapSeed::from([9u8; 32]));
+
+        let mut rng = OsRng;
+        let wallet_token = ShieldedTokenType(HashOutput([4u8; 32]));
+        let wallet_coin = CoinInfo {
+            nonce: rng.r#gen(),
+            type_: wallet_token,
+            value: 4242,
+        };
+        let foreign_coin = CoinInfo {
+            nonce: rng.r#gen(),
+            type_: ShieldedTokenType(HashOutput([5u8; 32])),
+            value: 777,
+        };
+
+        let wallet_out = ZswapOutput::new(
+            &mut rng,
+            &wallet_coin,
+            Some(0),
+            &wallet.shielded_keys.coin_public_key(),
+            Some(wallet.shielded_keys.enc_public_key()),
+        )
+        .unwrap();
+        let foreign_out = ZswapOutput::new(
+            &mut rng,
+            &foreign_coin,
+            Some(0),
+            &foreign.coin_public_key(),
+            Some(foreign.enc_public_key()),
+        )
+        .unwrap();
+
+        let offer = ZswapOffer::new(vec![], vec![wallet_out, foreign_out], vec![]).unwrap();
+        assert_eq!(
+            wallet.recognize_shielded_inflow(&offer),
+            vec![(wallet_token, 4242)]
+        );
     }
 
     // Role seeds for the abandon-phrase wallet at index 0
@@ -766,6 +1690,60 @@ mod tests {
     }
 
     #[test]
+    fn midnight_dust_address_carries_network_id_in_hrp() {
+        use bech32::primitives::decode::CheckedHrpstring;
+
+        // The dust address must carry the network id in its HRP, exactly like the
+        // unshielded/shielded addresses — a preview/preprod dust address must NOT be
+        // indistinguishable from a mainnet one. The underlying dust key (payload) is
+        // network-independent; ONLY the HRP differs.
+        let blob = signing_key_blob();
+        let mainnet = MidnightSigner::mainnet()
+            .derive_addresses(&blob)
+            .unwrap()
+            .dust;
+        let preview = MidnightSigner::preview()
+            .derive_addresses(&blob)
+            .unwrap()
+            .dust;
+        let preprod = MidnightSigner::preprod()
+            .derive_addresses(&blob)
+            .unwrap()
+            .dust;
+
+        // Each network stamps its own dust HRP.
+        assert!(
+            mainnet.starts_with("mn_dust1"),
+            "mainnet dust HRP: {mainnet}"
+        );
+        assert!(
+            preview.starts_with("mn_dust_preview1"),
+            "preview dust HRP: {preview}"
+        );
+        assert!(
+            preprod.starts_with("mn_dust_preprod1"),
+            "preprod dust HRP: {preprod}"
+        );
+
+        // The three addresses are distinct strings (a missing network id would make
+        // preview/preprod collide with mainnet)...
+        assert_ne!(mainnet, preview);
+        assert_ne!(mainnet, preprod);
+        assert_ne!(preview, preprod);
+
+        // ...yet decode to the SAME payload — proving the only difference is the
+        // network-id HRP, not the dust key.
+        let payload = |addr: &str| {
+            CheckedHrpstring::new::<Bech32m>(addr)
+                .unwrap()
+                .byte_iter()
+                .collect::<Vec<u8>>()
+        };
+        assert_eq!(payload(&mainnet), payload(&preview));
+        assert_eq!(payload(&mainnet), payload(&preprod));
+    }
+
+    #[test]
     fn midnight_preview_unshielded_address_matches_reencode() {
         let key = signing_key_blob();
         let mainnet_addr = MidnightSigner::mainnet().derive_address(&key).unwrap();
@@ -790,6 +1768,13 @@ mod tests {
             MidnightSigner::from_chain_id("midnight:preprod").network,
             MidnightNetwork::preprod()
         );
+    }
+
+    #[test]
+    fn midnight_ledger_network_id_maps_networks() {
+        assert_eq!(MidnightSigner::mainnet().ledger_network_id(), "mainnet");
+        assert_eq!(MidnightSigner::preview().ledger_network_id(), "preview");
+        assert_eq!(MidnightSigner::preprod().ledger_network_id(), "preprod");
     }
 
     #[test]
@@ -871,9 +1856,204 @@ mod tests {
     }
 
     #[test]
+    fn midnight_index_selects_the_account_not_the_address_index() {
+        let signer = MidnightSigner::mainnet();
+        assert_eq!(
+            signer.default_derivation_paths(1),
+            vec![
+                "m/44'/2400'/1'/0/0".to_string(),
+                "m/44'/2400'/1'/3/0".to_string(),
+                "m/44'/2400'/1'/2/0".to_string(),
+            ]
+        );
+        assert_eq!(signer.default_derivation_path(7), "m/44'/2400'/7'/0/0");
+    }
+
+    #[test]
+    fn midnight_account_from_path_inverts_the_derivation_path() {
+        let signer = MidnightSigner::mainnet();
+        for account in [0, 1, 7, 0x7fff_ffff] {
+            for path in signer.default_derivation_paths(account) {
+                assert_eq!(MidnightSigner::account_from_path(&path), Some(account));
+            }
+        }
+        // A path from before the account level was selectable put the index last; for a nonzero
+        // index it names no account these keys derive at.
+        assert_eq!(
+            MidnightSigner::account_from_path("m/44'/2400'/0'/0/7"),
+            None
+        );
+        assert_eq!(MidnightSigner::account_from_path("m/44'/2400'/3/0/0"), None);
+        assert_eq!(MidnightSigner::account_from_path("m/44'/60'/3'/0/0"), None);
+        assert_eq!(MidnightSigner::account_from_path(""), None);
+    }
+
+    #[test]
     fn midnight_opts_out_of_private_key_import() {
         // A single raw curve key can't represent the three-seed MNK1 bundle, so
         // universal-wallet import skips Midnight rather than deriving from a bare key.
         assert!(!MidnightSigner::mainnet().supports_private_key_import());
+    }
+
+    #[test]
+    fn midnight_sign_message_signs_with_the_unshielded_address_key() {
+        use k256::schnorr::signature::Verifier as _;
+
+        let signer = MidnightSigner::mainnet();
+        let blob = signing_key_blob();
+        let message = b"hello midnight";
+
+        let out = signer.sign_message(blob.as_slice(), message, None).unwrap();
+
+        // 64-byte BIP-340 signature, no recovery id, 32-byte x-only public key.
+        assert_eq!(out.signature.len(), 64);
+        assert_eq!(out.recovery_id, None);
+        let pubkey = out.public_key.clone().expect("public key present");
+        assert_eq!(pubkey.len(), 32);
+
+        // The signature covers the signData frame, not the bare message.
+        let vk = k256::schnorr::VerifyingKey::from_bytes(&pubkey).unwrap();
+        let sig = k256::schnorr::Signature::try_from(out.signature.as_slice()).unwrap();
+        vk.verify(&signed_message_bytes(message), &sig)
+            .expect("signature verifies over the framed message");
+        assert!(vk.verify(message, &sig).is_err());
+
+        // The signing pubkey maps back to the wallet's own unshielded address (sha256 -> bech32m),
+        // so a verifier can recover the signer's address from the returned key.
+        let addr_from_pubkey = MidnightSigner::bech32m_encode(
+            &MidnightNetwork::mainnet().unshielded_hrp().unwrap(),
+            &sha2::Sha256::digest(&pubkey),
+        )
+        .unwrap();
+        assert_eq!(
+            addr_from_pubkey,
+            signer.derive_addresses(&blob).unwrap().unshielded
+        );
+    }
+
+    #[test]
+    fn midnight_signed_message_bytes_match_the_mip_0031_vectors() {
+        // The payload is the decoded bytes: `decade` as text is 6 bytes, as hex it is 3.
+        assert_eq!(
+            hex::encode(signed_message_bytes(b"decade")),
+            "6d69646e696768745f7369676e65645f6d6573736167653a363a646563616465"
+        );
+        let framed = signed_message_bytes(&[0xde, 0xca, 0xde]);
+        assert_eq!(
+            hex::encode(&framed),
+            "6d69646e696768745f7369676e65645f6d6573736167653a333adecade"
+        );
+        assert_eq!(
+            hex::encode(sha2::Sha256::digest(&framed)),
+            "3e1a914a91ed897e6e20423b3761a6026a9cdd039867f74e509d4f8af885f0e4"
+        );
+        assert_eq!(signed_message_bytes(b""), b"midnight_signed_message:0:");
+    }
+
+    #[test]
+    fn midnight_refuses_to_sign_a_raw_digest() {
+        let err = MidnightSigner::mainnet()
+            .sign(signing_key_blob().as_slice(), &[0x11; 32])
+            .unwrap_err();
+        assert!(matches!(err, SignerError::SigningFailed(_)));
+    }
+
+    #[test]
+    fn midnight_sign_message_refuses_an_address_other_than_the_signing_key() {
+        let signer = MidnightSigner::mainnet();
+        let blob = signing_key_blob();
+        let own = signer.derive_addresses(&blob).unwrap();
+        let message = b"hello midnight";
+
+        assert!(signer
+            .sign_message(blob.as_slice(), message, Some(&own.unshielded))
+            .is_ok());
+
+        // Only the unshielded address names the signing key: the same account's shielded and dust
+        // addresses, and its unshielded address on another network, are all refused.
+        let other_network = MidnightSigner::preview()
+            .derive_addresses(&blob)
+            .unwrap()
+            .unshielded;
+        for foreign in [&own.shielded, &own.dust, &other_network] {
+            let err = signer
+                .sign_message(blob.as_slice(), message, Some(foreign))
+                .unwrap_err();
+            assert!(matches!(err, SignerError::AddressMismatch), "{foreign}");
+        }
+    }
+
+    /// Message signatures and the ledger's intent and reward-claim signatures share the unshielded
+    /// key, so the bytes they cover must never coincide. Every ledger signing domain starts
+    /// `midnight:`, and the frame differs from that at its ninth byte whatever the payload, even one
+    /// that is itself ledger signing data.
+    #[test]
+    fn midnight_message_frame_is_disjoint_from_the_ledger_signing_domains() {
+        use midnight_base_crypto::hash::HashOutput;
+        use midnight_coin_structure::coin::Nonce;
+        use midnight_ledger::structure::{ClaimKind, ClaimRewardsTransaction};
+
+        let intent: Intent<MnSignature, ProofPreimageMarker, PedersenRandomness, InMemoryDB> =
+            Intent {
+                guaranteed_unshielded_offer: None,
+                fallible_unshielded_offer: None,
+                actions: vec![].into(),
+                dust_actions: None,
+                ttl: Timestamp::from_secs(0),
+                binding_commitment: Default::default(),
+            };
+        let intent_data = intent.erase_proofs().erase_signatures().data_to_sign(1);
+        assert!(intent_data.starts_with(b"midnight:hash-intent:"));
+
+        let owner = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_KEY_HEX).unwrap())
+            .unwrap()
+            .verifying_key();
+        let claim = ClaimRewardsTransaction::<(), InMemoryDB> {
+            network_id: "mainnet".into(),
+            value: 1,
+            owner,
+            nonce: Nonce(HashOutput([0; 32])),
+            signature: (),
+            kind: ClaimKind::Reward,
+        };
+        let claim_data = claim.data_to_sign();
+        assert!(claim_data.starts_with(b"midnight:sig-claim_rewards_transaction:"));
+
+        for payload in [
+            &intent_data[..],
+            &claim_data[..],
+            b"midnight:contract-update:",
+            b"",
+        ] {
+            let framed = signed_message_bytes(payload);
+            assert!(framed.starts_with(SIGNED_MESSAGE_PREFIX.as_bytes()));
+            assert!(!framed.starts_with(b"midnight:"));
+        }
+    }
+
+    /// The frame names no network, so a message signature speaks for the wallet on every Midnight
+    /// network: each network's signer signs with the same key, and its signature verifies under it.
+    #[test]
+    fn midnight_message_signatures_do_not_depend_on_the_network() {
+        use k256::schnorr::signature::Verifier as _;
+
+        let blob = signing_key_blob();
+        let message = b"hello midnight";
+        let signed: Vec<SignOutput> = [
+            MidnightSigner::mainnet(),
+            MidnightSigner::preview(),
+            MidnightSigner::from_chain_id("midnight:feature-x"),
+        ]
+        .iter()
+        .map(|signer| signer.sign_message(&blob, message, None).unwrap())
+        .collect();
+
+        let public_key = signed[0].public_key.clone().unwrap();
+        let vk = k256::schnorr::VerifyingKey::from_bytes(&public_key).unwrap();
+        for out in &signed {
+            assert_eq!(out.public_key.as_deref(), Some(public_key.as_slice()));
+            let sig = k256::schnorr::Signature::try_from(out.signature.as_slice()).unwrap();
+            vk.verify(&signed_message_bytes(message), &sig).unwrap();
+        }
     }
 }

@@ -11,8 +11,8 @@
 //! `<hash>` covers `(indexer_url, chain_id, stream-specific key)` so preview / preprod /
 //! mainnet never share a snapshot even when the key material matches.
 //!
-//! Without a wallet id, snapshots omit the `{wallet_id}/` segment. `{vault}` is the
-//! configured vault path (`config.vault_path`, default `~/.ows`).
+//! Without a wallet id, snapshots omit the `{wallet_id}/` segment. `{vault}` is the scope's
+//! vault path, the vault the caller named, else `~/.ows`.
 //!
 //! ## Environment
 //!
@@ -85,6 +85,13 @@ pub fn cache_root_dir(subdir: &str, scope: &SyncCacheScope) -> Option<PathBuf> {
             .join("cache")
             .join(subdir),
     )
+}
+
+/// Directory holding the shared Midnight ZK proving keys (circuit prover/verifier keys + IR):
+/// `{vault}/chains/midnight/proving-keys`. Vault-rooted like the snapshots but not per-scope — the
+/// keys are circuit assets shared across wallets, and not disabled by `OWS_MIDNIGHT_SYNC_CACHE`.
+pub fn proving_keys_dir(scope: &SyncCacheScope) -> Option<PathBuf> {
+    vault_root(scope).map(|v| v.join("chains").join("midnight").join("proving-keys"))
 }
 
 /// File path for the snapshot keyed by `(indexer_url, chain_id, key)` under `subdir`.
