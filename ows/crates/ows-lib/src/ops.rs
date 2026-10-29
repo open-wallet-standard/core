@@ -1027,13 +1027,19 @@ pub fn sign_and_send(
             },
             vault_path,
         )?;
-        return sign_encode_and_broadcast(key.expose(), chain, &signable_tx, rpc_url);
+        return sign_encode_and_broadcast_in(
+            key.expose(),
+            chain,
+            &signable_tx,
+            rpc_url,
+            vault_path,
+        );
     }
 
     // Owner mode — full authority, no policy gate.
     let key = decrypt_signing_key(wallet, chain_info.chain_type, credential, index, vault_path)?;
     let signable_tx = prepare_signable_tx(&chain_info, tx_bytes, &key, |_| Ok(()), vault_path)?;
-    sign_encode_and_broadcast(key.expose(), chain, &signable_tx, rpc_url)
+    sign_encode_and_broadcast_in(key.expose(), chain, &signable_tx, rpc_url, vault_path)
 }
 
 /// Sign, encode, and broadcast a transaction using an already-resolved private key.
@@ -1047,6 +1053,18 @@ pub fn sign_encode_and_broadcast(
     chain: &str,
     tx_bytes: &[u8],
     rpc_url: Option<&str>,
+) -> Result<SendResult, OwsLibError> {
+    sign_encode_and_broadcast_in(private_key, chain, tx_bytes, rpc_url, None)
+}
+
+/// [`sign_encode_and_broadcast`] for a caller that names its vault, whose config then names the
+/// Midnight node the transaction is submitted to, as it names the indexer and proof server.
+fn sign_encode_and_broadcast_in(
+    private_key: &[u8],
+    chain: &str,
+    tx_bytes: &[u8],
+    rpc_url: Option<&str>,
+    vault_path: Option<&Path>,
 ) -> Result<SendResult, OwsLibError> {
     let chain = parse_chain(chain)?;
     let signer = signer_for_chain(&chain)?;
@@ -1063,7 +1081,7 @@ pub fn sign_encode_and_broadcast(
     // 4. Resolve the RPC URL. Midnight submits to a Substrate node, which is a different endpoint
     //    than the GraphQL indexer that `resolve_rpc_url` returns for balance queries.
     let rpc = if chain.chain_type == ChainType::Midnight {
-        resolve_midnight_node_rpc_url(chain.chain_id, rpc_url)?
+        resolve_midnight_node_rpc_url(chain.chain_id, rpc_url, vault_path)?
     } else {
         resolve_rpc_url(chain.chain_id, chain.chain_type, rpc_url)?
     };
@@ -1135,26 +1153,22 @@ pub fn resolve_rpc_url(
 
 /// Resolve the Midnight node (Substrate) RPC URL for transaction submission — the endpoint that
 /// accepts `Midnight::send_mn_transaction`, distinct from the GraphQL indexer used for balance
-/// queries. Looks up the `{chain_id}:node` key (e.g. `midnight:preview:node`); an explicit
-/// `--rpc-url` override wins. There is deliberately no namespace fallback, so a missing entry errors
-/// instead of silently returning the indexer URL.
+/// queries. Looks up the `{chain_id}:node` key (e.g. `midnight:preview:node`) in the config of the
+/// vault the caller named; an explicit `--rpc-url` override wins. There is deliberately no namespace
+/// fallback, so a missing entry errors instead of silently returning the indexer URL.
 fn resolve_midnight_node_rpc_url(
     chain_id: &str,
     explicit: Option<&str>,
+    vault_path: Option<&Path>,
 ) -> Result<String, OwsLibError> {
     if let Some(url) = explicit {
         return Ok(url.to_string());
     }
-    let key = format!("{chain_id}:node");
-    if let Some(url) = Config::load_or_default().rpc.get(&key) {
-        return Ok(url.clone());
-    }
-    if let Some(url) = Config::default_rpc().get(&key) {
-        return Ok(url.clone());
-    }
-    Err(OwsLibError::InvalidInput(format!(
-        "no Midnight node RPC URL configured for '{chain_id}' (pass --rpc-url <node-url> or set rpc.{key})"
-    )))
+    ows_midnight::resolve_node_url(chain_id, vault_path).ok_or_else(|| {
+        OwsLibError::InvalidInput(format!(
+            "no Midnight node RPC URL configured for '{chain_id}' (pass --rpc-url <node-url> or set rpc.{chain_id}:node)"
+        ))
+    })
 }
 
 /// Broadcast a signed transaction via curl, dispatching per chain type.
@@ -3111,6 +3125,39 @@ mod tests {
             "the vault's indexer was not the one used: {err}"
         );
         assert!(err.to_string().contains("plaintext"), "{err}");
+    }
+
+    /// The node a send broadcasts to comes from the named vault too: a maker offer that spends no coin
+    /// signs offline, and its broadcast is refused at the plaintext remote node that vault configures,
+    /// where `~/.ows` or the built-in preview node would otherwise have been dialled.
+    #[test]
+    fn midnight_send_reads_its_node_from_the_named_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        import_wallet_mnemonic("mn-vault", phrase, None, None, Some(dir.path())).unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"vault_path":"/ignored","rpc":{"midnight:preview:node":"http://node.vault.example/?apikey=KEY"}}"#,
+        )
+        .unwrap();
+        let request = r#"{"method":"makeIntent","desiredInputs":[],"desiredOutputs":[{"kind":"unshielded","type":"night","value":"5","recipient":"mn_addr_preview1dwv2rta0a2skyhrvukaw2q9r2sq6yc4jhj63rf7afxpkrrv6g35q4y8xms"}]}"#;
+
+        let err = sign_and_send(
+            "mn-vault",
+            "midnight:preview",
+            request,
+            None,
+            None,
+            None,
+            Some(dir.path()),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("node.vault.example"),
+            "the vault's node was not the one used: {err}"
+        );
+        assert!(err.to_string().contains("plaintext"), "{err}");
+        assert!(!err.to_string().contains("KEY"), "{err}");
     }
 
     #[test]

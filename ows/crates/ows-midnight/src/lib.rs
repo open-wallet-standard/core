@@ -37,6 +37,7 @@ pub use fund_balance::{print_addresses, print_fund_balance};
 pub use ledger_params::fetch_indexer_ledger_parameters;
 pub use prover::Prover;
 pub use submit::broadcast_sealed;
+pub use wallet::resolve_node_url;
 pub use wallet_sync::dust::{format_dust_specks, get_dust_balance_for_display};
 pub use wallet_sync::shielded::get_shielded_balances_for_display;
 pub use wallet_sync::unshielded::{get_unshielded_utxos_for_display, UnshieldedUtxo};

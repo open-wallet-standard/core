@@ -57,6 +57,16 @@ pub fn resolve_midnight_prover_url(chain_id: &str, vault_path: Option<&Path>) ->
         .filter(|s| !s.is_empty())
 }
 
+/// Resolve the configured Midnight node URL, the one a sealed transaction is submitted to, for a
+/// CAIP-2 chain id from the vault's config: `rpc["{chain_id}:node"]` (e.g. `midnight:preview:node`).
+/// There is deliberately no fallback to the chain's own entry, which names the indexer.
+pub fn resolve_node_url(chain_id: &str, vault_path: Option<&Path>) -> Option<String> {
+    vault_config(vault_path)
+        .rpc
+        .get(&format!("{chain_id}:node"))
+        .cloned()
+}
+
 /// The sync-cache scope of a signing call: its network, with the snapshots and proving keys under the
 /// caller's vault (`~/.ows` by default).
 pub(crate) fn signing_scope(chain_id: &str, vault_path: Option<&Path>) -> SyncCacheScope {
@@ -158,6 +168,7 @@ mod tests {
                 "vault_path": "/ignored",
                 "rpc": {
                     "midnight:preview": "https://indexer.vault.example/api/v4/graphql",
+                    "midnight:preview:node": "https://node.vault.example/",
                     "midnight:preview:prover": "https://prover.vault.example"
                 }
             })),
@@ -167,12 +178,22 @@ mod tests {
             "https://indexer.vault.example/api/v4/graphql"
         );
         assert_eq!(
+            resolve_node_url("midnight:preview", Some(&vault)).as_deref(),
+            Some("https://node.vault.example/")
+        );
+        assert_eq!(
             resolve_midnight_prover_url("midnight:preview", Some(&vault)).as_deref(),
             Some("https://prover.vault.example")
         );
 
         let empty = vault_with_config("empty", None);
         assert!(resolve_midnight_prover_url("midnight:preview", Some(&empty)).is_none());
+        // Only preview ships a node default, and no network falls back to its indexer.
+        assert_eq!(
+            resolve_node_url("midnight:preview", Some(&empty)).as_deref(),
+            Some("https://rpc.preview.midnight.network/")
+        );
+        assert!(resolve_node_url("midnight:preprod", Some(&vault)).is_none());
 
         let scope = signing_scope("midnight:preview", Some(&vault));
         assert!(crate::cache_io::proving_keys_dir(&scope)

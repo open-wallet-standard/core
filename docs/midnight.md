@@ -1017,8 +1017,8 @@ key-bearing preimages (enforced by the `no_key_material_gate` workspace test).
 ### Node RPC
 
 Submission talks to the Substrate node RPC, resolved **separately from the balance indexer**. Provide
-it with `--rpc-url <url>`, else it resolves from `~/.ows/config.json` under
-`rpc["midnight:<network>:node"]`. Only preview ships a default; for mainnet and preprod, set it
+it with `--rpc-url <url>`, else it resolves from the vault's config (`~/.ows/config.json` for the
+CLI, see [Which config file](#which-config-file)) under `rpc["midnight:<network>:node"]`. Only preview ships a default; for mainnet and preprod, set it
 yourself, to a hosted endpoint from the same networks guide or to your own node. A plaintext
 `http://` or `ws://` URL is accepted only for a loopback address, such as a local node; anything else
 needs `https://` or `wss://`. Credentials in the URL never appear in error messages. Each node call
@@ -1561,12 +1561,11 @@ reached (and optionally `midnight:feature-x:prover` for a remote proof server).
 
 ### Which config file
 
-The indexer and the proof server come from the config of the vault the call runs against, and the
-snapshot caches and proving keys live under that vault. For the CLI that is `~/.ows`. A caller that
-names its own vault (the Node or Python bindings, or ows-lib with an explicit `vault_path`) gets
-`{vault}/config.json` and `{vault}/chains/midnight/…`, so a `:prover` or indexer entry in the
-process's `~/.ows/config.json` cannot reach a signing call made against another vault. The node a
-`sign send-tx` broadcasts to is still looked up in `~/.ows/config.json`.
+The indexer, the node and the proof server come from the config of the vault the call runs against,
+and the snapshot caches and proving keys live under that vault. For the CLI that is `~/.ows`. A caller
+that names its own vault (the Node or Python bindings, or ows-lib with an explicit `vault_path`) gets
+`{vault}/config.json` and `{vault}/chains/midnight/…`, so a `:prover`, `:node` or indexer entry in the
+process's `~/.ows/config.json` cannot reach a signing or sending call made against another vault.
 
 ### How this differs from other chains
 
