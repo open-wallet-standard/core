@@ -1163,7 +1163,9 @@ performs, so a policy can gate on *who* as well as *how much*:
   "address": "9f3c…",
   "entry_point": "swap",
   "sent_to":       [["0000…", "1000"]],
-  "received_from": [["a71b…", "25"]] }
+  "received_from": [["a71b…", "25"]],
+  "payouts": [{ "token": "a71b…", "amount": "25", "recipient": "3e08…",
+                "recipient_kind": "user", "to_wallet": true }] }
 ```
 
 - **`segment`** — the segment this action executes in, same convention as the effects: `0`
@@ -1173,9 +1175,16 @@ performs, so a policy can gate on *who* as well as *how much*:
   rather than by where it sits in the list. Entry count tracks transcripts, not intents.
 - **`kind`** — `call`, `deploy`, or `maintain`. Only a `call` names an `entry_point`; a
   deploy or a maintenance update declares no value movement, so its amounts are empty.
-- **`sent_to` / `received_from`** — per token, the value the contract's transcript declares
-  it takes in and pays out, named from the wallet's side, as a decimal string like the
-  effects' deltas.
+- **`sent_to` / `received_from`** — per token, the **total** value the contract's transcript
+  declares it takes in and pays out, as a decimal string like the effects' deltas. The names are
+  kept for compatibility, but neither is the wallet's own: `sent_to` is what every party to the
+  transaction pays the contract together, and `received_from` is what the contract pays out to
+  every recipient together, the wallet or not.
+- **`payouts`** — who `received_from` goes to: one entry per token and recipient the call's
+  transcript declares an unshielded payout to, with the recipient's hex address (a user's address
+  hash, or a contract's address), `recipient_kind` (`user` or `contract`) and `to_wallet`, whether
+  the recipient is the wallet's own unshielded address. A deploy or a maintenance update has none.
+  Mints and shielded transfers a call declares are not reported here.
 
 Only the `balance*` methods can carry contract actions — they complete a transaction someone
 else authored. `makeTransfer` and `makeIntent` build the wallet's own transfer from the
@@ -1187,7 +1196,9 @@ request alone, so their `contracts` is always empty.
 > normal shape for a wallet-authored connector transaction, but not a guarantee. For what the
 > wallet actually moves, cap on `segment_effects`; use `contracts` to decide **whether to
 > deal with this counterparty at all** (an address allow-list, an entry-point allow-list),
-> not as a second opinion on the amounts.
+> not as a second opinion on the amounts. A "fair swap" rule that allows a call because its
+> `received_from` covers its `sent_to` would allow one that pays everything to a third party:
+> if a rule must reason about a payout, read the `payouts` with `to_wallet`.
 
 ```python
 #!/usr/bin/env python3

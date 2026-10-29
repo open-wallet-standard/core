@@ -14,7 +14,7 @@ use std::ops::Deref as _;
 
 use midnight_base_crypto::signatures::Signature as MnSig;
 use midnight_base_crypto::time::Timestamp;
-use midnight_coin_structure::coin::TokenType as LedgerTokenType;
+use midnight_coin_structure::coin::{TokenType as LedgerTokenType, UserAddress};
 use midnight_ledger::structure::{ProofMarker, StandardTransaction, Transaction};
 use midnight_serialize::{tagged_deserialize, tagged_serialize};
 use midnight_storage::arena::Sp;
@@ -318,6 +318,7 @@ pub(super) fn sealed_maker_complement(
 /// transaction performs, at the maker's own segments.
 pub(super) fn maker_contracts(
     maker_bytes: &[u8],
+    wallet: &UserAddress,
 ) -> Result<Vec<crate::contracts::ContractInteraction>, std::io::Error> {
     let mut r: &[u8] = maker_bytes;
     let tx: TxSealed = tagged_deserialize(&mut r)
@@ -327,7 +328,10 @@ pub(super) fn maker_contracts(
             "balanceSealedTransaction expects a Standard maker transaction",
         ));
     };
-    Ok(crate::contracts::contract_interactions(base.actions()))
+    Ok(crate::contracts::contract_interactions(
+        base.actions(),
+        wallet,
+    ))
 }
 
 /// A sealed-maker merge decided before the policy seam: the maker's sealed bytes, the taker's
@@ -692,7 +696,8 @@ mod merge_tests {
         // The fixture is a plain token swap, so it names no contract — what matters here is that a
         // sealed maker's actions are readable at all, i.e. the seam reports `contracts` for a merge
         // instead of failing to parse the maker it already balances against.
-        assert_eq!(maker_contracts(&bytes).unwrap(), Vec::new());
+        let wallet = UserAddress(HashOutput([0; 32]));
+        assert_eq!(maker_contracts(&bytes, &wallet).unwrap(), Vec::new());
     }
 }
 

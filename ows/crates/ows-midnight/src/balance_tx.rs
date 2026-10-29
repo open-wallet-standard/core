@@ -985,8 +985,8 @@ impl BalancedPlan {
     /// contract declares it takes in and pays out. The counterpart the wallet-relative
     /// [effects](Self::segment_effects) deliberately omit; the wallet's own balancing adds no contract
     /// action, so these are entirely the dapp's.
-    pub(crate) fn contracts(&self) -> Vec<ContractInteraction> {
-        contract_interactions(self.base.actions())
+    pub(crate) fn contracts(&self, wallet: &UserAddress) -> Vec<ContractInteraction> {
+        contract_interactions(self.base.actions(), wallet)
     }
 
     /// How the wallet pays this plan's DUST fee, and the most DUST that can take.

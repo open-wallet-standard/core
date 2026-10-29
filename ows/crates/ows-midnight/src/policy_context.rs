@@ -129,6 +129,7 @@ mod tests {
                 entry_point: Some("swap".to_string()),
                 sent_to: vec![("00".repeat(32), "5".to_string())],
                 received_from: vec![],
+                payouts: vec![],
             }],
             fee: FeeContext::none(),
             dust_registrations: vec![],
@@ -153,6 +154,7 @@ mod tests {
                 "entry_point": "swap",
                 "sent_to": [["00".repeat(32), "5"]],
                 "received_from": [],
+                "payouts": [],
             })
         );
         assert!(json.get("offer").is_none(), "only a maker offer has one");

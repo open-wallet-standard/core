@@ -141,15 +141,23 @@ impl ConnectorPlan {
     ///
     /// Only the `balance*` methods can carry any: they complete a transaction someone else authored.
     /// The `make*` methods build the wallet's own transfer from the request alone, so they talk to no
-    /// contract.
-    pub fn contracts(&self) -> Result<Vec<crate::contracts::ContractInteraction>, std::io::Error> {
+    /// contract. Each payout a contract declares is marked when it goes to the wallet's own address.
+    pub fn contracts(
+        &self,
+        crypto_provider: &MidnightCryptoProvider,
+    ) -> Result<Vec<crate::contracts::ContractInteraction>, std::io::Error> {
+        let wallet = midnight_coin_structure::coin::UserAddress::from(
+            crypto_provider
+                .unshielded_verifying_key()
+                .map_err(|e| std::io::Error::other(e.to_string()))?,
+        );
         match self {
-            ConnectorPlan::BalanceUnsealed(plan) => Ok(plan.contracts()),
+            ConnectorPlan::BalanceUnsealed(plan) => Ok(plan.contracts(&wallet)),
             ConnectorPlan::MakeTransfer(_) | ConnectorPlan::MakeIntent(_) => Ok(Vec::new()),
             // The taker's complement is a plain `makeIntent` and carries none; the contracts of a merge
             // are the sealed maker's, which survive the merge into the submitted transaction.
             ConnectorPlan::BalanceSealedMerge(merge) => {
-                balance_sealed::maker_contracts(merge.maker_tx())
+                balance_sealed::maker_contracts(merge.maker_tx(), &wallet)
             }
         }
     }
@@ -185,7 +193,7 @@ impl ConnectorPlan {
         };
         let context = PolicyContext {
             segment_effects: self.segment_effects(chain_id, crypto_provider)?,
-            contracts: self.contracts()?,
+            contracts: self.contracts(crypto_provider)?,
             fee,
             dust_registrations,
             offer,

@@ -6,11 +6,11 @@
 
 use std::collections::BTreeMap;
 
-use midnight_coin_structure::coin::TokenType as LedgerTokenType;
+use midnight_coin_structure::coin::{PublicAddress, TokenType as LedgerTokenType, UserAddress};
 use midnight_ledger::structure::{ContractAction, ProofKind};
 use midnight_storage::db::DB;
 use midnight_storage::storage::HashMap as MnHashMap;
-use onchain_runtime::context::Effects;
+use onchain_runtime::context::{ClaimedUnshieldedSpendsKey, Effects};
 
 /// The guaranteed section, executed before every fallible one. A call's guaranteed transcript runs
 /// here whichever intent carried it; only its fallible transcript runs in that intent's own segment.
@@ -50,17 +50,47 @@ pub struct ContractInteraction {
     /// a deploy or a maintenance update, neither of which targets one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry_point: Option<String>,
-    /// Per token, the value the contract declares it takes IN — i.e. what the wallet sends it.
+    /// Per token, the total value the contract declares it takes in, from every party to the
+    /// transaction together. The wallet sends this only when it is the contract's sole counterparty.
     pub sent_to: Vec<(String, String)>,
-    /// Per token, the value the contract declares it pays OUT — i.e. what the wallet receives from it.
+    /// Per token, the total value the contract declares it pays out, to every recipient together.
+    /// `payouts` says to whom; this is not what the wallet receives.
     pub received_from: Vec<(String, String)>,
+    /// The unshielded payouts the call declares, one per token and recipient.
+    pub payouts: Vec<Payout>,
+}
+
+/// Who a contract's declared unshielded payout goes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecipientKind {
+    /// A user's unshielded address.
+    User,
+    /// Another contract.
+    Contract,
+}
+
+/// One recipient of a call's declared unshielded payout.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Payout {
+    /// The token, as the same wire string `sent_to` and `received_from` use.
+    pub token: String,
+    /// The amount, as a decimal string.
+    pub amount: String,
+    /// The recipient's hex-encoded address: a user's address hash or a contract's address.
+    pub recipient: String,
+    pub recipient_kind: RecipientKind,
+    /// Whether the recipient is the wallet's own unshielded address.
+    pub to_wallet: bool,
 }
 
 /// The contract actions of a transaction's intents, one entry per executing segment. Pure over the
 /// ledger structure (no key, no network), so it is the unit-tested core behind every plan's
-/// `contracts()`; callers pass `StandardTransaction::actions()`, whose `u16` is the intent's segment.
+/// `contracts()`; callers pass `StandardTransaction::actions()`, whose `u16` is the intent's segment,
+/// and the wallet's unshielded address, to mark the payouts that reach it.
 pub(crate) fn contract_interactions<P: ProofKind<D>, D: DB>(
     actions: impl Iterator<Item = (u16, ContractAction<P, D>)>,
+    wallet: &UserAddress,
 ) -> Vec<ContractInteraction> {
     let mut out = Vec::new();
     for (intent_segment, action) in actions {
@@ -76,6 +106,7 @@ pub(crate) fn contract_interactions<P: ProofKind<D>, D: DB>(
                         &address,
                         &entry_point,
                         &transcript.effects,
+                        wallet,
                     ));
                 }
                 if let Some(transcript) = fallible {
@@ -84,6 +115,7 @@ pub(crate) fn contract_interactions<P: ProofKind<D>, D: DB>(
                         &address,
                         &entry_point,
                         &transcript.effects,
+                        wallet,
                     ));
                 }
                 if guaranteed.is_none() && fallible.is_none() {
@@ -94,6 +126,7 @@ pub(crate) fn contract_interactions<P: ProofKind<D>, D: DB>(
                         &address,
                         &entry_point,
                         &Effects::<D>::default(),
+                        wallet,
                     ));
                 }
             }
@@ -106,6 +139,7 @@ pub(crate) fn contract_interactions<P: ProofKind<D>, D: DB>(
                 entry_point: None,
                 sent_to: Vec::new(),
                 received_from: Vec::new(),
+                payouts: Vec::new(),
             }),
             ContractAction::Maintain(update) => out.push(ContractInteraction {
                 segment: intent_segment,
@@ -114,6 +148,7 @@ pub(crate) fn contract_interactions<P: ProofKind<D>, D: DB>(
                 entry_point: None,
                 sent_to: Vec::new(),
                 received_from: Vec::new(),
+                payouts: Vec::new(),
             }),
         }
     }
@@ -125,6 +160,7 @@ fn call_interaction<D: DB>(
     address: &str,
     entry_point: &str,
     effects: &Effects<D>,
+    wallet: &UserAddress,
 ) -> ContractInteraction {
     ContractInteraction {
         segment,
@@ -133,7 +169,40 @@ fn call_interaction<D: DB>(
         entry_point: Some(entry_point.to_string()),
         sent_to: token_amounts(&effects.unshielded_inputs),
         received_from: token_amounts(&effects.unshielded_outputs),
+        payouts: payouts(&effects.claimed_unshielded_spends, wallet),
     }
+}
+
+/// A transcript's claimed unshielded spends — what it pays out, keyed by token and recipient — sorted
+/// by token and then recipient, with zeros dropped.
+fn payouts<D: DB>(
+    claimed: &MnHashMap<ClaimedUnshieldedSpendsKey, u128, D>,
+    wallet: &UserAddress,
+) -> Vec<Payout> {
+    let mut out: Vec<Payout> = claimed
+        .clone()
+        .into_iter()
+        .filter(|(_, amount)| *amount != 0)
+        .map(|(ClaimedUnshieldedSpendsKey(token, recipient), amount)| {
+            let (recipient, recipient_kind, to_wallet) = match recipient {
+                PublicAddress::User(user) => {
+                    (hex::encode(user.0 .0), RecipientKind::User, user == *wallet)
+                }
+                PublicAddress::Contract(contract) => {
+                    (hex::encode(contract.0 .0), RecipientKind::Contract, false)
+                }
+            };
+            Payout {
+                token: wire_token_type(token),
+                amount: amount.to_string(),
+                recipient,
+                recipient_kind,
+                to_wallet,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| (&a.token, &a.recipient).cmp(&(&b.token, &b.recipient)));
+    out
 }
 
 /// A transcript's declared per-token amounts on the wire, sorted by token and with zeros dropped. The
@@ -198,6 +267,10 @@ mod tests {
         LedgerTokenType::Unshielded(UnshieldedTokenType(HashOutput([byte; 32])))
     }
 
+    fn wallet() -> UserAddress {
+        UserAddress(HashOutput([0x77; 32]))
+    }
+
     /// A transcript declaring `inputs` taken in and `outputs` paid out by the contract.
     fn transcript(
         inputs: &[(LedgerTokenType, u128)],
@@ -245,7 +318,7 @@ mod tests {
             Some(transcript(&[], &[(token(0x22), 250)])),
         );
 
-        let out = contract_interactions([(3u16, action)].into_iter());
+        let out = contract_interactions([(3u16, action)].into_iter(), &wallet());
 
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].segment, GUARANTEED_SEGMENT);
@@ -269,7 +342,10 @@ mod tests {
 
     #[test]
     fn a_call_declaring_no_transcript_is_still_reported() {
-        let out = contract_interactions([(1u16, call(0x07, "noop", None, None))].into_iter());
+        let out = contract_interactions(
+            [(1u16, call(0x07, "noop", None, None))].into_iter(),
+            &wallet(),
+        );
 
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].segment, 1);
@@ -303,6 +379,7 @@ mod tests {
                 (5u16, Action::Maintain(update)),
             ]
             .into_iter(),
+            &wallet(),
         );
 
         assert_eq!(out.len(), 2);
@@ -345,7 +422,7 @@ mod tests {
             panic!("the fixture is a Standard transaction");
         };
 
-        let out = contract_interactions(base.actions());
+        let out = contract_interactions(base.actions(), &wallet());
 
         assert_eq!(
             out.len(),
@@ -359,6 +436,7 @@ mod tests {
             "3b477afdd03085630c0afca689ba0cd5fab475bcfd9e021f47e9c0e8699164ce"
         );
         assert_eq!(call.entry_point.as_deref(), Some("addUnshieldedLiquidity"));
+        assert!(call.payouts.is_empty());
 
         // The call declares only a fallible transcript, so it is keyed by its intent's own segment —
         // and a real segment id is an arbitrary `u16` the author picked (this tx's intents are 2260
@@ -380,6 +458,65 @@ mod tests {
         assert!(call.received_from.is_empty());
     }
 
+    /// A call's payout total does not say who is paid: the payouts name each recipient, so one that
+    /// pays a third party is not mistaken for income to the wallet.
+    #[test]
+    fn a_calls_payouts_name_each_recipient() {
+        let dapp = UserAddress(HashOutput([0x44; 32]));
+        let other_contract = address(0x55);
+        let mut effects = Effects::<InMemoryDB>::default();
+        effects.unshielded_outputs = effects.unshielded_outputs.insert(token(0x22), 175);
+        for (recipient, amount) in [
+            (PublicAddress::User(dapp), 100),
+            (PublicAddress::User(wallet()), 50),
+            (PublicAddress::Contract(other_contract), 25),
+        ] {
+            effects.claimed_unshielded_spends = effects
+                .claimed_unshielded_spends
+                .insert(ClaimedUnshieldedSpendsKey(token(0x22), recipient), amount);
+        }
+        let transcript = Sp::new(Transcript {
+            gas: Default::default(),
+            effects,
+            program: vec![].into(),
+            version: None,
+        });
+
+        let out = contract_interactions(
+            [(1u16, call(0x0C, "swap", Some(transcript), None))].into_iter(),
+            &wallet(),
+        );
+
+        let tok = hex::encode([0x22u8; 32]);
+        assert_eq!(out[0].received_from, vec![(tok.clone(), "175".to_string())]);
+        assert_eq!(
+            out[0].payouts,
+            vec![
+                Payout {
+                    token: tok.clone(),
+                    amount: "100".to_string(),
+                    recipient: hex::encode([0x44u8; 32]),
+                    recipient_kind: RecipientKind::User,
+                    to_wallet: false,
+                },
+                Payout {
+                    token: tok.clone(),
+                    amount: "25".to_string(),
+                    recipient: hex::encode([0x55u8; 32]),
+                    recipient_kind: RecipientKind::Contract,
+                    to_wallet: false,
+                },
+                Payout {
+                    token: tok,
+                    amount: "50".to_string(),
+                    recipient: hex::encode([0x77u8; 32]),
+                    recipient_kind: RecipientKind::User,
+                    to_wallet: true,
+                },
+            ]
+        );
+    }
+
     #[test]
     fn dust_and_zero_amounts_render_as_the_policy_expects() {
         let action = call(
@@ -392,7 +529,7 @@ mod tests {
             None,
         );
 
-        let out = contract_interactions([(1u16, action)].into_iter());
+        let out = contract_interactions([(1u16, action)].into_iter(), &wallet());
 
         // The DUST dimension keeps the `dust` wire name the effects use; a zero amount is dropped.
         assert_eq!(out[0].sent_to, vec![("dust".to_string(), "42".to_string())]);
