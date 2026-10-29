@@ -12,7 +12,8 @@
 # plan→authorize seam, which makeIntent reaches without a network because its effects come from the
 # request), executable policies that crash, hang, print garbage or are missing (each must deny),
 # malformed and hostile connector requests (misspelled options, unnamed tokens, a plaintext remote
-# indexer), the audit record of a token's balance read, and secret hygiene.
+# indexer), the audit record of a token's balance read, outages (an indexer or proof server that is
+# down, a node or proof server on another host over plaintext), and secret hygiene.
 #
 # LIVE tier (LIVE=1): the plan-derived flows. They sync a FUNDED wallet against a live indexer and
 # mock-prove, so they use your real vault — set WALLET (and PASS, its owner passphrase, empty by
@@ -275,6 +276,57 @@ printf '{"vault_path":"%s","rpc":{"%s":"http://indexer.example/api/v4/graphql?pr
 SECRETS+=("SECRETKEY")
 sandboxed pass "$OWNER_PASS" fund balance --chain "$CHAIN" --wallet guarded
 refused "a plaintext indexer on another host is refused" "plaintext"
+rm -f "$SANDBOX/.ows/config.json"
+
+# ═══ Outages ══════════════════════════════════════════════════════════════════════════════
+say "Outages — a down indexer or proof server, or an untrusted node, fails closed"
+
+# The vault's endpoints, configured as a user does, at a loopback port where nothing listens. Each URL
+# carries a credential, which no error may show.
+endpoints() {  # endpoints <indexer> <node> <prover>
+  printf '{"vault_path":"%s","rpc":{"%s":"%s","%s:node":"%s","%s:prover":"%s"}}\n' \
+    "$SANDBOX/.ows" "$CHAIN" "$1" "$CHAIN" "$2" "$CHAIN" "$3" > "$SANDBOX/.ows/config.json"
+}
+DOWN_INDEXER="http://127.0.0.1:1/api/v4/graphql?project_id=INDEXERKEY"
+DOWN_NODE="http://127.0.0.1:1/?apikey=NODEKEY"
+DOWN_PROVER="http://127.0.0.1:1/?token=PROVERKEY"
+SECRETS+=("INDEXERKEY" "NODEKEY" "PROVERKEY")
+mkdir -p "$SANDBOX/.ows"
+endpoints "$DOWN_INDEXER" "$DOWN_NODE" "$DOWN_PROVER"
+
+# The guarded wallet's own addresses on $CHAIN, which fund balance shows before it syncs.
+ADDRESSES="$(env -u LWS_PASSPHRASE HOME="$SANDBOX" OWS_PASSPHRASE="$OWNER_PASS" "$OWS" fund balance \
+  --chain "$CHAIN" --wallet guarded </dev/null 2>&1)"
+OWN_UNSHIELDED="$(printf '%s\n' "$ADDRESSES" | awk '$1 == "Unshielded:" { print $2 }')"
+OWN_SHIELDED="$(printf '%s\n' "$ADDRESSES" | awk '$1 == "Shielded:" { print $2 }')"
+[ -n "$OWN_UNSHIELDED" ] && [ -n "$OWN_SHIELDED" ] || { fail "read the guarded wallet's addresses"; exit 1; }
+receive() {  # receive <kind> <token type> <recipient> — a makeIntent asking for 5 of a token
+  printf '{"method":"makeIntent","desiredInputs":[],"desiredOutputs":[{"kind":"%s","type":"%s","value":"5","recipient":"%s"}],"options":{"intentId":1}}' "$1" "$2" "$3"
+}
+SHIELDED_TOKEN=0000000000000000000000000000000000000000000000000000000000000000
+outage() {  # outage <label> <needle> <tx>
+  sandboxed token "$CAP_TOKEN" sign send-tx --chain "$CHAIN" --wallet guarded --json --tx "$3"
+  refused "$1" "$2"
+}
+
+outage "with every endpoint down, the policy still refuses an over-cap makeIntent" "summed movement 5000000" "$OVER_CAP"
+audited "the denial is audited as with the endpoints up" sign_transaction "summed movement 5000000"
+outage "a down indexer fails a makeIntent the policy allowed, before anything is signed" \
+  "failed to connect to Midnight indexer" "$(intent 5)"
+outage "a makeTransfer whose indexer cannot confirm the DUST ledger is refused before it is planned" \
+  "could not confirm the network's DUST ledger is live" \
+  "$(printf '{"method":"makeTransfer","desiredOutputs":[{"kind":"unshielded","type":"night","value":"5","recipient":"%s"}]}' "$OWN_UNSHIELDED")"
+outage "a down proof server fails a makeIntent's shielded output, before anything is signed" \
+  "proof server request failed" "$(receive shielded "$SHIELDED_TOKEN" "$OWN_SHIELDED")"
+endpoints "$DOWN_INDEXER" "$DOWN_NODE" "http://10.0.0.5:6300/?token=PROVERKEY"
+outage "a plaintext proof server on another host is refused before any witness leaves" \
+  "plaintext Midnight proof server" "$(receive shielded "$SHIELDED_TOKEN" "$OWN_SHIELDED")"
+# A node that is down is out of reach offline: only a balanced transaction gets that far, and the
+# one this unfunded wallet can build offline, an intent asking for funds, is refused as imbalanced
+# before the node is contacted. The node's URL is checked first, so an untrusted node is caught.
+endpoints "$DOWN_INDEXER" "http://10.0.0.5:9944/?apikey=NODEKEY" "$DOWN_PROVER"
+outage "a plaintext node on another host is refused before the signed intent is sent" \
+  "plaintext Midnight node" "$(receive unshielded night "$OWN_UNSHIELDED")"
 rm -f "$SANDBOX/.ows/config.json"
 
 # ═══ Secret hygiene ═══════════════════════════════════════════════════════════════════════

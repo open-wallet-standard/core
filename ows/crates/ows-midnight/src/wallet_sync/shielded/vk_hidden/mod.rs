@@ -746,6 +746,48 @@ mod tests {
         assert_eq!(state.wallet.first_free, 5);
     }
 
+    /// An indexer that keeps dropping the connection fails the signing path's shielded sync rather
+    /// than hand back a partial wallet, and keeps the progress made. Once the indexer is back, the
+    /// next sync resumes from that snapshot and builds the wallet a clean replay builds.
+    #[tokio::test]
+    async fn a_sync_cut_short_by_an_outage_recovers_once_the_indexer_is_back() {
+        let events = || (0..6).map(foreign_output);
+        let (url, cut) =
+            mock_indexer::spawn_with_cut("zswapLedgerEvents", events().collect(), Some(1)).await;
+        let vault =
+            std::env::temp_dir().join(format!("ows-midnight-zswap-outage-{}", std::process::id()));
+        let scope = crate::wallet::signing_scope("midnight:preview", Some(&vault));
+        let provider = provider();
+
+        let outage = run_zswap_replay(&url, &provider, &scope, "fp", None).await;
+        let kept = sync_cache::snapshot_path(&url, "fp", &scope)
+            .and_then(|path| sync_cache::try_load_snapshot(&path));
+        *cut.lock().unwrap() = None;
+        let recovered = run_zswap_replay(&url, &provider, &scope, "fp", None).await;
+        let _ = std::fs::remove_dir_all(&vault);
+
+        let err = outage
+            .err()
+            .expect("a sync the indexer keeps cutting must fail");
+        assert!(err.to_string().contains("incomplete"), "{err}");
+        let kept = kept.expect("the outage keeps the progress made");
+        assert_eq!(kept.last_seen_event_id, 0);
+
+        let recovered = recovered.expect("the sync recovers once the indexer is back");
+        assert!(recovered.from_snapshot);
+        assert_eq!(recovered.last_seen_id, 5);
+        let mut clean = ZswapLocalState::new();
+        for e in events() {
+            fold_zswap_event(&provider, &mut clean, &e.raw, false).expect("fold");
+        }
+        let encode = super::super::cache::encode_zswap_state;
+        assert_eq!(
+            encode(&recovered.wallet).unwrap(),
+            encode(&clean).unwrap(),
+            "the recovered wallet differs from a clean replay"
+        );
+    }
+
     #[test]
     fn resume_is_inclusive_of_last_seen_event() {
         // Warm resume re-fetches the last-seen event (inclusive) so the indexer echoes it
