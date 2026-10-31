@@ -779,9 +779,12 @@ imbalance, funds the merged tx's DUST fee, seals its half, and `Transaction::mer
   [Fees are always dust](#fees-are-always-dust)): with a generationless registration when it holds an
   unregistered NIGHT coin that has generated enough DUST, so a wallet freshly funded with NIGHT can
   complete a swap, and with a spend of DUST it holds otherwise. The registration draws only on NIGHT
-  its own intent spends, so the taker's half also spends that coin and returns it whole. A merge that
-  swaps unshielded tokens alone is small enough that the node's time-to-dismiss floor rejects it with
-  either fee section; a swap with shielded coins on either side clears it.
+  its own intent spends, so the taker's half also spends that coin and returns it whole. Both halves
+  sit in the guaranteed section, and every NIGHT coin either side spends or receives there adds to the
+  time the node takes to check the merged transaction. A merge that moves several NIGHT coins can take
+  longer than its size allows (the time-to-dismiss bound) and is refused before proving. An unshielded
+  token swapped for NIGHT that the taker pays from one NIGHT coin fits with one DUST spend; shielded
+  coins on either side add proof bytes that raise the bound.
 
 #### `balanceUnsealedTransaction`
 

@@ -701,16 +701,18 @@ pub(crate) fn size_merge_dust_fee(
         // Charge the node's real fee, enforcing the time-to-dismiss bound as `well_formed` does.
         let fee = match merged.fees(&ledger_params, true) {
             Ok(fee) => fee,
-            // `OutsideTimeToDismiss` is a size-vs-compute bound, not a fee shortfall: the merged tx's
-            // proof-validation cost exceeds what its serialized size allows the node to spend dismissing
-            // it. A bigger DUST section can't fix that — below the size floor it only adds validation
-            // cost — so fail with a precise message rather than spinning the loop.
+            // `OutsideTimeToDismiss` is a size-vs-compute bound, not a fee shortfall: checking the
+            // merged tx takes longer than its serialized size allows the node to spend dismissing it.
+            // A DUST spend adds more to that allowance than it costs to check only once the transaction
+            // is past the size floor, which can take several spends, so fail with the node's numbers
+            // rather than spinning the loop.
             Err(e) if format!("{e:?}").contains("OutsideTimeToDismiss") => {
                 return Err(err(format!(
                     "the merged transaction cannot satisfy the node's time-to-dismiss bound ({e:?}): \
-                     its proof-validation cost exceeds what its size allows, which a DUST fee cannot \
-                     change. The merged offer is too small for its proofs; a larger swap (e.g. \
-                     shielded coins on either side) clears the bound."
+                     checking it takes longer than its size allows. Every NIGHT coin either side \
+                     spends or receives in the guaranteed section adds to that time, so a swap paid \
+                     from fewer NIGHT coins fits more easily; shielded coins on either side add proof \
+                     bytes that raise the bound."
                 )));
             }
             Err(e) => return Err(err(format!("merged DUST fee check failed: {e:?}"))),
