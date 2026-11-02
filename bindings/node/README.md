@@ -62,6 +62,7 @@ ows sign tx --wallet agent-treasury --chain evm --tx "deadbeef..."
 | `deleteWallet(nameOrId, vaultPath?)` | Delete a wallet |
 | `exportWallet(nameOrId, passphrase?, vaultPath?)` | Export a wallet's mnemonic or keys |
 | `renameWallet(nameOrId, newName, vaultPath?)` | Rename a wallet |
+| `changeWalletPassphrase(nameOrId, oldPassphrase, newPassphrase, vaultPath?)` | Change owner encryption password; existing API keys remain valid |
 | `signMessage(wallet, chain, message, passphrase?, encoding?, index?, vaultPath?, address?)` | Sign a message with chain-specific formatting |
 | `signTypedData(wallet, chain, typedDataJson, passphrase?, index?, vaultPath?, address?)` | Sign EIP-712 typed data (EVM only) |
 | `signTransaction(wallet, chain, txHex, passphrase?, index?, vaultPath?)` | Sign a raw transaction |
@@ -98,6 +99,7 @@ ows sign tx --wallet agent-treasury --chain evm --tx "deadbeef..."
 | Command | Description |
 |---------|-------------|
 | `ows wallet create` | Create a new wallet with addresses for all chains |
+| `ows wallet change-passphrase` | Change owner encryption password; existing API keys remain valid |
 | `ows wallet list` | List all wallets in the vault |
 | `ows wallet info` | Show vault path and supported chains |
 | `ows sign message` | Sign a message with chain-specific formatting |

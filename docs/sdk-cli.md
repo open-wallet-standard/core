@@ -20,6 +20,26 @@ cargo build --workspace --release
 
 ## Wallet Commands
 
+### `ows wallet change-passphrase`
+
+Re-encrypt one wallet with a new owner passphrase, preserving its keys, addresses
+and metadata. Returns an error for a wrong current password or a failed write.
+
+```bash
+ows wallet change-passphrase --wallet my-wallet
+```
+
+Interactive prompts hide the current password, new password and confirmation.
+For automation, supply `OWS_PASSPHRASE` and `OWS_NEW_PASSPHRASE` from your secret
+manager; both must be explicitly provided in noninteractive mode. Use an empty
+current value for a wallet initially created without a password. New passwords
+must be nonempty and cannot start with the API-token prefix `ows_key_`. There are
+no password flags. `LWS_PASSPHRASE` is supported as a current-password fallback.
+
+Existing API keys remain valid and retain their policies. Stop concurrent wallet
+writers and update encrypted backups after success. See
+[passphrase-change semantics and storage guarantees](06-wallet-lifecycle.md#changing-an-encryption-passphrase).
+
 ### `ows wallet create`
 
 Create a new wallet. Generates a BIP-39 mnemonic and derives addresses for all supported chains.

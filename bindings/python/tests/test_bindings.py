@@ -3,6 +3,7 @@
 import copy
 import json
 import tempfile
+from pathlib import Path
 import pytest
 import ows
 
@@ -94,6 +95,31 @@ def test_export_wallet(vault_dir):
     ows.create_wallet("exportable", vault_path_opt=vault_dir)
     secret = ows.export_wallet("exportable", vault_path_opt=vault_dir)
     assert len(secret.split()) == 12
+
+
+def test_change_wallet_passphrase_preserves_identity_and_signing(vault_dir):
+    wallet = ows.create_wallet("password-test", passphrase="old", vault_path_opt=vault_dir)
+    phrase = ows.export_wallet(wallet["id"], "old", vault_path_opt=vault_dir)
+    before = ows.sign_message(wallet["id"], "base", "offline", "old", vault_path_opt=vault_dir)
+    assert ows.change_wallet_passphrase(wallet["id"], "old", "new", vault_path_opt=vault_dir) == wallet
+    with pytest.raises(RuntimeError):
+        ows.export_wallet(wallet["id"], "old", vault_path_opt=vault_dir)
+    assert ows.export_wallet(wallet["id"], "new", vault_path_opt=vault_dir) == phrase
+    assert ows.sign_message(wallet["id"], "base", "offline", "new", vault_path_opt=vault_dir)["signature"] == before["signature"]
+
+
+def test_change_private_wallet_passphrase_failure_and_empty_old_password(vault_dir):
+    wallet = ows.import_wallet_private_key("password-private", "4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318", chain="evm", vault_path_opt=vault_dir)
+    path = Path(vault_dir) / "wallets" / (wallet["id"] + ".json")
+    original = path.read_bytes()
+    with pytest.raises(RuntimeError):
+        ows.change_wallet_passphrase(wallet["id"], "wrong", "new", vault_path_opt=vault_dir)
+    with pytest.raises(RuntimeError):
+        ows.change_wallet_passphrase(wallet["id"], "", "", vault_path_opt=vault_dir)
+    assert path.read_bytes() == original
+    secret = ows.export_wallet(wallet["id"], vault_path_opt=vault_dir)
+    ows.change_wallet_passphrase("password-private", "", "café 🔒", vault_path_opt=vault_dir)
+    assert ows.export_wallet(wallet["id"], "café 🔒", vault_path_opt=vault_dir) == secret
 
 
 def test_delete_wallet(vault_dir):

@@ -1,6 +1,6 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,7 @@ import {
   deleteWallet,
   exportWallet,
   renameWallet,
+  changeWalletPassphrase,
   importWalletMnemonic,
   importWalletPrivateKey,
   signTransaction,
@@ -106,6 +107,30 @@ describe('@open-wallet-standard/core', () => {
   });
 
   // ---- Mnemonic import round-trip ----
+
+  it('changes a mnemonic wallet passphrase while preserving identity and signing', () => {
+    const wallet = createWallet('password-test', 'old-password', 12, vaultDir);
+    const phrase = exportWallet(wallet.id, 'old-password', vaultDir);
+    const before = signMessage(wallet.id, 'base', 'offline', 'old-password', null, null, vaultDir);
+    assert.deepEqual(changeWalletPassphrase(wallet.id, 'old-password', 'new-password', vaultDir), wallet);
+    assert.throws(() => exportWallet(wallet.id, 'old-password', vaultDir));
+    assert.equal(exportWallet(wallet.id, 'new-password', vaultDir), phrase);
+    assert.equal(signMessage(wallet.id, 'base', 'offline', 'new-password', null, null, vaultDir).signature, before.signature);
+    deleteWallet(wallet.id, vaultDir);
+  });
+
+  it('preserves a private-key wallet on failed password changes and accepts an empty old password', () => {
+    const wallet = importWalletPrivateKey('password-private', '4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318', null, vaultDir, 'evm');
+    const path = join(vaultDir, 'wallets', `${wallet.id}.json`);
+    const original = readFileSync(path, 'utf8');
+    assert.throws(() => changeWalletPassphrase(wallet.id, 'wrong', 'new-password', vaultDir));
+    assert.throws(() => changeWalletPassphrase(wallet.id, '', '', vaultDir));
+    assert.equal(readFileSync(path, 'utf8'), original);
+    const secret = exportWallet(wallet.id, '', vaultDir);
+    changeWalletPassphrase('password-private', '', 'café 🔒', vaultDir);
+    assert.equal(exportWallet(wallet.id, 'café 🔒', vaultDir), secret);
+    deleteWallet(wallet.id, vaultDir);
+  });
 
   it('imports a mnemonic and produces same addresses', () => {
     const phrase = generateMnemonic(12);

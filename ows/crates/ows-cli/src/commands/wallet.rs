@@ -4,6 +4,44 @@ use crate::audit;
 use crate::CliError;
 use zeroize::Zeroize;
 
+/// Change the encryption passphrase without exposing either password in argv.
+pub fn change_passphrase(wallet_name: &str) -> Result<(), CliError> {
+    use ows_signer::process_hardening::clear_env_var;
+    use zeroize::Zeroizing;
+
+    let old_ows = clear_env_var("OWS_PASSPHRASE").map(Zeroizing::new);
+    let old_lws = clear_env_var("LWS_PASSPHRASE").map(Zeroizing::new);
+    let new_env = clear_env_var("OWS_NEW_PASSPHRASE").map(Zeroizing::new);
+    let interactive = std::io::stdin().is_terminal();
+    let old = match old_ows.or(old_lws) {
+        Some(value) => value,
+        None if interactive => Zeroizing::new(rpassword::prompt_password("Current passphrase (empty for none): ")?),
+        None => return Err(CliError::InvalidArgs("set OWS_PASSPHRASE explicitly, including an empty value for an initially empty passphrase".into())),
+    };
+    let new = match new_env {
+        Some(value) => value,
+        None if interactive => {
+            let value = Zeroizing::new(rpassword::prompt_password("New passphrase: ")?);
+            let confirmation =
+                Zeroizing::new(rpassword::prompt_password("Confirm new passphrase: ")?);
+            if *value != *confirmation {
+                return Err(CliError::InvalidArgs("new passphrases do not match".into()));
+            }
+            value
+        }
+        None => {
+            return Err(CliError::InvalidArgs(
+                "set OWS_NEW_PASSPHRASE or use an interactive terminal".into(),
+            ))
+        }
+    };
+    let info = ows_lib::change_wallet_passphrase(wallet_name, &old, &new, None)?;
+    audit::log_wallet_event(&info.id, "change_wallet_passphrase", None, None, None);
+    println!("Passphrase changed: {} ({})", info.name, info.id);
+    println!("Existing API keys remain valid; revoke them separately if needed.");
+    Ok(())
+}
+
 pub fn create(name: &str, words: u32, show_mnemonic: bool) -> Result<(), CliError> {
     // Generate mnemonic, then import it to create the wallet
     let mut mnemonic_phrase = ows_lib::generate_mnemonic(words)?;

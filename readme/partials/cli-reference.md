@@ -3,6 +3,7 @@
 | Command | Description |
 |---------|-------------|
 | `ows wallet create` | Create a new wallet with addresses for all chains |
+| `ows wallet change-passphrase` | Change owner encryption password; existing API keys remain valid |
 | `ows wallet list` | List all wallets in the vault |
 | `ows wallet info` | Show vault path and supported chains |
 | `ows sign message` | Sign a message with chain-specific formatting |

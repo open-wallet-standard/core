@@ -41,6 +41,7 @@ print(sig["signature"])
 | `delete_wallet(name_or_id, vault_path?)` | Delete a wallet |
 | `export_wallet(name_or_id, passphrase?, vault_path?)` | Export a wallet's mnemonic or keys |
 | `rename_wallet(name_or_id, new_name, vault_path?)` | Rename a wallet |
+| `change_wallet_passphrase(name_or_id, old_passphrase, new_passphrase, vault_path_opt=None)` | Change owner encryption password; existing API keys remain valid |
 | `sign_message(wallet, chain, message, passphrase?, encoding?, index?, vault_path?, address?)` | Sign a message with chain-specific formatting |
 | `sign_hash(wallet, chain, hash_hex, passphrase?, index?, vault_path?)` | Sign a raw 32-byte hash on a secp256k1-backed chain |
 | `sign_authorization(wallet, chain, address, nonce, passphrase?, index?, vault_path?)` | Sign an EIP-7702 authorization tuple |
