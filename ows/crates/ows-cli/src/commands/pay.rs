@@ -1,6 +1,9 @@
 use crate::commands::read_passphrase;
 use crate::CliError;
 use ows_core::ChainType;
+use ows_lib::nano_rpc::NanoAccountInfo;
+use ows_pay::{PayError, PayErrorCode};
+use ows_signer::chains::nano::{build_state_block, nano_pubkey_from_address};
 
 /// Concrete WalletAccess backed by ows-lib.
 struct OwsLibWallet {
@@ -80,6 +83,93 @@ impl ows_pay::WalletAccess for OwsLibWallet {
             )),
         }
     }
+
+    fn send_native(&self, network: &str, to: &str, amount: &str) -> Result<String, PayError> {
+        let chain = ows_core::parse_chain(network)
+            .map_err(|e| PayError::new(PayErrorCode::UnsupportedChain, e))?;
+        if chain.chain_type != ChainType::Nano {
+            return Err(PayError::new(
+                PayErrorCode::UnsupportedChain,
+                format!("native payments are not supported on {network}"),
+            ));
+        }
+
+        let from = self.account(network)?.address;
+        let rpc_url = ows_lib::resolve_rpc_url(chain.chain_id, chain.chain_type, None)
+            .map_err(|e| PayError::new(PayErrorCode::InvalidInput, e.to_string()))?;
+        let info = ows_lib::nano_rpc::account_info(&rpc_url, &from)
+            .map_err(|e| PayError::new(PayErrorCode::HttpTransport, e.to_string()))?
+            .ok_or_else(|| {
+                PayError::new(
+                    PayErrorCode::UnsupportedChain,
+                    format!("nano account {from} has no balance (not opened)"),
+                )
+            })?;
+
+        let block = nano_send_block(&from, &info, to, amount)?;
+
+        let result = ows_lib::sign_and_send(
+            &self.wallet_name,
+            network,
+            &hex::encode(block),
+            Some(&self.passphrase),
+            None,
+            Some(&rpc_url),
+            None,
+        )
+        .map_err(|e| PayError::new(PayErrorCode::SigningFailed, e.to_string()))?;
+        Ok(result.tx_hash)
+    }
+}
+
+/// Build the unsigned 176-byte state block that sends `amount` raw from
+/// `from` (whose current state is `info`) to `to`.
+fn nano_send_block(
+    from: &str,
+    info: &NanoAccountInfo,
+    to: &str,
+    amount: &str,
+) -> Result<[u8; 176], PayError> {
+    let malformed = |msg: String| PayError::new(PayErrorCode::ProtocolMalformed, msg);
+    let invalid = |msg: String| PayError::new(PayErrorCode::InvalidData, msg);
+
+    let account = nano_pubkey_from_address(from)
+        .ok_or_else(|| invalid(format!("invalid nano account address: {from}")))?;
+    let link = nano_pubkey_from_address(to)
+        .ok_or_else(|| malformed(format!("invalid nano payTo: {to}")))?;
+    let representative = nano_pubkey_from_address(&info.representative).ok_or_else(|| {
+        invalid(format!(
+            "invalid representative from RPC: {}",
+            info.representative
+        ))
+    })?;
+    let previous: [u8; 32] = hex::decode(&info.frontier)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| invalid(format!("invalid frontier from RPC: {}", info.frontier)))?;
+    let balance: u128 = info
+        .balance
+        .parse()
+        .map_err(|_| invalid(format!("invalid balance from RPC: {}", info.balance)))?;
+    let amount: u128 = amount
+        .parse()
+        .ok()
+        .filter(|a| *a > 0)
+        .ok_or_else(|| malformed(format!("invalid nano amount: {amount:?}")))?;
+    let new_balance = balance.checked_sub(amount).ok_or_else(|| {
+        PayError::new(
+            PayErrorCode::UnsupportedChain,
+            format!("insufficient XNO balance: have {balance} raw, need {amount} raw"),
+        )
+    })?;
+
+    Ok(build_state_block(
+        &account,
+        &previous,
+        &representative,
+        new_balance,
+        &link,
+    ))
 }
 
 /// `ows pay request <url> --wallet <name> [--method GET] [--body '{}']`
@@ -161,4 +251,59 @@ pub fn discover(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ows_signer::chains::nano::nano_address;
+
+    fn info(balance: &str) -> NanoAccountInfo {
+        NanoAccountInfo {
+            frontier: "11".repeat(32),
+            balance: balance.to_string(),
+            representative: nano_address(&[3u8; 32]),
+        }
+    }
+
+    #[test]
+    fn nano_send_block_debits_amount_and_links_destination() {
+        let from = nano_address(&[1u8; 32]);
+        let to = nano_address(&[2u8; 32]);
+        let block = nano_send_block(&from, &info("1000"), &to, "250").unwrap();
+
+        let expected = build_state_block(&[1u8; 32], &[0x11; 32], &[3u8; 32], 750, &[2u8; 32]);
+        assert_eq!(block, expected);
+    }
+
+    #[test]
+    fn nano_send_block_insufficient_balance_is_unsupported() {
+        let from = nano_address(&[1u8; 32]);
+        let to = nano_address(&[2u8; 32]);
+        let err = nano_send_block(&from, &info("100"), &to, "250").unwrap_err();
+        assert_eq!(err.code, PayErrorCode::UnsupportedChain);
+    }
+
+    #[test]
+    fn nano_send_block_rejects_bad_destination_and_amount() {
+        let from = nano_address(&[1u8; 32]);
+        let to = nano_address(&[2u8; 32]);
+        let err = nano_send_block(&from, &info("1000"), "0xabc", "1").unwrap_err();
+        assert_eq!(err.code, PayErrorCode::ProtocolMalformed);
+        for amount in ["0", "abc", ""] {
+            let err = nano_send_block(&from, &info("1000"), &to, amount).unwrap_err();
+            assert_eq!(err.code, PayErrorCode::ProtocolMalformed);
+        }
+    }
+
+    #[test]
+    fn send_native_rejects_non_nano_before_touching_wallet() {
+        let wallet = OwsLibWallet {
+            wallet_name: "does-not-exist".into(),
+            passphrase: String::new(),
+        };
+        let err =
+            ows_pay::WalletAccess::send_native(&wallet, "eip155:8453", "0xabc", "1").unwrap_err();
+        assert_eq!(err.code, PayErrorCode::UnsupportedChain);
+    }
 }
