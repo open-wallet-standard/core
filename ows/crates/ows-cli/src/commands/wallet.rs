@@ -190,3 +190,20 @@ pub fn list() -> Result<(), CliError> {
 
     Ok(())
 }
+
+pub fn public_key(wallet_name: &str, chain: &str, index: u32, json_output: bool) -> Result<(), CliError> {
+    let passphrase = super::peek_passphrase();
+    let pubkey = ows_lib::get_public_key(wallet_name, chain, Some(index), passphrase.as_deref(), None)?;
+    if json_output {
+        let obj = serde_json::json!({
+            "wallet": wallet_name,
+            "chain": chain,
+            "index": index,
+            "public_key": pubkey,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+    } else {
+        println!("{pubkey}");
+    }
+    Ok(())
+}

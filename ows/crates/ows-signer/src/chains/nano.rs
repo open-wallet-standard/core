@@ -265,6 +265,11 @@ impl ChainSigner for NanoSigner {
         let pubkey_bytes: [u8; 32] = vk.to_bytes();
         Ok(nano_address(&pubkey_bytes))
     }
+    fn derive_public_key(&self, private_key: &[u8]) -> Result<Vec<u8>, SignerError> {
+        let vk = Self::verifying_key(private_key)?;
+        Ok(vk.as_bytes().to_vec())
+    }
+
 
     fn sign(&self, private_key: &[u8], message: &[u8]) -> Result<SignOutput, SignerError> {
         let esk = Self::expand_secret_key(private_key)?;
