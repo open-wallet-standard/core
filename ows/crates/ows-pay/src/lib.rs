@@ -19,9 +19,11 @@ mod cardano;
 pub mod wallet;
 
 // Protocol implementations (internal).
+pub mod swap;
 mod x402;
 
 pub use error::{PayError, PayErrorCode};
+pub use swap::{swap_dry_run, SwapParams, SwapResult};
 pub use types::{DiscoverResult, PayResult, PaymentInfo, Protocol, Service};
 pub use wallet::{Account, WalletAccess};
 
