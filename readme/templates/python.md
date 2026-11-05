@@ -44,6 +44,7 @@ print(sig["signature"])
 | `sign_message(wallet, chain, message, passphrase?, encoding?, index?, vault_path?, address?)` | Sign a message with chain-specific formatting |
 | `sign_hash(wallet, chain, hash_hex, passphrase?, index?, vault_path?)` | Sign a raw 32-byte hash on a secp256k1-backed chain |
 | `sign_authorization(wallet, chain, address, nonce, passphrase?, index?, vault_path?)` | Sign an EIP-7702 authorization tuple |
+| `sign_nep413_message(wallet, chain, message, nonce_hex, recipient, callback_url?, passphrase?, index?, vault_path?)` | Sign a NEAR NEP-413 off-chain message |
 | `sign_typed_data(wallet, chain, typed_data_json, passphrase?, index?, vault_path?, address?)` | Sign EIP-712 typed data (EVM only) |
 | `sign_transaction(wallet, chain, tx_hex, passphrase?, index?, vault_path?)` | Sign a raw transaction |
 | `sign_and_send(wallet, chain, tx_hex, passphrase?, index?, rpc_url?, vault_path?)` | Sign and broadcast a transaction |

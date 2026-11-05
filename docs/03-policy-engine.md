@@ -260,8 +260,8 @@ For executable policies, the engine injects `policy_config` into the JSON payloa
 | `effects` | array | yes | Per-address asset movement the transaction causes. Empty on chains whose signer does not implement flow analysis. |
 | `effects[].address` | string | yes | The address whose balance changes |
 | `effects[].diff` | array | yes | `[asset, amount]` pairs. `amount` is a **signed decimal string** in the asset's smallest unit, so it has no upper bound — parse it with `int()` / `BigInt()`, never as a JSON number. The reserved asset id `"lovelace"` denotes ADA; a Cardano native asset is keyed by its hex policy id concatenated with its hex asset name. |
-| `raw_hex` | string | yes | The raw unsigned payload: the transaction bytes for `sign_transaction`, the message bytes for `sign_message`, the pre-image for `sign_hash` |
-| `chain_extra` | object | no | Chain-specific detail that `effects` cannot carry. Present only when a chain populates it; see the chain's own document (Cardano puts contingent collateral loss in `chain_extra.collateral_effects`). |
+| `raw_hex` | string | yes | The raw unsigned payload: the transaction bytes for `sign_transaction`, the message bytes for `sign_message` (for a NEAR NEP-413 message, the tagged pre-image `borsh(2^31 + 413) \|\| borsh(payload)`), the pre-image for `sign_hash` |
+| `chain_extra` | object | no | Chain-specific detail that `effects` cannot carry. Present only when a chain populates it; see the chain's own document (Cardano puts contingent collateral loss in `chain_extra.collateral_effects`; a NEAR NEP-413 message carries its decoded fields with `kind: "nep413_message"`). |
 | `data` | string | no | Reserved for calldata. Not populated by any chain in the reference implementation. |
 
 Only chains whose signer overrides `make_transaction_context` fill `effects`; today that is Cardano. Everywhere else — EVM included — `effects` is empty and `raw_hex` is the whole payload, so a policy that needs parsed transaction fields has to decode `raw_hex` itself.

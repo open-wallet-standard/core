@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   hashes, and accept matching JSON/bare hashes with surrounding whitespace or uppercase hex.
 
 ### Added
+- NEAR NEP-413 message signing: `sign_nep413_message` (`signNep413Message` in Node) signs
+  `sha256(borsh(2^31 + 413) || borsh({ message, nonce, recipient, callbackUrl }))`, byte-for-byte
+  what `near-api-js` produces. In agent mode policies see a `sign_message` request whose `raw_hex`
+  is the tagged pre-image, with the decoded fields in `chain_extra`
 - Cardano support across mainnet, preprod and preview (`cip34:` CAIP-2 namespace):
   Ed25519-BIP32 curve with CIP-3 Icarus master-key derivation, CIP-1852 payment and
   stake paths, Shelley base/enterprise/reward addresses, CIP-8 COSE message signing,

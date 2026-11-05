@@ -164,6 +164,55 @@ pub fn sign_message_with_api_key(
     })
 }
 
+pub fn sign_nep413_message_with_api_key(
+    token: &str,
+    wallet_name_or_id: &str,
+    chain: &ows_core::Chain,
+    message: &ows_signer::chains::near::Nep413Message,
+    index: Option<u32>,
+    vault_path: Option<&Path>,
+) -> Result<crate::types::SignResult, OwsLibError> {
+    if chain.chain_type != ows_core::ChainType::Near {
+        return Err(OwsLibError::InvalidInput(
+            "NEP-413 message signing is only supported for NEAR chains".into(),
+        ));
+    }
+    let preimage = message.signing_preimage()?;
+
+    let (key_file, wallet) = load_authorized_wallet(token, wallet_name_or_id, vault_path)?;
+    let transaction = ows_core::policy::TransactionContext {
+        effects: vec![],
+        raw_hex: hex::encode(&preimage),
+        data: None,
+        chain_extra: Some(serde_json::json!({
+            "kind": "nep413_message",
+            "message": message.message,
+            "nonce": hex::encode(message.nonce),
+            "recipient": message.recipient,
+            "callback_url": message.callback_url,
+        })),
+    };
+    let (key, _) = enforce_policies_and_decrypt_key(
+        token,
+        key_file,
+        wallet,
+        chain,
+        PolicyRequestType::SignMessage,
+        Some(transaction),
+        None,
+        index,
+        vault_path,
+    )?;
+
+    let output = ows_signer::chains::NearSigner.sign_nep413_message(key.expose(), message)?;
+
+    Ok(crate::types::SignResult {
+        signature: hex::encode(&output.signature),
+        recovery_id: output.recovery_id,
+        transaction: None,
+    })
+}
+
 /// Sign a raw 32-byte hash using an API token (agent mode).
 pub fn sign_hash_with_api_key(
     token: &str,

@@ -310,6 +310,45 @@ fn sign_authorization(
     })
 }
 
+/// Sign a NEAR NEP-413 off-chain message.
+///
+/// `nonce_hex` is the 32-byte nonce chosen by the recipient, hex-encoded.
+#[pyfunction]
+#[pyo3(signature = (wallet, chain, message, nonce_hex, recipient, callback_url=None, passphrase=None, index=None, vault_path_opt=None))]
+#[allow(clippy::too_many_arguments)]
+fn sign_nep413_message(
+    wallet: &str,
+    chain: &str,
+    message: &str,
+    nonce_hex: &str,
+    recipient: &str,
+    callback_url: Option<&str>,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> PyResult<PyObject> {
+    let result = ows_lib::sign_nep413_message(
+        wallet,
+        chain,
+        message,
+        nonce_hex,
+        recipient,
+        callback_url,
+        passphrase,
+        index,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map_err(map_err)?;
+
+    Python::with_gil(|py| {
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("signature", &result.signature)?;
+        dict.set_item("recovery_id", result.recovery_id)?;
+        dict.set_item("transaction", result.transaction.as_deref())?;
+        Ok(dict.unbind().into())
+    })
+}
+
 /// Sign and broadcast a transaction.
 #[pyfunction]
 #[pyo3(signature = (wallet, chain, tx_hex, passphrase=None, index=None, rpc_url=None, vault_path_opt=None))]
@@ -505,6 +544,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sign_typed_data, m)?)?;
     m.add_function(wrap_pyfunction!(sign_hash, m)?)?;
     m.add_function(wrap_pyfunction!(sign_authorization, m)?)?;
+    m.add_function(wrap_pyfunction!(sign_nep413_message, m)?)?;
     m.add_function(wrap_pyfunction!(sign_and_send, m)?)?;
     m.add_function(wrap_pyfunction!(create_policy, m)?)?;
     m.add_function(wrap_pyfunction!(list_policies, m)?)?;

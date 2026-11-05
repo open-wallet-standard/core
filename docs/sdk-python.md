@@ -24,6 +24,7 @@ from ows import (
     sign_message,
     sign_hash,
     sign_authorization,
+    sign_nep413_message,
     sign_typed_data,
     delete_wallet,
 )
@@ -251,6 +252,26 @@ result = sign_authorization(
 )
 print(result["signature"])
 print(result["recovery_id"])  # 0 or 1
+```
+
+#### `sign_nep413_message(wallet, chain, message, nonce_hex, recipient, callback_url=None, passphrase=None, index=None, vault_path=None)`
+
+Sign a NEAR [NEP-413](https://github.com/near/NEPs/blob/master/neps/nep-0413.md) off-chain message: Ed25519 over `sha256(borsh(u32 2147484061) || borsh({ message, nonce, recipient, callbackUrl }))`, the same signature `near-api-js`'s `signNep413Message` produces.
+
+`chain` must resolve to a NEAR chain. `nonce_hex` is the 32-byte nonce chosen by the recipient, hex-encoded (`0x` prefix optional). `recipient` must not be empty. The returned `signature` is hex; NEP-413 verifiers usually expect base64.
+
+```python
+import base64
+
+result = sign_nep413_message(
+    "agent-treasury",
+    "near",
+    "Sign in to example.com",
+    "42" * 32,
+    "example.com",
+    callback_url="https://example.com/callback",
+)
+signature_b64 = base64.b64encode(bytes.fromhex(result["signature"])).decode()
 ```
 
 #### `sign_typed_data(wallet, chain, typed_data_json, passphrase=None, index=None, vault_path=None, address=None)`

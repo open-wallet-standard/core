@@ -210,6 +210,78 @@ def test_sign_hash_and_authorization_api_key_mode(vault_dir):
         )
 
 
+NEAR_SEED = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
+NEP413_SIGNATURE = (
+    "c76b8fd211f7545b9d3fb863ad38d9bb7fdb31521eea65e13efcf67a48ccbaef"
+    "0e54c64ae2dd4fd6b8f28dba6463468487ec846e3b1e252588dfbedf0a86a709"
+)
+
+
+def test_sign_nep413_message_owner_mode(vault_dir):
+    wallet = ows.import_wallet_private_key(
+        "nep413-owner", NEAR_SEED, chain="near", vault_path_opt=vault_dir
+    )
+
+    result = ows.sign_nep413_message(
+        wallet["id"],
+        "near",
+        "Sign in to example.com",
+        "42" * 32,
+        "example.com",
+        callback_url="https://example.com/callback",
+        vault_path_opt=vault_dir,
+    )
+    assert result["signature"] == NEP413_SIGNATURE
+    assert result["recovery_id"] is None
+
+    with pytest.raises(RuntimeError, match="exactly 32 bytes"):
+        ows.sign_nep413_message(
+            wallet["id"], "near", "hi", "42" * 31, "example.com",
+            vault_path_opt=vault_dir,
+        )
+    with pytest.raises(RuntimeError, match="only supported for NEAR chains"):
+        ows.sign_nep413_message(
+            wallet["id"], "solana", "hi", "42" * 32, "example.com",
+            vault_path_opt=vault_dir,
+        )
+
+
+def test_sign_nep413_message_api_key_mode(vault_dir):
+    wallet = ows.import_wallet_private_key(
+        "nep413-agent", NEAR_SEED, chain="near", vault_path_opt=vault_dir
+    )
+    ows.create_policy(json.dumps({
+        "id": "near-mainnet-only",
+        "name": "NEAR Mainnet Only",
+        "version": 1,
+        "created_at": "2026-03-22T00:00:00Z",
+        "rules": [{"type": "allowed_chains", "chain_ids": ["near:mainnet"]}],
+        "action": "deny",
+    }), vault_path_opt=vault_dir)
+    key = ows.create_api_key(
+        "nep413-agent-key", [wallet["id"]], ["near-mainnet-only"], "",
+        vault_path_opt=vault_dir,
+    )
+
+    result = ows.sign_nep413_message(
+        wallet["id"],
+        "near",
+        "Sign in to example.com",
+        "42" * 32,
+        "example.com",
+        callback_url="https://example.com/callback",
+        passphrase=key["token"],
+        vault_path_opt=vault_dir,
+    )
+    assert result["signature"] == NEP413_SIGNATURE
+
+    with pytest.raises(RuntimeError, match="not in allowlist"):
+        ows.sign_nep413_message(
+            wallet["id"], "near-testnet", "Sign in to example.com", "42" * 32,
+            "example.com", passphrase=key["token"], vault_path_opt=vault_dir,
+        )
+
+
 def test_sign_typed_data_with_api_key(vault_dir):
     wallet = ows.create_wallet("td-api-test", vault_path_opt=vault_dir)
 

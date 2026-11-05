@@ -26,6 +26,7 @@ import {
   signMessage,
   signHash,
   signAuthorization,
+  signNep413Message,
   signTypedData,
   deleteWallet,
 } from "@open-wallet-standard/core";
@@ -304,6 +305,24 @@ const result = signAuthorization(
 );
 console.log(result.signature);
 console.log(result.recoveryId); // 0 or 1
+```
+
+#### `signNep413Message(wallet, chain, message, nonceHex, recipient, callbackUrl?, passphrase?, index?, vaultPath?)`
+
+Sign a NEAR [NEP-413](https://github.com/near/NEPs/blob/master/neps/nep-0413.md) off-chain message: Ed25519 over `sha256(borsh(u32 2147484061) || borsh({ message, nonce, recipient, callbackUrl }))`, the same signature `near-api-js`'s `signNep413Message` produces.
+
+`chain` must resolve to a NEAR chain. `nonceHex` is the 32-byte nonce chosen by the recipient, hex-encoded (`0x` prefix optional). `recipient` must not be empty. The returned `signature` is hex; NEP-413 verifiers usually expect base64.
+
+```javascript
+const result = signNep413Message(
+  "agent-treasury",
+  "near",
+  "Sign in to example.com",
+  "42".repeat(32),
+  "example.com",
+  "https://example.com/callback",
+);
+const signatureBase64 = Buffer.from(result.signature, "hex").toString("base64");
 ```
 
 #### `signTypedData(wallet, chain, typedDataJson, passphrase?, index?, vaultPath?, address?)`
