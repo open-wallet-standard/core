@@ -3330,10 +3330,15 @@ mod tests {
         let _s_bytes = &raw_sig_bytes[32..64];
 
         // Verify r bytes appear in the full signed tx (they'll be RLP-encoded)
-        let full_hex = hex::encode(&full_signed_tx);
-        let r_hex = hex::encode(r_bytes);
+        let r_start = r_bytes
+            .iter()
+            .position(|&b| b != 0)
+            .unwrap_or(r_bytes.len());
+        let r_rlp = ows_signer::rlp::encode_bytes(&r_bytes[r_start..]);
         assert!(
-            full_hex.contains(&r_hex),
+            full_signed_tx
+                .windows(r_rlp.len())
+                .any(|window| window == r_rlp.as_slice()),
             "full signed tx should contain the r component"
         );
     }
