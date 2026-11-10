@@ -6,7 +6,43 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Reject CRLF line endings
+        run: |
+          crlf=$(git ls-files --eol | grep -E '^i/(crlf|mixed)' || true)
+          if [ -n "$crlf" ]; then
+            echo "$crlf"
+            echo "::error::Files with CRLF line endings. Convert them to LF."
+            exit 1
+          fi
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@94a7388bec5d4c8dd93e3ebf09e0ff448f3f6f4d # v2.68.35
+        with:
+          tool: cargo-deny
+
+      - name: Allow crates.io as the only dependency source
+        run: |
+          for manifest in ows/Cargo.toml bindings/node/Cargo.toml bindings/python/Cargo.toml; do
+            cargo deny --manifest-path "$manifest" check --config deny.toml sources
+          done
+
+      - name: Flag new crates younger than 90 days
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/check-new-crates.py "$BASE_SHA"
+
   readme:
     runs-on: ubuntu-latest
     steps:
