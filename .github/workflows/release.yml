@@ -88,6 +88,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        if: runner.os == 'macOS'
         with:
           python-version: |
             3.9
@@ -103,6 +104,8 @@ jobs:
 
       - name: Build wheels
         uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad # v1.50.1
+        env:
+          CFLAGS_aarch64_unknown_linux_gnu: -D__ARM_ARCH=8
         with:
           target: ${{ matrix.target }}
           args: --release --out dist -i python3.9 python3.10 python3.11 python3.12 python3.13
@@ -317,6 +320,16 @@ jobs:
         run: |
           V="${GITHUB_REF_NAME#v}"
           "$GITHUB_WORKSPACE/scripts/set-version.sh" "$V" --node
+
+      - name: Wait for the core package on the registry
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          for _ in $(seq 1 30); do
+            npm view "@open-wallet-standard/core@$V" version && exit 0
+            sleep 10
+          done
+          echo "@open-wallet-standard/core@$V is not on the registry after 5 minutes"
+          exit 1
 
       - name: Install dependencies
         run: npm install --ignore-scripts
