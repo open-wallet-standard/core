@@ -60,6 +60,16 @@ describe('@open-wallet-standard/core', () => {
     }
   });
 
+  it('routes Midnight address derivation through the binding', () => {
+    const phrase = generateMnemonic(12);
+
+    // Address derivation reaches the Midnight signer and re-encodes per network HRP.
+    const preview = deriveAddress(phrase, 'midnight:preview');
+    assert.ok(preview.startsWith('mn_addr_preview1'), `expected preview HRP, got ${preview}`);
+    const mainnet = deriveAddress(phrase, 'midnight:mainnet');
+    assert.ok(mainnet.startsWith('mn_addr1'), `expected mainnet HRP, got ${mainnet}`);
+  });
+
   // ---- Universal wallet lifecycle ----
 
   it('creates a universal wallet with 16 accounts', () => {
@@ -81,6 +91,7 @@ describe('@open-wallet-standard/core', () => {
     assert.ok(chainIds.some((c) => c.startsWith('nano:')));
     assert.ok(chainIds.some((c) => c.startsWith('near:')));
     assert.ok(chainIds.some((c) => c.startsWith('cip34:')));
+    assert.ok(chainIds.some((c) => c.startsWith('midnight:')));
 
     // List
     const wallets = listWallets(vaultDir);

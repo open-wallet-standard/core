@@ -18,8 +18,16 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 midnight-ledger = "8.0.3"
+midnight-ledger-static = "9.0.0"
 midnight-zswap = "8.0.3"
 midnight-serialize = "1.0.0"
 midnight-base-crypto = "1.0.0"
 midnight-storage = "2.0.1"
 midnight-coin-structure = "2.0.0"
+transient-crypto = { version = "2.0.0", package = "midnight-transient-crypto" }
+onchain-runtime = { version = "3.0.0", package = "midnight-onchain-runtime" }
+zkir_v2 = { version = "2.1.0", package = "midnight-zkir" }
+rand = "0.8"
+anyhow = "1"
+subxt = { version = "0.38", default-features = false, features = ["jsonrpsee", "native"] }
+jsonrpsee = { version = "0.24", features = ["ws-client", "macros"] }

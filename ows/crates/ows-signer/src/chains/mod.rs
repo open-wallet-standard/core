@@ -18,7 +18,10 @@ pub use self::cardano::CardanoSigner;
 pub use self::cosmos::CosmosSigner;
 pub use self::evm::EvmSigner;
 pub use self::filecoin::FilecoinSigner;
-pub use self::midnight::{MidnightCryptoProvider, MidnightNetwork, MidnightSigner};
+pub use self::midnight::{
+    DustSpendPlan, MidnightCryptoProvider, MidnightNetwork, MidnightSigner, ShieldedAuthorized,
+    ShieldedSpendPlan,
+};
 pub use self::nano::NanoSigner;
 pub use self::near::NearSigner;
 pub use self::solana::SolanaSigner;
