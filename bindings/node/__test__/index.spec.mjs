@@ -19,6 +19,7 @@ import {
   signMessage,
   signHash,
   signAuthorization,
+  signNep413Message,
   signTypedData,
   createPolicy,
   listPolicies,
@@ -350,6 +351,38 @@ describe('@open-wallet-standard/core', () => {
     deleteWallet(wallet.id, vaultDir);
   });
 
+  it('signs NEAR NEP-413 messages matching near-api-js', () => {
+    const seed = '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60';
+    const wallet = importWalletPrivateKey('nep413-owner', seed, undefined, vaultDir, 'near');
+    const nonce = '42'.repeat(32);
+    const expected = 'c76b8fd211f7545b9d3fb863ad38d9bb7fdb31521eea65e13efcf67a48ccbaef0e54c64ae2dd4fd6b8f28dba6463468487ec846e3b1e252588dfbedf0a86a709';
+
+    const sig = signNep413Message(
+      wallet.id,
+      'near',
+      'Sign in to example.com',
+      nonce,
+      'example.com',
+      'https://example.com/callback',
+      undefined,
+      undefined,
+      vaultDir,
+    );
+    assert.equal(sig.signature, expected);
+    assert.equal(sig.recoveryId, undefined);
+
+    assert.throws(
+      () => signNep413Message(wallet.id, 'near', 'hi', '42'.repeat(31), 'example.com', null, undefined, undefined, vaultDir),
+      (err) => err.message.includes('exactly 32 bytes'),
+    );
+    assert.throws(
+      () => signNep413Message(wallet.id, 'solana', 'hi', nonce, 'example.com', null, undefined, undefined, vaultDir),
+      (err) => err.message.includes('only supported for NEAR chains'),
+    );
+
+    deleteWallet(wallet.id, vaultDir);
+  });
+
   // ---- Determinism ----
 
   it('produces deterministic signatures', () => {
@@ -645,6 +678,44 @@ describe('@open-wallet-standard/core', () => {
 
     revokeApiKey(key.id, vaultDir);
     deletePolicy('test-exe-deny', vaultDir);
+    deleteWallet(wallet.id, vaultDir);
+  });
+
+  it('signs NEAR NEP-413 messages through the API-key path', () => {
+    const seed = '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60';
+    const wallet = importWalletPrivateKey('nep413-agent', seed, undefined, vaultDir, 'near');
+
+    createPolicy(JSON.stringify({
+      id: 'test-near-mainnet-only',
+      name: 'NEAR Mainnet Only',
+      version: 1,
+      created_at: '2026-03-22T00:00:00Z',
+      rules: [
+        { type: 'allowed_chains', chain_ids: ['near:mainnet'] },
+      ],
+      action: 'deny',
+    }), vaultDir);
+    const key = createApiKey('nep413-agent', [wallet.id], ['test-near-mainnet-only'], '', null, vaultDir);
+
+    const sig = signNep413Message(
+      wallet.id, 'near', 'Sign in to example.com', '42'.repeat(32), 'example.com',
+      'https://example.com/callback', key.token, null, vaultDir,
+    );
+    assert.equal(
+      sig.signature,
+      'c76b8fd211f7545b9d3fb863ad38d9bb7fdb31521eea65e13efcf67a48ccbaef0e54c64ae2dd4fd6b8f28dba6463468487ec846e3b1e252588dfbedf0a86a709',
+    );
+
+    assert.throws(
+      () => signNep413Message(
+        wallet.id, 'near-testnet', 'Sign in to example.com', '42'.repeat(32), 'example.com',
+        null, key.token, null, vaultDir,
+      ),
+      (err) => err.message.includes('not in allowlist'),
+    );
+
+    revokeApiKey(key.id, vaultDir);
+    deletePolicy('test-near-mainnet-only', vaultDir);
     deleteWallet(wallet.id, vaultDir);
   });
 

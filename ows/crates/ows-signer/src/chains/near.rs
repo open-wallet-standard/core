@@ -1,5 +1,6 @@
 use crate::curve::Curve;
 use crate::traits::{ChainSigner, SignOutput, SignerError};
+use borsh::BorshSerialize;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use ows_core::ChainType;
 use sha2::{Digest, Sha256};
@@ -31,12 +32,49 @@ pub struct NearSigner;
 /// Borsh enum discriminant for ED25519 signatures (and public keys) in NEAR.
 const KEY_TYPE_ED25519: u8 = 0x00;
 
+pub const NEP413_TAG: u32 = (1 << 31) + 413;
+
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize)]
+pub struct Nep413Message {
+    pub message: String,
+    pub nonce: [u8; 32],
+    pub recipient: String,
+    pub callback_url: Option<String>,
+}
+
+impl Nep413Message {
+    pub fn signing_preimage(&self) -> Result<Vec<u8>, SignerError> {
+        if self.recipient.is_empty() {
+            return Err(SignerError::InvalidMessage(
+                "NEP-413 recipient must not be empty".into(),
+            ));
+        }
+        let mut out = NEP413_TAG.to_le_bytes().to_vec();
+        borsh::to_writer(&mut out, self)
+            .map_err(|e| SignerError::InvalidMessage(format!("NEP-413 payload: {e}")))?;
+        Ok(out)
+    }
+
+    pub fn signing_hash(&self) -> Result<[u8; 32], SignerError> {
+        Ok(Sha256::digest(self.signing_preimage()?).into())
+    }
+}
+
 impl NearSigner {
     fn signing_key(private_key: &[u8]) -> Result<SigningKey, SignerError> {
         let key_bytes: [u8; 32] = private_key.try_into().map_err(|_| {
             SignerError::InvalidPrivateKey(format!("expected 32 bytes, got {}", private_key.len()))
         })?;
         Ok(SigningKey::from_bytes(&key_bytes))
+    }
+
+    pub fn sign_nep413_message(
+        &self,
+        private_key: &[u8],
+        message: &Nep413Message,
+    ) -> Result<SignOutput, SignerError> {
+        let hash = message.signing_hash()?;
+        self.sign(private_key, &hash)
     }
 }
 
@@ -76,10 +114,6 @@ impl ChainSigner for NearSigner {
         address: Option<&str>,
     ) -> Result<SignOutput, SignerError> {
         self.verify_sign_message_address(private_key, address)?;
-        // V1: raw ed25519 over message bytes (parity with Solana).
-        // NEP-413 message signing (`tag 2147484061 || borsh(payload)`) is a
-        // structurally distinct flow with required fields (recipient, nonce);
-        // tracked as a follow-up so callers can opt in.
         self.sign(private_key, message)
     }
 
@@ -354,6 +388,110 @@ mod tests {
         assert_eq!(&signed[..tx_bytes.len()], tx_bytes.as_slice());
         assert_eq!(signed[tx_bytes.len()], 0x00, "ED25519 enum discriminant");
         assert_eq!(&signed[tx_bytes.len() + 1..], &[0xAB; 64]);
+    }
+
+    struct Nep413Vector {
+        message: &'static str,
+        nonce_hex: &'static str,
+        recipient: &'static str,
+        callback_url: Option<&'static str>,
+        preimage_hex: &'static str,
+        hash_hex: &'static str,
+        signature_hex: &'static str,
+    }
+
+    const NEP413_VECTORS: &[Nep413Vector] = &[
+        Nep413Vector {
+            message: "Login request",
+            nonce_hex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+            recipient: "example.near",
+            callback_url: None,
+            preimage_hex: "9d0100800d0000004c6f67696e2072657175657374000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0c0000006578616d706c652e6e65617200",
+            hash_hex: "42489eb3ff8180ce947da4a8fc2199a4c3e1a3aeecae967ecdf1db2565ad463f",
+            signature_hex: "2320b020f1863ff45a5117fa91ce190e3edab6d000d52d7980822bdf5756457390732bae65729ab62ef33c098407609801fb1cfd5d450a17313bc4885b1c370f",
+        },
+        Nep413Vector {
+            message: "Sign in to example.com",
+            nonce_hex: "4242424242424242424242424242424242424242424242424242424242424242",
+            recipient: "example.com",
+            callback_url: Some("https://example.com/callback"),
+            preimage_hex: "9d010080160000005369676e20696e20746f206578616d706c652e636f6d42424242424242424242424242424242424242424242424242424242424242420b0000006578616d706c652e636f6d011c00000068747470733a2f2f6578616d706c652e636f6d2f63616c6c6261636b",
+            hash_hex: "73f940eb786541d16f6ddad2977cc10ab9fddee98bcb1f8255dbe5e873b681cb",
+            signature_hex: "c76b8fd211f7545b9d3fb863ad38d9bb7fdb31521eea65e13efcf67a48ccbaef0e54c64ae2dd4fd6b8f28dba6463468487ec846e3b1e252588dfbedf0a86a709",
+        },
+        Nep413Vector {
+            message: "h\u{e9}llo \u{2713} \u{4e16}\u{754c}",
+            nonce_hex: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            recipient: "app.example.near",
+            callback_url: Some(""),
+            preimage_hex: "9d0100801100000068c3a96c6c6f20e29c9320e4b896e7958cffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff100000006170702e6578616d706c652e6e6561720100000000",
+            hash_hex: "02709f711f9702f740233322954d854e33c2ed04e52a18d9898f9f54b1d113fa",
+            signature_hex: "77b14a2e6dd8543aee54d6f5f6188f2c6c0b7fe0b6a2999c0b02a6c47c4fc1140c48c6910ec65e2350dc9fd0fb543228f9f3472683e30c5eaaf465254acf240c",
+        },
+        Nep413Vector {
+            message: "",
+            nonce_hex: "0000000000000000000000000000000000000000000000000000000000000000",
+            recipient: "verifier.near",
+            callback_url: None,
+            preimage_hex: "9d0100800000000000000000000000000000000000000000000000000000000000000000000000000d00000076657269666965722e6e65617200",
+            hash_hex: "1003082300749f958b1aa80e496a32b3ce6b4377b52e6ed5782a686aeb59a69a",
+            signature_hex: "feda994ffe3a2d87dbffa707a6ec36001a35b0da521470b2560865bf8b2e70dd5262bfcb3505da5ba3212fed34c735ef870f67295d29176eaf48ab2f382f7c02",
+        },
+    ];
+
+    fn nep413_message(v: &Nep413Vector) -> Nep413Message {
+        Nep413Message {
+            message: v.message.to_string(),
+            nonce: hex::decode(v.nonce_hex).unwrap().try_into().unwrap(),
+            recipient: v.recipient.to_string(),
+            callback_url: v.callback_url.map(String::from),
+        }
+    }
+
+    #[test]
+    fn test_nep413_matches_near_api_js_vectors() {
+        let signer = NearSigner;
+        let verifying_key = SigningKey::from_bytes(&rfc_seed().try_into().unwrap()).verifying_key();
+        for v in NEP413_VECTORS {
+            let msg = nep413_message(v);
+            assert_eq!(
+                hex::encode(msg.signing_preimage().unwrap()),
+                v.preimage_hex,
+                "preimage for {:?}",
+                v.message
+            );
+            assert_eq!(hex::encode(msg.signing_hash().unwrap()), v.hash_hex);
+
+            let out = signer.sign_nep413_message(&rfc_seed(), &msg).unwrap();
+            assert_eq!(hex::encode(&out.signature), v.signature_hex);
+            assert_eq!(
+                out.public_key.as_deref(),
+                Some(verifying_key.as_bytes().as_slice())
+            );
+            let sig = ed25519_dalek::Signature::from_bytes(&out.signature.try_into().unwrap());
+            verifying_key
+                .verify(&msg.signing_hash().unwrap(), &sig)
+                .expect("NEP-413 signature must verify against the payload hash");
+        }
+    }
+
+    #[test]
+    fn test_nep413_rejects_empty_recipient() {
+        let signer = NearSigner;
+        let mut msg = nep413_message(&NEP413_VECTORS[0]);
+        msg.recipient = String::new();
+        assert!(matches!(
+            msg.signing_preimage(),
+            Err(SignerError::InvalidMessage(_))
+        ));
+        assert!(signer.sign_nep413_message(&rfc_seed(), &msg).is_err());
+    }
+
+    #[test]
+    fn test_nep413_rejects_invalid_key() {
+        let signer = NearSigner;
+        let msg = nep413_message(&NEP413_VECTORS[0]);
+        assert!(signer.sign_nep413_message(&[0u8; 31], &msg).is_err());
     }
 
     #[test]

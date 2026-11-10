@@ -80,7 +80,7 @@ Message signing follows chain-specific conventions:
 - **Sui**: Intent-prefixed (scope=3) BLAKE2b-256 digest, Ed25519 signature
 - **Cosmos**: ADR-036 off-chain signing
 - **Filecoin**: Blake2b-256 hash then secp256k1 signing
-- **NEAR**: V1 Ed25519 signature over the raw message bytes (parity with Solana). [NEP-413](https://github.com/near/NEPs/blob/master/neps/nep-0413.md) prefixed message signing — `tag 2147484061 || borsh({message, nonce, recipient, callbackUrl?})` — is tracked as a follow-up so callers can opt in via a structured payload. Transaction signing is `Ed25519(SHA-256(borsh(Transaction)))`; `encode_signed_transaction` returns `borsh(Transaction) || 0x00 || sig64` (the canonical `borsh(SignedTransaction)`).
+- **NEAR**: Ed25519 signature over the raw message bytes (parity with Solana). [NEP-413](https://github.com/near/NEPs/blob/master/neps/nep-0413.md) messages have their own operation, `signNep413Message` (below). Transaction signing is `Ed25519(SHA-256(borsh(Transaction)))`; `encode_signed_transaction` returns `borsh(Transaction) || 0x00 || sig64` (the canonical `borsh(SignedTransaction)`).
 
 ### `signTypedData(request: SignTypedDataRequest): Promise<SignMessageResult>`
 
@@ -144,6 +144,23 @@ interface SignAuthorizationRequest {
 ```
 
 This operation signs `keccak256(0x05 || rlp([eip155_chain_id(chainId), address, nonce]))`. The selected EVM `chainId` chooses the wallet account, policy context, and the EIP-155 chain ID encoded into the EIP-7702 tuple itself. If a caller needs a nonstandard tuple, such as wildcard chain ID `0`, it should precompute the digest and call `signHash` directly.
+
+### `signNep413Message(request: SignNep413MessageRequest): Promise<SignMessageResult>`
+
+Signs a NEAR [NEP-413](https://github.com/near/NEPs/blob/master/neps/nep-0413.md) off-chain message, the format NEAR wallets use for authentication.
+
+```typescript
+interface SignNep413MessageRequest {
+  walletId: WalletId;
+  chainId: ChainId;                     // Must resolve to a NEAR chain
+  message: string;
+  nonce: string;                        // 32 bytes, hex-encoded, chosen by the recipient
+  recipient: string;                    // e.g. "alice.near" or "myapp.com"; must not be empty
+  callbackUrl?: string;
+}
+```
+
+This operation signs `sha256(borsh(u32 2147484061) || borsh({ message, nonce, recipient, callbackUrl }))` with Ed25519, the same signature `near-api-js`'s `signNep413Message` and NEP-413 wallets produce. The `2^31 + 413` tag guarantees the signature can never authorize a transaction. `signature` is hex-encoded; NEP-413 verifiers usually expect it base64-encoded alongside the `ed25519:` public key and the account ID. With an API token, policies see a `sign_message` request whose `transaction.raw_hex` is the tagged pre-image (`borsh(tag) || borsh(payload)`), and `transaction.chain_extra` carries the decoded fields (`kind: "nep413_message"`, `message`, `nonce`, `recipient`, `callback_url`). Raw `signMessage` on NEAR is still available to the same token, and a raw signature over the 32-byte SHA-256 of a NEP-413 payload is that payload's signature: a policy that restricts NEP-413 recipients has to deny raw 32-byte NEAR messages as well. For a wallet imported from a raw Ed25519 private key, it also has to deny 32-byte raw payloads on the other chains that sign raw Ed25519 with the same key (Solana, TON).
 
 ## Serialized Transaction Format
 

@@ -336,6 +336,41 @@ pub fn sign_authorization(
     .map_err(map_err)
 }
 
+/// Sign a NEAR NEP-413 off-chain message. Returns hex-encoded signature.
+///
+/// `nonce_hex` is the 32-byte nonce chosen by the recipient, hex-encoded.
+#[napi]
+#[allow(clippy::too_many_arguments)]
+pub fn sign_nep413_message(
+    wallet: String,
+    chain: String,
+    message: String,
+    nonce_hex: String,
+    recipient: String,
+    callback_url: Option<String>,
+    passphrase: Option<String>,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> Result<SignResult> {
+    ows_lib::sign_nep413_message(
+        &wallet,
+        &chain,
+        &message,
+        &nonce_hex,
+        &recipient,
+        callback_url.as_deref(),
+        passphrase.as_deref(),
+        index,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map(|r| SignResult {
+        signature: r.signature,
+        recovery_id: r.recovery_id.map(|v| v as u32),
+        transaction: r.transaction,
+    })
+    .map_err(map_err)
+}
+
 // ---------------------------------------------------------------------------
 // Policy management
 // ---------------------------------------------------------------------------

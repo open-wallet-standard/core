@@ -55,6 +55,7 @@ The following features are optional unless a calling profile requires them:
 - `signAndSend`
 - `signHash`
 - `signAuthorization`
+- `signNep413Message`
 - `signTypedData`
 - executable policies
 - subprocess or enclave-style isolation

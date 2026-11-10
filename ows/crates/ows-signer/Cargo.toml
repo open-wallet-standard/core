@@ -38,6 +38,7 @@ serde_json = "1"
 aes-gcm = "0.10"
 scrypt = "0.11"
 blake2 = "0.10"
+borsh = { version = "1", features = ["derive"] }
 digest = "0.10"
 midnight-ledger = "8.0.3"
 midnight-zswap = "8.0.3"

@@ -800,6 +800,60 @@ pub fn sign_message(
     crate::types::sign_result_from_message_output(chain.chain_type, &output)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn sign_nep413_message(
+    wallet: &str,
+    chain: &str,
+    message: &str,
+    nonce_hex: &str,
+    recipient: &str,
+    callback_url: Option<&str>,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    vault_path: Option<&Path>,
+) -> Result<SignResult, OwsLibError> {
+    let credential = passphrase.unwrap_or("");
+    let chain = parse_chain(chain)?;
+    if chain.chain_type != ChainType::Near {
+        return Err(OwsLibError::InvalidInput(
+            "NEP-413 message signing is only supported for NEAR chains".into(),
+        ));
+    }
+
+    let nonce_clean = nonce_hex.strip_prefix("0x").unwrap_or(nonce_hex);
+    let nonce: [u8; 32] = hex::decode(nonce_clean)
+        .map_err(|e| OwsLibError::InvalidInput(format!("invalid hex nonce: {e}")))?
+        .try_into()
+        .map_err(|bytes: Vec<u8>| {
+            OwsLibError::InvalidInput(format!(
+                "NEP-413 nonce must be exactly 32 bytes, got {}",
+                bytes.len()
+            ))
+        })?;
+    let nep413 = ows_signer::chains::near::Nep413Message {
+        message: message.to_string(),
+        nonce,
+        recipient: recipient.to_string(),
+        callback_url: callback_url.map(String::from),
+    };
+    nep413.signing_preimage()?;
+
+    if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
+        return crate::key_ops::sign_nep413_message_with_api_key(
+            credential, wallet, &chain, &nep413, index, vault_path,
+        );
+    }
+
+    let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
+    let output = ows_signer::chains::NearSigner.sign_nep413_message(key.expose(), &nep413)?;
+
+    Ok(SignResult {
+        signature: hex::encode(&output.signature),
+        recovery_id: output.recovery_id,
+        transaction: None,
+    })
+}
+
 /// Sign EIP-712 typed structured data. Returns hex-encoded signature.
 /// Only supported for EVM chains.
 ///
@@ -3869,6 +3923,232 @@ mod tests {
                 assert!(reason.contains("unexpected raw_hex"));
             }
             other => panic!("expected PolicyDenied, got: {other}"),
+        }
+    }
+
+    const NEAR_RFC8032_SEED: &str =
+        "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+    const NEP413_NONCE: &str = "4242424242424242424242424242424242424242424242424242424242424242";
+    const NEP413_SIGNATURE: &str = "c76b8fd211f7545b9d3fb863ad38d9bb7fdb31521eea65e13efcf67a48ccbaef0e54c64ae2dd4fd6b8f28dba6463468487ec846e3b1e252588dfbedf0a86a709";
+    const NEP413_PREIMAGE: &str = "9d010080160000005369676e20696e20746f206578616d706c652e636f6d42424242424242424242424242424242424242424242424242424242424242420b0000006578616d706c652e636f6d011c00000068747470733a2f2f6578616d706c652e636f6d2f63616c6c6261636b";
+
+    fn save_near_wallet(name: &str, passphrase: &str, vault: &Path) -> WalletInfo {
+        let keys = KeyPair {
+            secp256k1: random_32().unwrap(),
+            ed25519: Zeroizing::new(hex::decode(NEAR_RFC8032_SEED).unwrap()),
+            ed25519_bip32: random_ed25519_bip32().unwrap(),
+        };
+        let accounts = derive_all_accounts_from_keys(&keys).unwrap();
+        let crypto_envelope = encrypt(&keys.to_json_bytes(), passphrase).unwrap();
+        let wallet = EncryptedWallet::new(
+            uuid::Uuid::new_v4().to_string(),
+            name.to_string(),
+            accounts,
+            serde_json::to_value(&crypto_envelope).unwrap(),
+            KeyType::PrivateKey,
+        );
+        vault::save_encrypted_wallet(&wallet, Some(vault)).unwrap();
+        wallet_to_info(&wallet)
+    }
+
+    fn nep413_sign(
+        wallet: &str,
+        chain: &str,
+        nonce: &str,
+        recipient: &str,
+        credential: &str,
+        vault: &Path,
+    ) -> Result<SignResult, OwsLibError> {
+        sign_nep413_message(
+            wallet,
+            chain,
+            "Sign in to example.com",
+            nonce,
+            recipient,
+            Some("https://example.com/callback"),
+            Some(credential),
+            None,
+            Some(vault),
+        )
+    }
+
+    #[test]
+    fn sign_nep413_message_owner_path_matches_near_api_js() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = save_near_wallet("nep413-owner", "pass", vault);
+
+        let result = nep413_sign(
+            &wallet.id,
+            "near",
+            NEP413_NONCE,
+            "example.com",
+            "pass",
+            vault,
+        )
+        .unwrap();
+        assert_eq!(result.signature, NEP413_SIGNATURE);
+        assert_eq!(result.recovery_id, None);
+
+        let prefixed = nep413_sign(
+            &wallet.id,
+            "near",
+            &format!("0x{NEP413_NONCE}"),
+            "example.com",
+            "pass",
+            vault,
+        )
+        .unwrap();
+        assert_eq!(prefixed.signature, NEP413_SIGNATURE);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sign_nep413_message_api_key_policy_sees_tagged_preimage() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = save_near_wallet("nep413-ctx", "", vault);
+
+        let script = vault.join("check-nep413.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nctx=$(cat)\n\
+                 case \"$ctx\" in *'\"raw_hex\":\"{NEP413_PREIMAGE}\"'*) ;; *) echo '{{\"allow\": false, \"reason\": \"raw_hex\"}}'; exit 0;; esac\n\
+                 case \"$ctx\" in *'\"request_type\":\"sign_message\"'*) ;; *) echo '{{\"allow\": false, \"reason\": \"request_type\"}}'; exit 0;; esac\n\
+                 case \"$ctx\" in *'\"kind\":\"nep413_message\"'*) ;; *) echo '{{\"allow\": false, \"reason\": \"kind\"}}'; exit 0;; esac\n\
+                 case \"$ctx\" in *'\"recipient\":\"example.com\"'*) echo '{{\"allow\": true}}';; *) echo '{{\"allow\": false, \"reason\": \"recipient\"}}';; esac\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let policy = ows_core::Policy {
+            id: "nep413-ctx".to_string(),
+            name: "nep413 context".to_string(),
+            version: 1,
+            created_at: "2026-03-22T00:00:00Z".to_string(),
+            rules: vec![],
+            executable: Some(script.display().to_string()),
+            config: None,
+            action: ows_core::PolicyAction::Deny,
+        };
+        crate::policy_store::save_policy(&policy, Some(vault)).unwrap();
+        let (token, _) = crate::key_ops::create_api_key(
+            "nep413-ctx-key",
+            std::slice::from_ref(&wallet.id),
+            &["nep413-ctx".to_string()],
+            "",
+            None,
+            Some(vault),
+        )
+        .unwrap();
+
+        let allowed = nep413_sign(
+            &wallet.id,
+            "near",
+            NEP413_NONCE,
+            "example.com",
+            &token,
+            vault,
+        )
+        .unwrap();
+        assert_eq!(allowed.signature, NEP413_SIGNATURE);
+
+        let denied = nep413_sign(&wallet.id, "near", NEP413_NONCE, "other.com", &token, vault);
+        match denied.unwrap_err() {
+            OwsLibError::Core(OwsError::PolicyDenied { reason, .. }) => {
+                assert_eq!(reason, "raw_hex");
+            }
+            other => panic!("expected PolicyDenied, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn sign_nep413_message_rejects_non_near_chains() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = save_near_wallet("nep413-solana", "", vault);
+        for credential in ["", "ows_key_not_a_real_token"] {
+            let err = nep413_sign(
+                &wallet.id,
+                "solana",
+                NEP413_NONCE,
+                "example.com",
+                credential,
+                vault,
+            )
+            .unwrap_err();
+            match err {
+                OwsLibError::InvalidInput(msg) => {
+                    assert!(msg.contains("only supported for NEAR chains"), "{msg}");
+                }
+                other => panic!("expected InvalidInput, got: {other}"),
+            }
+        }
+    }
+
+    #[test]
+    fn sign_nep413_message_with_api_key_rejects_non_near_chains() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = save_near_wallet("nep413-direct", "", vault);
+        let msg = ows_signer::chains::near::Nep413Message {
+            message: "hi".into(),
+            nonce: [0x42; 32],
+            recipient: "example.com".into(),
+            callback_url: None,
+        };
+        let err = crate::key_ops::sign_nep413_message_with_api_key(
+            "ows_key_not_a_real_token",
+            &wallet.id,
+            &parse_chain("solana").unwrap(),
+            &msg,
+            None,
+            Some(vault),
+        )
+        .unwrap_err();
+        match err {
+            OwsLibError::InvalidInput(msg) => {
+                assert!(msg.contains("only supported for NEAR chains"), "{msg}");
+            }
+            other => panic!("expected InvalidInput, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn sign_nep413_message_rejects_bad_nonce() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = save_near_wallet("nep413-nonce", "", vault);
+        for (nonce, expected) in [
+            (&"42".repeat(31), "exactly 32 bytes, got 31"),
+            (&"42".repeat(33), "exactly 32 bytes, got 33"),
+            (&String::new(), "exactly 32 bytes, got 0"),
+            (&"zz".repeat(32), "invalid hex nonce"),
+            (&format!("0X{NEP413_NONCE}"), "invalid hex nonce"),
+        ] {
+            let err = nep413_sign(&wallet.id, "near", nonce, "example.com", "", vault).unwrap_err();
+            match err {
+                OwsLibError::InvalidInput(msg) => assert!(msg.contains(expected), "{msg}"),
+                other => panic!("expected InvalidInput for {nonce:?}, got: {other}"),
+            }
+        }
+    }
+
+    #[test]
+    fn sign_nep413_message_rejects_empty_recipient_before_decrypting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = save_near_wallet("nep413-recipient", "pass", vault);
+        let err =
+            nep413_sign(&wallet.id, "near", NEP413_NONCE, "", "wrong-pass", vault).unwrap_err();
+        match err {
+            OwsLibError::Signer(ows_signer::SignerError::InvalidMessage(msg)) => {
+                assert!(msg.contains("recipient must not be empty"), "{msg}");
+            }
+            other => panic!("expected InvalidMessage, got: {other}"),
         }
     }
 
