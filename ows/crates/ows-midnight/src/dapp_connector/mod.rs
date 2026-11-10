@@ -11,17 +11,33 @@ use serde::Deserialize;
 
 use crate::BalancedPlan;
 
+mod balance_sealed;
 mod balance_unsealed;
+mod build;
+mod make_intent;
+mod make_transfer;
+mod swap_offer;
 
+pub use balance_sealed::{parse_balance_sealed_json, BalanceSealedRequest};
 pub use balance_unsealed::{
-    classify_unsealed_payload, parse_balance_unsealed_json, BalanceUnsealedRequest, UnsealedKind,
+    classify_unsealed_payload, is_sealed_maker_payload, parse_balance_unsealed_json,
+    BalanceUnsealedRequest, UnsealedKind,
 };
+pub use build::{DesiredOutput, TransferKind};
+pub use make_intent::{parse_make_intent_json, DesiredInput, MakeIntentRequest};
+pub use make_transfer::{parse_make_transfer_json, MakeTransferRequest};
 
 /// A DApp Connector method the wallet can be asked to perform, resolved from a request's `method`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectorMethod {
     /// `balanceUnsealedTransaction` — also the default when a request carries no `method`.
     BalanceUnsealed,
+    /// `makeTransfer` — the wallet builds a transaction that sends the requested outputs.
+    MakeTransfer,
+    /// `makeIntent` — the wallet builds an imbalanced maker swap-offer intent.
+    MakeIntent,
+    /// `balanceSealedTransaction` — the wallet (taker) completes a maker's swap offer.
+    BalanceSealed,
     /// A method name the wallet parses but does not yet handle (e.g. a sibling still to be built).
     Other(String),
 }
@@ -39,6 +55,9 @@ pub fn parse_connector_method(json: &str) -> Result<ConnectorMethod, std::io::Er
         .map_err(|e| std::io::Error::other(format!("invalid DApp Connector request JSON: {e}")))?;
     Ok(match env.method.as_deref() {
         None | Some("balanceUnsealedTransaction") => ConnectorMethod::BalanceUnsealed,
+        Some("makeTransfer") => ConnectorMethod::MakeTransfer,
+        Some("makeIntent") => ConnectorMethod::MakeIntent,
+        Some("balanceSealedTransaction") => ConnectorMethod::BalanceSealed,
         Some(other) => ConnectorMethod::Other(other.to_string()),
     })
 }
@@ -49,6 +68,23 @@ pub fn parse_connector_method(json: &str) -> Result<ConnectorMethod, std::io::Er
 pub enum ConnectorPlan {
     /// A `balanceUnsealedTransaction` planned against the wallet's own inputs.
     BalanceUnsealed(Box<BalancedPlan>),
+    /// A `makeTransfer` request; the transaction is constructed, balanced, proved, and sealed in
+    /// `authorize` (its outputs alone already determine the wallet-relative effects for the seam).
+    MakeTransfer(MakeTransferRequest),
+    /// A `makeIntent` request; the wallet builds an imbalanced maker offer, proved in `authorize`.
+    MakeIntent(MakeIntentRequest),
+    /// A `balanceSealedTransaction`: the maker offer is SEALED (`proof,pedersen-schnorr`).
+    /// A sealed tx cannot be balanced in place (its binding fixes the value balance), so the taker
+    /// completes it by MERGING: it builds its own imbalanced half — the per-token complement of the
+    /// maker's imbalance — seals it, and `Transaction::merge`s the two. Carries the maker's sealed
+    /// bytes and that derived complement.
+    BalanceSealedMerge {
+        maker_tx: Vec<u8>,
+        complement: MakeIntentRequest,
+        /// Whether the taker funds the merged tx's DUST fee. Off (or a fee-less chain) → the merged tx
+        /// is value-balanced but carries no fee, so a live-DUST network rejects the submit.
+        pay_fees: bool,
+    },
 }
 
 impl ConnectorPlan {
@@ -63,6 +99,23 @@ impl ConnectorPlan {
             ConnectorPlan::BalanceUnsealed(plan) => {
                 crate::authorize_proven_tx(chain_id, crypto_provider, *plan)
             }
+            ConnectorPlan::MakeTransfer(req) => {
+                make_transfer::authorize(chain_id, crypto_provider, req)
+            }
+            ConnectorPlan::MakeIntent(req) => {
+                make_intent::authorize(chain_id, crypto_provider, req)
+            }
+            ConnectorPlan::BalanceSealedMerge {
+                maker_tx,
+                complement,
+                pay_fees,
+            } => balance_sealed::authorize_merge(
+                chain_id,
+                crypto_provider,
+                &maker_tx,
+                complement,
+                pay_fees,
+            ),
         }
     }
     // ── POLICY SEAM ── TODO(policy): `ConnectorPlan::effects()` belongs here — the wallet-relative
@@ -79,15 +132,124 @@ pub fn plan_connector_tx(
 ) -> Result<ConnectorPlan, std::io::Error> {
     match parse_connector_method(json)? {
         ConnectorMethod::BalanceUnsealed => balance_unsealed::plan(chain_id, crypto_provider, json),
+        ConnectorMethod::MakeTransfer => {
+            Ok(ConnectorPlan::MakeTransfer(parse_make_transfer_json(json)?))
+        }
+        ConnectorMethod::MakeIntent => Ok(ConnectorPlan::MakeIntent(parse_make_intent_json(json)?)),
+        ConnectorMethod::BalanceSealed => balance_sealed::plan(chain_id, crypto_provider, json),
         ConnectorMethod::Other(method) => Err(std::io::Error::other(format!(
             "Midnight DApp Connector method '{method}' is not yet implemented"
         ))),
     }
 }
 
+/// Normalize a raw `--tx` argument into a canonical DApp Connector request JSON. A request object
+/// passes through untouched; a bare MIP-0005 `swapoffer…` bech32 or a bare hex transaction is wrapped
+/// into the request that carries it, so the wallet accepts an offer or a proven transaction directly
+/// without the caller writing the envelope. A fully sealed maker becomes a `balanceSealedTransaction`
+/// (it is completed by merging, not balanced in place); any other hex a `balanceUnsealedTransaction`.
+/// A MIP-0006 offer payload is not a request: it goes, stringified, in a `balanceSealedTransaction`'s
+/// `makerTx`.
+pub fn normalize_connector_request(raw: &str) -> Result<String, std::io::Error> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('{') {
+        let is_offer_payload = serde_json::from_str::<serde_json::Value>(trimmed)
+            .is_ok_and(|v| v.get("method").is_none() && v.get("computed").is_some());
+        if is_offer_payload {
+            return Err(std::io::Error::other(
+                "Midnight --tx got a MIP-0006 offer payload; pass its offerBech32 directly, or put \
+                 the payload, stringified, in a balanceSealedTransaction request's makerTx",
+            ));
+        }
+        return Ok(raw.to_string());
+    }
+    if swap_offer::is_swap_offer(trimmed) {
+        return Ok(sealed_request_json(trimmed));
+    }
+    // Not JSON and not a bech32 offer: the only remaining accepted form is a bare hex transaction.
+    let hex_body = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+    let bytes = hex::decode(hex_body).map_err(|e| {
+        std::io::Error::other(format!(
+            "Midnight --tx must be a DApp Connector request JSON, a swapoffer bech32 offer, or a hex transaction: {e}"
+        ))
+    })?;
+    // A sealed maker is completed by merging, so it rides balanceSealedTransaction; every other proven
+    // shape is balanced in place by balanceUnsealedTransaction (the wallet's original method).
+    if is_sealed_maker_payload(&bytes) {
+        Ok(sealed_request_json(trimmed))
+    } else {
+        Ok(
+            serde_json::json!({ "method": "balanceUnsealedTransaction", "tx": trimmed })
+                .to_string(),
+        )
+    }
+}
+
+fn sealed_request_json(maker: &str) -> String {
+    serde_json::json!({ "method": "balanceSealedTransaction", "makerTx": maker }).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn method_of(json: &str) -> ConnectorMethod {
+        parse_connector_method(json).unwrap()
+    }
+
+    fn field_of(json: &str, key: &str) -> String {
+        serde_json::from_str::<serde_json::Value>(json).unwrap()[key]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn bare_swapoffer_wraps_as_balance_sealed() {
+        for offer in ["swapoffer1qqqmakeroffer", "SWAPOFFER1QQQMAKEROFFER"] {
+            let out = normalize_connector_request(offer).unwrap();
+            assert_eq!(method_of(&out), ConnectorMethod::BalanceSealed);
+            assert_eq!(field_of(&out, "makerTx"), offer);
+        }
+    }
+
+    #[test]
+    fn a_bare_offer_payload_is_refused_with_the_accepted_forms() {
+        let payload =
+            r#"{"version":1,"offerBech32":"swapoffer1q","computed":{"gives":[],"wants":[]}}"#;
+        let e = normalize_connector_request(payload).unwrap_err();
+        assert!(e.to_string().contains("makerTx"), "{e}");
+    }
+
+    #[test]
+    fn bare_sealed_maker_hex_wraps_as_balance_sealed() {
+        let sealed_hex =
+            hex::encode(b"midnight:transaction[v9](signature[v1],proof,pedersen-schnorr[v1]):body");
+        let out = normalize_connector_request(&sealed_hex).unwrap();
+        assert_eq!(method_of(&out), ConnectorMethod::BalanceSealed);
+        assert_eq!(field_of(&out, "makerTx"), sealed_hex);
+    }
+
+    #[test]
+    fn bare_unsealed_hex_wraps_as_balance_unsealed() {
+        let unsealed_hex =
+            hex::encode(b"midnight:transaction[v9](signature[v1],proof,embedded-fr[v1]):body");
+        let out = normalize_connector_request(&unsealed_hex).unwrap();
+        assert_eq!(method_of(&out), ConnectorMethod::BalanceUnsealed);
+        assert_eq!(field_of(&out, "tx"), unsealed_hex);
+    }
+
+    #[test]
+    fn json_request_passes_through_unchanged() {
+        let json = r#"{"method":"makeTransfer","desiredOutputs":[]}"#;
+        let out = normalize_connector_request(json).unwrap();
+        assert_eq!(method_of(&out), ConnectorMethod::MakeTransfer);
+    }
+
+    #[test]
+    fn neither_json_nor_bech32_nor_hex_is_rejected() {
+        assert!(normalize_connector_request("not a transaction").is_err());
+    }
 
     #[test]
     fn absent_method_defaults_to_balance_unsealed() {
@@ -106,10 +268,18 @@ mod tests {
     }
 
     #[test]
+    fn named_make_transfer_routes() {
+        assert_eq!(
+            parse_connector_method(r#"{"method":"makeTransfer","desiredOutputs":[]}"#).unwrap(),
+            ConnectorMethod::MakeTransfer
+        );
+    }
+
+    #[test]
     fn unhandled_method_is_preserved_by_name() {
         assert_eq!(
-            parse_connector_method(r#"{"method":"makeTransfer"}"#).unwrap(),
-            ConnectorMethod::Other("makeTransfer".to_string())
+            parse_connector_method(r#"{"method":"submitTransaction"}"#).unwrap(),
+            ConnectorMethod::Other("submitTransaction".to_string())
         );
     }
 }

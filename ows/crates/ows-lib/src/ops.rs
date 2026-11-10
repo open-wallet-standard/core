@@ -551,6 +551,14 @@ fn sign_hash_with_credential(
             "raw hash signing is only supported for secp256k1-backed chains".into(),
         ));
     }
+    // Midnight's ledger signatures are made over a `data_to_sign` the wallet builds itself, so a
+    // raw digest signed with its unshielded key could authorize a spend.
+    if chain.chain_type == ChainType::Midnight {
+        return Err(OwsLibError::InvalidInput(
+            "raw hash signing is not supported for Midnight; sign a message or a transaction instead"
+                .into(),
+        ));
+    }
 
     if hash_bytes.len() != 32 {
         return Err(OwsLibError::InvalidInput(format!(
@@ -621,12 +629,15 @@ pub fn sign_transaction(
 }
 
 /// Decode the `--tx` input into transaction bytes. A hex decode for every chain; Midnight's input is
-/// a DApp Connector request (JSON, not hex), so it is carried through unchanged for the key-aware
-/// preparation step to parse. Needs no signing key, so it can run before policy evaluation on the
-/// agent path.
+/// a DApp Connector request, normalized here into canonical request JSON — a bare `swapoffer` bech32
+/// or a bare hex transaction is wrapped into the request that carries it, so a caller can hand over an
+/// offer or a proven transaction without writing the envelope. Normalizing before the key-aware step
+/// also lets the agent path's policy pass classify the request. Needs no signing key.
 pub fn decode_tx_input(chain: &ows_core::Chain, tx_input: &str) -> Result<Vec<u8>, OwsLibError> {
     if chain.chain_type == ChainType::Midnight {
-        return Ok(tx_input.as_bytes().to_vec());
+        let request = ows_midnight::normalize_connector_request(tx_input)
+            .map_err(|e| OwsLibError::InvalidInput(e.to_string()))?;
+        return Ok(request.into_bytes());
     }
     let clean = tx_input.strip_prefix("0x").unwrap_or(tx_input);
     hex::decode(clean)
@@ -786,11 +797,7 @@ pub fn sign_message(
     let signer = signer_for_chain(&chain)?;
     let output = signer.sign_message(key.expose(), &msg_bytes, address)?;
 
-    Ok(SignResult {
-        signature: hex::encode(&output.signature),
-        recovery_id: output.recovery_id,
-        transaction: None,
-    })
+    crate::types::sign_result_from_message_output(chain.chain_type, &output)
 }
 
 /// Sign EIP-712 typed structured data. Returns hex-encoded signature.
@@ -1390,6 +1397,15 @@ mod cardano_broadcast_tests {
 mod tests {
     use super::*;
     use ows_core::OwsError;
+
+    #[test]
+    fn decode_tx_input_wraps_a_bare_midnight_offer_as_a_connector_request() {
+        let chain = parse_chain("midnight:preview").unwrap();
+        let bytes = decode_tx_input(&chain, "swapoffer1qqqmakeroffer").unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["method"], "balanceSealedTransaction");
+        assert_eq!(json["makerTx"], "swapoffer1qqqmakeroffer");
+    }
 
     // ---- helpers ----
 
@@ -3551,6 +3567,24 @@ mod tests {
     // ================================================================
     // RAW HASH + EIP-7702 AUTHORIZATION SIGNING
     // ================================================================
+
+    #[test]
+    fn sign_hash_refuses_midnight() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = sign_hash(
+            "any",
+            "midnight:mainnet",
+            &"11".repeat(32),
+            None,
+            None,
+            Some(tmp.path()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, OwsLibError::InvalidInput(m) if m.contains("Midnight")),
+            "{err}"
+        );
+    }
 
     #[test]
     fn sign_hash_owner_path_matches_direct_signer() {

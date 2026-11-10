@@ -128,7 +128,7 @@ interface SignHashRequest {
 }
 ```
 
-This operation is only defined for secp256k1-backed chains. For EVM, the returned `recoveryId` is the raw `y_parity` value (`0` or `1`), not the EIP-191 / EIP-712 `27` or `28` form.
+This operation is only defined for secp256k1-backed chains, and Midnight refuses it: its ledger signatures are made over data the wallet builds itself, so it never signs a caller-supplied digest. For EVM, the returned `recoveryId` is the raw `y_parity` value (`0` or `1`), not the EIP-191 / EIP-712 `27` or `28` form.
 
 ### `signAuthorization(request: SignAuthorizationRequest): Promise<SignMessageResult>`
 
