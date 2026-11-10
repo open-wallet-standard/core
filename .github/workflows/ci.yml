@@ -37,7 +37,7 @@ jobs:
             cargo deny --manifest-path "$manifest" check --config deny.toml sources
           done
 
-      - name: Flag new crates younger than 90 days
+      - name: Check new crates and crate versions
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
