@@ -1,6 +1,6 @@
 [package]
 name = "ows-cli"
-version = "1.4.3"
+version = "1.4.5"
 edition = "2021"
 license = "MIT"
 description = "CLI for the Open Wallet Standard"
@@ -12,10 +12,10 @@ name = "ows"
 path = "src/main.rs"
 
 [dependencies]
-ows-core = { path = "../ows-core", version = "=1.4.3" }
-ows-signer = { path = "../ows-signer", version = "=1.4.3" }
-ows-lib = { path = "../ows-lib", version = "=1.4.3" }
-ows-midnight = { path = "../ows-midnight", version = "=1.4.3" }
+ows-core = { path = "../ows-core", version = "=1.4.5" }
+ows-signer = { path = "../ows-signer", version = "=1.4.5" }
+ows-lib = { path = "../ows-lib", version = "=1.4.5" }
+ows-midnight = { path = "../ows-midnight", version = "=1.4.5" }
 clap = { version = "4", features = ["derive", "env"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -26,8 +26,8 @@ tempfile = "3"
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 zeroize = "1"
-ows-pay = { path = "../ows-pay", version = "=1.4.3" }
+ows-pay = { path = "../ows-pay", version = "=1.4.5" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [dev-dependencies]
-ows-signer = { path = "../ows-signer", version = "=1.4.3", features = ["fast-kdf"] }
+ows-signer = { path = "../ows-signer", version = "=1.4.5", features = ["fast-kdf"] }
