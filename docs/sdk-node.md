@@ -325,6 +325,17 @@ const result = signNep413Message(
 const signatureBase64 = Buffer.from(result.signature, "hex").toString("base64");
 ```
 
+#### `signDelegateAction(wallet, chain, delegateActionHex, passphrase?, index?, vaultPath?)`
+
+Sign a NEAR [NEP-366](https://github.com/near/NEPs/blob/master/neps/nep-0366.md) delegate action: Ed25519 over `sha256(borsh(u32 1073742190) || borsh(DelegateAction))`, the same signature `near-api-js`'s `signDelegateAction` produces.
+
+`chain` must resolve to a NEAR chain. `delegateActionHex` is `borsh(DelegateAction)` without the prefix, hex-encoded (`0x` prefix optional). Its `public_key` must be the wallet's key. The relayer submits `delegateActionHex + "00" + signature` as the `SignedDelegateAction`.
+
+```javascript
+const result = signDelegateAction("agent-treasury", "near", delegateActionHex);
+const signedDelegateActionHex = delegateActionHex + "00" + result.signature;
+```
+
 #### `signTypedData(wallet, chain, typedDataJson, passphrase?, index?, vaultPath?, address?)`
 
 Sign EIP-712 typed structured data (EVM only).

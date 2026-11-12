@@ -209,6 +209,52 @@ pub fn sign_nep413_message_with_api_key(
     })
 }
 
+pub fn sign_delegate_action_with_api_key(
+    token: &str,
+    wallet_name_or_id: &str,
+    chain: &ows_core::Chain,
+    delegate_action: &[u8],
+    index: Option<u32>,
+    vault_path: Option<&Path>,
+) -> Result<crate::types::SignResult, OwsLibError> {
+    if chain.chain_type != ows_core::ChainType::Near {
+        return Err(OwsLibError::InvalidInput(
+            "NEP-366 delegate action signing is only supported for NEAR chains".into(),
+        ));
+    }
+    let decoded = ows_signer::chains::near::DelegateAction::from_borsh(delegate_action)?;
+
+    let (key_file, wallet) = load_authorized_wallet(token, wallet_name_or_id, vault_path)?;
+    let transaction = ows_core::policy::TransactionContext {
+        effects: vec![],
+        raw_hex: hex::encode(ows_signer::chains::near::DelegateAction::signing_preimage(
+            delegate_action,
+        )),
+        data: None,
+        chain_extra: Some(decoded.to_json()?),
+    };
+    let (key, _) = enforce_policies_and_decrypt_key(
+        token,
+        key_file,
+        wallet,
+        chain,
+        PolicyRequestType::SignTransaction,
+        Some(transaction),
+        None,
+        index,
+        vault_path,
+    )?;
+
+    let output =
+        ows_signer::chains::NearSigner.sign_delegate_action(key.expose(), delegate_action)?;
+
+    Ok(crate::types::SignResult {
+        signature: hex::encode(&output.signature),
+        recovery_id: output.recovery_id,
+        transaction: None,
+    })
+}
+
 /// Sign a raw 32-byte hash using an API token (agent mode).
 pub fn sign_hash_with_api_key(
     token: &str,

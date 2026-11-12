@@ -162,6 +162,22 @@ interface SignNep413MessageRequest {
 
 This operation signs `sha256(borsh(u32 2147484061) || borsh({ message, nonce, recipient, callbackUrl }))` with Ed25519, the same signature `near-api-js`'s `signNep413Message` and NEP-413 wallets produce. The `2^31 + 413` tag guarantees the signature can never authorize a transaction. `signature` is hex-encoded; NEP-413 verifiers usually expect it base64-encoded alongside the `ed25519:` public key and the account ID. With an API token, policies see a `sign_message` request whose `transaction.raw_hex` is the tagged pre-image (`borsh(tag) || borsh(payload)`), and `transaction.chain_extra` carries the decoded fields (`kind: "nep413_message"`, `message`, `nonce`, `recipient`, `callback_url`). Raw `signMessage` on NEAR is still available to the same token, and a raw signature over the 32-byte SHA-256 of a NEP-413 payload is that payload's signature: a policy that restricts NEP-413 recipients has to deny raw 32-byte NEAR messages as well. For a wallet imported from a raw Ed25519 private key, it also has to deny 32-byte raw payloads on the other chains that sign raw Ed25519 with the same key (Solana, TON).
 
+### `signDelegateAction(request: SignDelegateActionRequest): Promise<SignMessageResult>`
+
+Signs a NEAR [NEP-366](https://github.com/near/NEPs/blob/master/neps/nep-0366.md) delegate action (meta-transaction). A relayer wraps the signed delegate action in its own transaction and pays the gas.
+
+```typescript
+interface SignDelegateActionRequest {
+  walletId: WalletId;
+  chainId: ChainId;                     // Must resolve to a NEAR chain
+  delegateActionHex: string;            // borsh(DelegateAction), without the NEP-366 prefix
+}
+```
+
+This operation signs `sha256(borsh(u32 1073742190) || borsh(DelegateAction))` with Ed25519, the same signature `near-api-js`'s `signDelegateAction` produces. The `2^30 + 366` tag guarantees the signature can never authorize a transaction directly. The bytes MUST decode as a `DelegateAction` with no trailing bytes, MUST NOT contain a nested delegate action, and its `public_key` MUST be the wallet's key, because nearcore verifies the signature against that key. Actions newer than `DeleteAccount` (tag 7) are refused. The `SignedDelegateAction` a relayer submits is `delegateActionHex || 00 || signature`.
+
+With an API token, policies see a `sign_transaction` request whose `transaction.raw_hex` is the tagged pre-image (`borsh(tag) || borsh(DelegateAction)`), and `transaction.chain_extra` carries the decoded fields: `kind: "nep366_delegate_action"`, `sender_id`, `receiver_id`, `actions`, `nonce`, `max_block_height`, `public_key` and `total_deposit` (the sum of the `transfer` and `function_call` deposits, which the relayer prepays). Integers are decimal strings, `args` is base64, keys use NEAR's `ed25519:` base58 form, and contract code appears as `code_hash` (base58 SHA-256) and `code_len`. As with NEP-413, a raw 32-byte `signMessage` on NEAR is the same signature as `signDelegateAction` over a payload with that hash, so a policy that restricts delegate actions has to deny raw 32-byte NEAR messages as well.
+
 ## Serialized Transaction Format
 
 Current OWS implementations accept **already-serialized transaction bytes encoded as hex**. OWS signs those bytes, and `signAndSend` implementations submit the signed payload using the transport required by the target chain.
