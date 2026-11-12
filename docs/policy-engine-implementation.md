@@ -115,7 +115,7 @@ Reference it in the policy file:
 | transaction.effects[].diff | [asset, amount] pairs; amount is a signed decimal string in the smallest unit |
 | transaction.chain_extra | Chain-specific detail effects cannot carry; present only when a chain fills it |
 | transaction.raw_hex | Raw unsigned payload hex |
-| spending.daily_total | Cumulative value signed today (wei) |
+| spending.daily_total | Always "0": OWS does not track cumulative spend yet. A daily cap must keep its own ledger (see 03-policy-engine.md, Cumulative limits) |
 | timestamp | ISO-8601 signing request time |
 
 `transaction.to` and `transaction.value` were documented here previously. Neither was
