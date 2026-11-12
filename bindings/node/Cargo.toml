@@ -1,6 +1,6 @@
 [package]
 name = "ows-node"
-version = "1.4.3"
+version = "1.4.5"
 edition = "2021"
 description = "Node.js native bindings for the Open Wallet Standard"
 
