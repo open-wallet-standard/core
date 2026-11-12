@@ -349,6 +349,38 @@ fn sign_nep413_message(
     })
 }
 
+/// Sign a NEAR NEP-366 delegate action.
+///
+/// `delegate_action_hex` is `borsh(DelegateAction)` without the NEP-366 prefix.
+#[pyfunction]
+#[pyo3(signature = (wallet, chain, delegate_action_hex, passphrase=None, index=None, vault_path_opt=None))]
+fn sign_delegate_action(
+    wallet: &str,
+    chain: &str,
+    delegate_action_hex: &str,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    vault_path_opt: Option<String>,
+) -> PyResult<PyObject> {
+    let result = ows_lib::sign_delegate_action(
+        wallet,
+        chain,
+        delegate_action_hex,
+        passphrase,
+        index,
+        vault_path(vault_path_opt).as_deref(),
+    )
+    .map_err(map_err)?;
+
+    Python::with_gil(|py| {
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("signature", &result.signature)?;
+        dict.set_item("recovery_id", result.recovery_id)?;
+        dict.set_item("transaction", result.transaction.as_deref())?;
+        Ok(dict.unbind().into())
+    })
+}
+
 /// Sign and broadcast a transaction.
 #[pyfunction]
 #[pyo3(signature = (wallet, chain, tx_hex, passphrase=None, index=None, rpc_url=None, vault_path_opt=None))]
@@ -545,6 +577,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sign_hash, m)?)?;
     m.add_function(wrap_pyfunction!(sign_authorization, m)?)?;
     m.add_function(wrap_pyfunction!(sign_nep413_message, m)?)?;
+    m.add_function(wrap_pyfunction!(sign_delegate_action, m)?)?;
     m.add_function(wrap_pyfunction!(sign_and_send, m)?)?;
     m.add_function(wrap_pyfunction!(create_policy, m)?)?;
     m.add_function(wrap_pyfunction!(list_policies, m)?)?;
