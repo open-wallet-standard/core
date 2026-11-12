@@ -372,6 +372,11 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_REGISTRY_TOKEN }}
 
+      - name: Publish ows-midnight
+        run: cargo publish -p ows-midnight --allow-dirty
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_REGISTRY_TOKEN }}
+
       - name: Publish ows-lib
         run: cargo publish -p ows-lib --allow-dirty
         env:
