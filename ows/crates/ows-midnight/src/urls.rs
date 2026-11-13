@@ -1,5 +1,5 @@
-//! URL helpers shared between the indexer-backed sync modules and the
-//! node submission pipeline.
+//! URL helpers shared between the indexer-backed sync modules, the
+//! node submission pipeline and the proof-server client.
 
 use reqwest::Url;
 
@@ -24,6 +24,43 @@ pub(crate) fn without_credentials(url: &str) -> Option<String> {
     parsed.set_query(None);
     parsed.set_fragment(None);
     Some(parsed.into())
+}
+
+/// Whether `url` points at this machine: `localhost` or a loopback IP. A plaintext (`http://`,
+/// `ws://`) endpoint is accepted only then, since the connection carries what that endpoint is
+/// trusted with.
+pub(crate) fn is_loopback(url: &Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    })
+}
+
+/// Refuse `url` when it is plaintext (`http://`, `ws://`) to another machine. Whatever the connection
+/// carries, an API key in the query or the wallet's addresses, would cross the network in the clear,
+/// and anyone on the path could answer in the endpoint's place. `what` names the endpoint in errors,
+/// which never show the URL's credentials.
+pub(crate) fn refuse_plaintext_to_remote(url: &str, what: &str) -> Result<(), std::io::Error> {
+    let shown = || without_credentials(url).unwrap_or_else(|| "(unparsable URL)".to_string());
+    let parsed = Url::parse(url.trim())
+        .map_err(|_| std::io::Error::other(format!("invalid Midnight {what} URL: {}", shown())))?;
+    match parsed.scheme() {
+        "https" | "wss" => Ok(()),
+        "http" | "ws" if is_loopback(&parsed) => Ok(()),
+        "http" | "ws" => Err(std::io::Error::other(format!(
+            "refusing the plaintext Midnight {what} URL {}: use https:// or wss://, or a loopback \
+             address for a local {what}",
+            shown()
+        ))),
+        _ => Err(std::io::Error::other(format!(
+            "invalid Midnight {what} URL scheme: {}",
+            shown()
+        ))),
+    }
 }
 
 /// Derive the GraphQL-over-WebSocket endpoint from a configured indexer URL: the GraphQL HTTP
@@ -55,6 +92,29 @@ pub(super) fn indexer_ws_url(indexer_url: &str) -> Result<String, std::io::Error
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plaintext_is_refused_unless_the_endpoint_is_local() {
+        for ok in [
+            "https://indexer.example/api/v4/graphql?project_id=KEY",
+            "wss://indexer.example/api/v4/graphql/ws",
+            "http://127.0.0.1:8088/api/v4/graphql",
+            "http://localhost:8088/api/v4/graphql",
+            "ws://[::1]:8088/api/v4/graphql/ws",
+        ] {
+            assert!(refuse_plaintext_to_remote(ok, "indexer").is_ok(), "{ok}");
+        }
+        let refused = refuse_plaintext_to_remote(
+            "http://indexer.example/api/v4/graphql?project_id=KEY",
+            "indexer",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(refused.contains("plaintext"), "{refused}");
+        assert!(!refused.contains("KEY"), "{refused}");
+        assert!(refuse_plaintext_to_remote("ftp://indexer.example", "indexer").is_err());
+        assert!(refuse_plaintext_to_remote("not a url", "indexer").is_err());
+    }
 
     #[test]
     fn ws_url_from_https_graphql() {

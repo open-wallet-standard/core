@@ -17,7 +17,8 @@
 # A taker completes the sealed maker (4's output) by MERGING in its complementary half plus a dust fee
 # (5).
 #
-# Proving runs in-process (circuit keys fetched on first use) — no separate prover service.
+# Proving runs in-process by default (circuit keys fetched on first use) — or against
+# rpc["midnight:<net>:prover"] when configured. No proof server is required out of the box.
 #
 # Usage:  ./midnight-connector-siblings.sh [network]   # network defaults to midnight:preprod
 # Env:    CHAIN=midnight:preview   PROFILE=debug (faster build, slower prove)
@@ -159,7 +160,7 @@ SH_ADDR="$(sed -n 's/^[[:space:]]*Shielded:[[:space:]]*//p' "$BAL" | head -1)"
 # native NIGHT = the all-zero 32-byte token under "Unshielded balances:"
 UNSH_NIGHT="$(awk '/^Unshielded balances:/{f=1;next} /^Shielded balances:/{f=0} f&&$2~/^0+$/&&length($2)==64{print $1; exit}' "$BAL")"
 # each shielded holding as "value token-hex"
-SH_LIST="$(awk '/^Shielded balances:/{f=1;next} /^Dust status/{f=0} f&&NF>=2{print $1" "$2}' "$BAL")"
+SH_LIST="$(awk '/^Shielded balances:/{f=1;next} /^Dust status/{f=0} f&&length($2)==64&&$2~/^[0-9a-fA-F]+$/{print $1" "$2}' "$BAL")"
 
 printf '  unshielded addr:  %s%s%s\n' "$CYAN" "${UNSH_ADDR:-<none>}" "$RESET"
 printf '  shielded addr:    %s%s%s\n' "$CYAN" "${SH_ADDR:-<none>}" "$RESET"

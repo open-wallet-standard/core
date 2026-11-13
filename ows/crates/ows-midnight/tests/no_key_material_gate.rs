@@ -1,13 +1,20 @@
-//! Milestone gate: ows-midnight holds NO key material.
+//! Milestone gate: ows-midnight derives and holds NO key material.
 //!
 //! After the seed-free refactor, every ows-midnight entry point takes a `&MidnightCryptoProvider`
 //! (built once in ows-lib, which owns the credential) rather than a raw `&SecretBytes`. All
 //! key/seed derivation lives in ows-signer's `MidnightCryptoProvider`; ows-midnight only ever
 //! borrows the already-built provider and receives public outputs.
 //!
-//! This test fails if any credential/key-derivation marker reappears in ows-midnight's *production*
-//! source (`src`, outside `#[cfg(test)]` blocks). It is a regression tripwire, not a proof — but a
-//! reintroduced `SecretBytes` param or a seed-decoding helper will trip it.
+//! One channel does carry secrets through ows-midnight: proving. The signer builds each spend's proof
+//! preimage, whose witnesses include the key that authorizes it (the coin secret key of a shielded
+//! spend, the dust secret key of a DUST spend), and hands it to ows-midnight's `Prover`, which proves
+//! it in process or posts it to the proof server the vault's config names. The second test gates that
+//! channel.
+//!
+//! These tests fail if any credential/key-derivation marker reappears in ows-midnight's *production*
+//! source (`src`, outside `#[cfg(test)]` blocks), or if the proving channel widens. They are
+//! regression tripwires, not proofs — but a reintroduced `SecretBytes` param, a seed-decoding helper,
+//! a new preimage sink or a default proof server will trip them.
 //!
 //! Implementation invariant: the `#[cfg(test)]`-stripping brace-counts from each attribute to
 //! end-of-file, so it relies on every test module being the file's last top-level item (all
@@ -98,24 +105,35 @@ fn strip_line_comment(line: &str) -> &str {
     }
 }
 
-#[test]
-fn ows_midnight_production_holds_no_key_material() {
+/// Every production `.rs` file under `src`, by its path relative to `src`, with its source.
+fn production_sources() -> Vec<(String, String)> {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
     rust_files(&src, &mut files);
     assert!(!files.is_empty(), "found no source files under {src:?}");
+    files
+        .iter()
+        .map(|file| {
+            let relative = file.strip_prefix(&src).expect("file under src");
+            (
+                relative.to_string_lossy().replace('\\', "/"),
+                fs::read_to_string(file).expect("read source file"),
+            )
+        })
+        .collect()
+}
 
+#[test]
+fn ows_midnight_production_holds_no_key_material() {
     let mut violations: Vec<String> = Vec::new();
 
-    for file in &files {
-        let source = fs::read_to_string(file).expect("read source file");
-        for (lineno, line) in production_lines(&source) {
+    for (file, source) in &production_sources() {
+        for (lineno, line) in production_lines(source) {
             let code = strip_line_comment(line);
             for marker in FORBIDDEN_MARKERS {
                 if code.contains(marker) {
                     violations.push(format!(
-                        "{}:{lineno}: forbidden key-material marker `{marker}` in production code:\n    {}",
-                        file.display(),
+                        "{file}:{lineno}: forbidden key-material marker `{marker}` in production code:\n    {}",
                         line.trim()
                     ));
                 }
@@ -127,6 +145,77 @@ fn ows_midnight_production_holds_no_key_material() {
         violations.is_empty(),
         "ows-midnight production code must hold no key material — the crypto provider is built in \
          ows-lib and only `&MidnightCryptoProvider` crosses into ows-midnight. Found:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// The proving channel, the one place a spend's secret key passes through ows-midnight, stays as narrow
+/// as it is: only the prover and the outputs-only mock prover take preimages as a `ProvingProvider`, no
+/// production code Debug-formats a preimage (into an error, a log or stderr), the prover serializes a
+/// preimage only into the request buffer it wipes after sending, and a remote proof server is used only
+/// when the vault's config names one, never by default.
+#[test]
+fn the_proving_channel_is_confined_and_remote_proving_is_opt_in() {
+    const PROVING_PROVIDERS: &[&str] = &["prover.rs", "dapp_connector/build.rs"];
+    let mut violations: Vec<String> = Vec::new();
+    let mut remote_sites = Vec::new();
+
+    for (file, source) in &production_sources() {
+        let code: Vec<(usize, &str)> = production_lines(source)
+            .into_iter()
+            .map(|(lineno, line)| (lineno, strip_line_comment(line)))
+            .collect();
+        for &(lineno, line) in &code {
+            let at = || format!("{file}:{lineno}: {}", line.trim());
+            if line.contains("ProvingProvider for") && !PROVING_PROVIDERS.contains(&file.as_str()) {
+                violations.push(format!(
+                    "a new ProvingProvider receives preimages: {}",
+                    at()
+                ));
+            }
+            if line.to_lowercase().contains("preimage") && line.contains(":?") {
+                violations.push(format!("a preimage is Debug-formatted: {}", at()));
+            }
+            if line.contains("Prover::remote(") {
+                remote_sites.push(at());
+            }
+        }
+        if file == "prover.rs" {
+            let serializations = code
+                .iter()
+                .filter(|(_, line)| line.contains("tagged_serialize("))
+                .count();
+            if serializations != 1 {
+                violations.push(format!(
+                    "prover.rs serializes in {serializations} places; a preimage must only go \
+                     through request_body's wiped buffer"
+                ));
+            }
+            for &(lineno, line) in &code {
+                if line.contains(".body(") && !line.contains("from_owner(") {
+                    violations.push(format!(
+                        "prover.rs:{lineno}: a proof-server body the client cannot wipe: {}",
+                        line.trim()
+                    ));
+                }
+            }
+        }
+    }
+
+    if remote_sites.len() != 1 || !remote_sites[0].starts_with("balance_tx.rs:") {
+        violations.push(format!(
+            "a remote prover must be built only by midnight_prover, from the vault's `:prover` \
+             entry; found: {remote_sites:?}"
+        ));
+    }
+    let defaults = ows_core::Config::default();
+    for key in defaults.rpc.keys().filter(|k| k.ends_with(":prover")) {
+        violations.push(format!("the built-in config names a proof server: {key}"));
+    }
+
+    assert!(
+        violations.is_empty(),
+        "the proving channel widened:\n{}",
         violations.join("\n")
     );
 }

@@ -2,13 +2,18 @@
 //! top-level `method` names the operation; each method is parsed and handled by its own submodule.
 //! A request with no `method` defaults to `balanceUnsealedTransaction`, the wallet's original method.
 //!
-//! Every method funnels through one diagonal: parse → [`plan_connector_tx`] (an inert
+//! Every method that signs funnels through one diagonal: parse → [`plan_connector_tx`] (an inert
 //! [`ConnectorPlan`]) → policy seam → [`ConnectorPlan::authorize`] (build + prove + sign + seal). The
 //! plan carries no bearer instrument, so the seam can gate on it before any key-bearing work happens.
+//! `submitTransaction` signs nothing: [`connector_submission`] checks the sealed transaction it
+//! carries, with no key, for the caller to broadcast.
 
-use ows_signer::chains::MidnightCryptoProvider;
+use std::path::Path;
+
+use ows_signer::chains::{MidnightCryptoProvider, MidnightNetwork};
 use serde::Deserialize;
 
+use crate::policy_context::{FeeContext, PolicyContext};
 use crate::BalancedPlan;
 
 mod balance_sealed;
@@ -16,6 +21,8 @@ mod balance_unsealed;
 mod build;
 mod make_intent;
 mod make_transfer;
+mod maker_checks;
+mod submit_transaction;
 mod swap_offer;
 
 pub use balance_sealed::{parse_balance_sealed_json, BalanceSealedRequest};
@@ -26,6 +33,7 @@ pub use balance_unsealed::{
 pub use build::{DesiredOutput, TransferKind};
 pub use make_intent::{parse_make_intent_json, DesiredInput, MakeIntentRequest};
 pub use make_transfer::{parse_make_transfer_json, MakeTransferRequest};
+pub use submit_transaction::{parse_submit_transaction_json, SubmitTransactionRequest};
 
 /// A DApp Connector method the wallet can be asked to perform, resolved from a request's `method`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +46,8 @@ pub enum ConnectorMethod {
     MakeIntent,
     /// `balanceSealedTransaction` — the wallet (taker) completes a maker's swap offer.
     BalanceSealed,
+    /// `submitTransaction` — the wallet broadcasts a transaction that is already sealed and balanced.
+    SubmitTransaction,
     /// A method name the wallet parses but does not yet handle (e.g. a sibling still to be built).
     Other(String),
 }
@@ -58,6 +68,7 @@ pub fn parse_connector_method(json: &str) -> Result<ConnectorMethod, std::io::Er
         Some("makeTransfer") => ConnectorMethod::MakeTransfer,
         Some("makeIntent") => ConnectorMethod::MakeIntent,
         Some("balanceSealedTransaction") => ConnectorMethod::BalanceSealed,
+        Some("submitTransaction") => ConnectorMethod::SubmitTransaction,
         Some(other) => ConnectorMethod::Other(other.to_string()),
     })
 }
@@ -68,23 +79,18 @@ pub fn parse_connector_method(json: &str) -> Result<ConnectorMethod, std::io::Er
 pub enum ConnectorPlan {
     /// A `balanceUnsealedTransaction` planned against the wallet's own inputs.
     BalanceUnsealed(Box<BalancedPlan>),
-    /// A `makeTransfer` request; the transaction is constructed, balanced, proved, and sealed in
-    /// `authorize` (its outputs alone already determine the wallet-relative effects for the seam).
-    MakeTransfer(MakeTransferRequest),
-    /// A `makeIntent` request; the wallet builds an imbalanced maker offer, proved in `authorize`.
-    MakeIntent(MakeIntentRequest),
+    /// A `makeTransfer`: its outputs built and its balancing planned over their mock-proven form;
+    /// `authorize` proves the same outputs and signs that plan.
+    MakeTransfer(Box<make_transfer::TransferPlan>),
+    /// A `makeIntent`: the request with its expiry fixed, and the imbalanced maker offer decided, its
+    /// coins picked; `authorize` proves that offer.
+    MakeIntent(Box<make_intent::IntentPlan>),
     /// A `balanceSealedTransaction`: the maker offer is SEALED (`proof,pedersen-schnorr`).
     /// A sealed tx cannot be balanced in place (its binding fixes the value balance), so the taker
     /// completes it by MERGING: it builds its own imbalanced half — the per-token complement of the
     /// maker's imbalance — seals it, and `Transaction::merge`s the two. Carries the maker's sealed
-    /// bytes and that derived complement.
-    BalanceSealedMerge {
-        maker_tx: Vec<u8>,
-        complement: MakeIntentRequest,
-        /// Whether the taker funds the merged tx's DUST fee. Off (or a fee-less chain) → the merged tx
-        /// is value-balanced but carries no fee, so a live-DUST network rejects the submit.
-        pay_fees: bool,
-    },
+    /// bytes, that half planned (its coins and its DUST fee decided), and the complement it implements.
+    BalanceSealedMerge(Box<balance_sealed::MergePlan>),
 }
 
 impl ConnectorPlan {
@@ -94,33 +100,118 @@ impl ConnectorPlan {
         self,
         chain_id: &str,
         crypto_provider: &MidnightCryptoProvider,
+        vault_path: Option<&Path>,
     ) -> Result<Vec<u8>, std::io::Error> {
         match self {
             ConnectorPlan::BalanceUnsealed(plan) => {
-                crate::authorize_proven_tx(chain_id, crypto_provider, *plan)
+                crate::authorize_proven_tx(chain_id, crypto_provider, *plan, vault_path)
             }
-            ConnectorPlan::MakeTransfer(req) => {
-                make_transfer::authorize(chain_id, crypto_provider, req)
+            ConnectorPlan::MakeTransfer(transfer) => {
+                make_transfer::authorize(chain_id, crypto_provider, *transfer, vault_path)
             }
-            ConnectorPlan::MakeIntent(req) => {
-                make_intent::authorize(chain_id, crypto_provider, req)
+            ConnectorPlan::MakeIntent(plan) => {
+                make_intent::authorize(chain_id, crypto_provider, *plan, vault_path)
             }
-            ConnectorPlan::BalanceSealedMerge {
-                maker_tx,
-                complement,
-                pay_fees,
-            } => balance_sealed::authorize_merge(
-                chain_id,
-                crypto_provider,
-                &maker_tx,
-                complement,
-                pay_fees,
-            ),
+            ConnectorPlan::BalanceSealedMerge(merge) => {
+                balance_sealed::authorize_merge(chain_id, crypto_provider, *merge, vault_path)
+            }
         }
     }
-    // ── POLICY SEAM ── TODO(policy): `ConnectorPlan::effects()` belongs here — the wallet-relative
-    // movement each method contributes (request-derived for the `make*` methods, plan-derived for the
-    // `balance*` methods), for the seam to gate on before `authorize`. Not wired yet.
+    /// The wallet-relative net movement authorizing this plan will have — the view the policy seam gates
+    /// on, computed before any bearer instrument is built — grouped by the transaction segment each piece
+    /// occurs in: `0` guaranteed (always executed), `>= 1` fallible (executed in order, may fail).
+    /// Plan-derived for the `balance*` methods (from the inert [`BalancedPlan`] the wallet already
+    /// selected) and request-derived, at the intent's own segment, for the `make*` methods. The policy
+    /// seam interprets the guaranteed-versus-fallible distinction; here we only attribute.
+    pub fn segment_effects(
+        &self,
+        chain_id: &str,
+        crypto_provider: &MidnightCryptoProvider,
+    ) -> Result<Vec<crate::balance_tx::SegmentEffects>, std::io::Error> {
+        match self {
+            ConnectorPlan::BalanceUnsealed(plan) => plan.segment_effects(chain_id, crypto_provider),
+            ConnectorPlan::MakeTransfer(transfer) => {
+                transfer.segment_effects(chain_id, crypto_provider)
+            }
+            ConnectorPlan::MakeIntent(plan) => {
+                make_intent::request_segment_effects(chain_id, crypto_provider, plan.request())
+            }
+            // The wallet's movement in a merge is its own half — the `complement` it contributes and
+            // receives — plus the merged DUST fee it funds, all in the guaranteed section (see
+            // [`balance_sealed::merge_segment_effects`]).
+            ConnectorPlan::BalanceSealedMerge(merge) => {
+                balance_sealed::merge_segment_effects(chain_id, crypto_provider, merge)
+            }
+        }
+    }
+
+    /// The contract actions this plan's transaction carries — the counterparty identity, and the value
+    /// each contract declares it takes in and pays out, that the wallet-relative
+    /// [effects](Self::segment_effects) deliberately leave out. Handed to the same policy seam,
+    /// alongside them.
+    ///
+    /// Only the `balance*` methods can carry any: they complete a transaction someone else authored.
+    /// The `make*` methods build the wallet's own transfer from the request alone, so they talk to no
+    /// contract. Each payout a contract declares is marked when it goes to the wallet's own address.
+    pub fn contracts(
+        &self,
+        crypto_provider: &MidnightCryptoProvider,
+    ) -> Result<Vec<crate::contracts::ContractInteraction>, std::io::Error> {
+        let wallet = midnight_coin_structure::coin::UserAddress::from(
+            crypto_provider
+                .unshielded_verifying_key()
+                .map_err(|e| std::io::Error::other(e.to_string()))?,
+        );
+        match self {
+            ConnectorPlan::BalanceUnsealed(plan) => Ok(plan.contracts(&wallet)),
+            ConnectorPlan::MakeTransfer(_) | ConnectorPlan::MakeIntent(_) => Ok(Vec::new()),
+            // The taker's complement is a plain `makeIntent` and carries none; the contracts of a merge
+            // are the sealed maker's, which survive the merge into the submitted transaction.
+            ConnectorPlan::BalanceSealedMerge(merge) => {
+                balance_sealed::maker_contracts(merge.maker_tx(), &wallet)
+            }
+        }
+    }
+
+    /// The `chain_extra` context the policy seam gates on, serialized as an executable policy reads
+    /// it: the plan's [effects](Self::segment_effects) and its [contracts](Self::contracts), how the
+    /// wallet pays the fee, the dust registrations it signs and, for a maker offer, how long the offer
+    /// stands. The whole Midnight context is built here, so the caller only hands it to the gate.
+    pub fn policy_context(
+        &self,
+        chain_id: &str,
+        crypto_provider: &MidnightCryptoProvider,
+    ) -> Result<serde_json::Value, std::io::Error> {
+        let addresses = crypto_provider
+            .addresses(&MidnightNetwork::from_chain_id(chain_id))
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        // A maker offer is fee-free (the taker pays), so it registers no NIGHT.
+        let (fee, dust_registrations) = match self {
+            ConnectorPlan::BalanceUnsealed(plan) => {
+                (plan.fee_context(), plan.dust_registrations(&addresses))
+            }
+            ConnectorPlan::MakeTransfer(transfer) => (
+                transfer.balanced().fee_context(),
+                transfer.balanced().dust_registrations(&addresses),
+            ),
+            ConnectorPlan::MakeIntent(_) => (FeeContext::none(), Vec::new()),
+            ConnectorPlan::BalanceSealedMerge(merge) => {
+                (merge.fee_context(), merge.dust_registrations(&addresses))
+            }
+        };
+        let offer = match self {
+            ConnectorPlan::MakeIntent(plan) => Some(plan.offer_context()),
+            _ => None,
+        };
+        let context = PolicyContext {
+            segment_effects: self.segment_effects(chain_id, crypto_provider)?,
+            contracts: self.contracts(crypto_provider)?,
+            fee,
+            dust_registrations,
+            offer,
+        };
+        serde_json::to_value(&context).map_err(|e| std::io::Error::other(e.to_string()))
+    }
 }
 
 /// Parse a stringified connector request and plan it (inert) into a [`ConnectorPlan`], ready for the
@@ -129,17 +220,47 @@ pub fn plan_connector_tx(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     json: &str,
+    vault_path: Option<&Path>,
 ) -> Result<ConnectorPlan, std::io::Error> {
     match parse_connector_method(json)? {
-        ConnectorMethod::BalanceUnsealed => balance_unsealed::plan(chain_id, crypto_provider, json),
-        ConnectorMethod::MakeTransfer => {
-            Ok(ConnectorPlan::MakeTransfer(parse_make_transfer_json(json)?))
+        ConnectorMethod::BalanceUnsealed => {
+            balance_unsealed::plan(chain_id, crypto_provider, json, vault_path)
         }
-        ConnectorMethod::MakeIntent => Ok(ConnectorPlan::MakeIntent(parse_make_intent_json(json)?)),
-        ConnectorMethod::BalanceSealed => balance_sealed::plan(chain_id, crypto_provider, json),
+        ConnectorMethod::MakeTransfer => {
+            let req = parse_make_transfer_json(json)?;
+            let transfer = make_transfer::plan(chain_id, crypto_provider, &req, vault_path)?;
+            Ok(ConnectorPlan::MakeTransfer(Box::new(transfer)))
+        }
+        ConnectorMethod::MakeIntent => {
+            let req = parse_make_intent_json(json)?;
+            let intent = make_intent::plan(chain_id, crypto_provider, req, vault_path)?;
+            Ok(ConnectorPlan::MakeIntent(Box::new(intent)))
+        }
+        ConnectorMethod::BalanceSealed => {
+            balance_sealed::plan(chain_id, crypto_provider, json, vault_path)
+        }
+        ConnectorMethod::SubmitTransaction => Err(std::io::Error::other(
+            "submitTransaction broadcasts a transaction that is already sealed, so there is nothing \
+             to sign; send it with `ows sign send-tx`",
+        )),
         ConnectorMethod::Other(method) => Err(std::io::Error::other(format!(
             "Midnight DApp Connector method '{method}' is not yet implemented"
         ))),
+    }
+}
+
+/// The `submitTransaction` a connector request asks for, checked, or `None` for every other method.
+/// A submit broadcasts a transaction that is already sealed, so it is answered here, with no key and
+/// no plan, and never by [`plan_connector_tx`], which refuses it.
+pub fn connector_submission(
+    chain_id: &str,
+    json: &str,
+) -> Result<Option<SubmitTransactionRequest>, std::io::Error> {
+    match parse_connector_method(json)? {
+        ConnectorMethod::SubmitTransaction => {
+            parse_submit_transaction_json(chain_id, json).map(Some)
+        }
+        _ => Ok(None),
     }
 }
 
@@ -148,8 +269,9 @@ pub fn plan_connector_tx(
 /// into the request that carries it, so the wallet accepts an offer or a proven transaction directly
 /// without the caller writing the envelope. A fully sealed maker becomes a `balanceSealedTransaction`
 /// (it is completed by merging, not balanced in place); any other hex a `balanceUnsealedTransaction`.
-/// A MIP-0006 offer payload is not a request: it goes, stringified, in a `balanceSealedTransaction`'s
-/// `makerTx`.
+/// A sealed transaction to broadcast as it is never comes bare: it is sent as a `submitTransaction`
+/// request. A MIP-0006 offer payload is not a request: it goes, stringified, in a
+/// `balanceSealedTransaction`'s `makerTx`.
 pub fn normalize_connector_request(raw: &str) -> Result<String, std::io::Error> {
     let trimmed = raw.trim();
     if trimmed.starts_with('{') {
@@ -193,6 +315,43 @@ fn sealed_request_json(maker: &str) -> String {
 mod tests {
     use super::*;
 
+    /// A key a request does not define is refused, not dropped, at the top level as in `options`: a
+    /// `ttl` or `payFees` written beside `options` rather than in it would otherwise fall back to the
+    /// default without a word. `method`, which routes the request, is the one key every request takes.
+    #[test]
+    fn every_request_refuses_an_unknown_top_level_key() {
+        let refused = |what: &str, err: std::io::Error| {
+            let err = err.to_string();
+            assert!(err.contains("unknown field"), "{what}: {err}");
+        };
+        refused(
+            "makeIntent ttl",
+            parse_make_intent_json(r#"{"method":"makeIntent","ttl":5,"desiredInputs":[]}"#)
+                .unwrap_err(),
+        );
+        refused(
+            "makeTransfer payFees",
+            parse_make_transfer_json(
+                r#"{"method":"makeTransfer","payFees":false,"desiredOutputs":[]}"#,
+            )
+            .unwrap_err(),
+        );
+        refused(
+            "balanceUnsealedTransaction option",
+            parse_balance_unsealed_json(
+                r#"{"method":"balanceUnsealedTransaction","option":{"payFees":false},"tx":"00"}"#,
+            )
+            .unwrap_err(),
+        );
+        refused(
+            "balanceSealedTransaction payFees",
+            parse_balance_sealed_json(
+                r#"{"method":"balanceSealedTransaction","payFees":false,"makerTx":"00"}"#,
+            )
+            .unwrap_err(),
+        );
+    }
+
     fn method_of(json: &str) -> ConnectorMethod {
         parse_connector_method(json).unwrap()
     }
@@ -223,8 +382,9 @@ mod tests {
 
     #[test]
     fn bare_sealed_maker_hex_wraps_as_balance_sealed() {
-        let sealed_hex =
-            hex::encode(b"midnight:transaction[v9](signature[v1],proof,pedersen-schnorr[v1]):body");
+        let sealed_hex = hex::encode(
+            b"midnight:transaction[v12](signature[v2],proof,pedersen-schnorr[v1]):body",
+        );
         let out = normalize_connector_request(&sealed_hex).unwrap();
         assert_eq!(method_of(&out), ConnectorMethod::BalanceSealed);
         assert_eq!(field_of(&out, "makerTx"), sealed_hex);
@@ -233,7 +393,7 @@ mod tests {
     #[test]
     fn bare_unsealed_hex_wraps_as_balance_unsealed() {
         let unsealed_hex =
-            hex::encode(b"midnight:transaction[v9](signature[v1],proof,embedded-fr[v1]):body");
+            hex::encode(b"midnight:transaction[v12](signature[v2],proof,embedded-fr[v1]):body");
         let out = normalize_connector_request(&unsealed_hex).unwrap();
         assert_eq!(method_of(&out), ConnectorMethod::BalanceUnsealed);
         assert_eq!(field_of(&out, "tx"), unsealed_hex);
@@ -275,11 +435,89 @@ mod tests {
         );
     }
 
+    fn provider() -> MidnightCryptoProvider {
+        let mut credential = b"MNK1".to_vec();
+        credential.extend_from_slice(&[0x11; 96]);
+        ows_signer::chains::MidnightSigner::mainnet()
+            .crypto_provider(&ows_signer::SecretBytes::new(credential))
+            .unwrap()
+    }
+
+    /// A maker offer that spends no coin plans without the network, so its whole policy context is
+    /// built offline: the maker's movement, no contracts, no fee (the taker pays), no registration, and
+    /// the offer itself.
+    #[test]
+    fn a_maker_offers_policy_context_shows_no_fee_and_no_registration() {
+        let own = provider()
+            .addresses(&MidnightNetwork::from_chain_id("midnight:preview"))
+            .unwrap()
+            .unshielded;
+        let json = format!(
+            r#"{{"method":"makeIntent","desiredInputs":[],"desiredOutputs":[{{"kind":"unshielded","type":"night","value":"5","recipient":"{own}"}}]}}"#
+        );
+        let plan = plan_connector_tx("midnight:preview", &provider(), &json, None).unwrap();
+
+        let context = plan
+            .policy_context("midnight:preview", &provider())
+            .unwrap();
+
+        assert_eq!(context["segment_effects"][0]["segment"], 0);
+        assert_eq!(
+            context["segment_effects"][0]["effects"][0]["diff"],
+            serde_json::json!([["00".repeat(32), "5"]])
+        );
+        assert_eq!(context["contracts"], serde_json::json!([]));
+        assert_eq!(
+            context["fee"],
+            serde_json::json!({ "mode": "none", "dust_burned": "0" })
+        );
+        assert_eq!(context["dust_registrations"], serde_json::json!([]));
+        assert_eq!(context["offer"]["intent_id"], 1);
+        assert_eq!(context["offer"]["ttl_is_default"], true);
+    }
+
     #[test]
     fn unhandled_method_is_preserved_by_name() {
         assert_eq!(
-            parse_connector_method(r#"{"method":"submitTransaction"}"#).unwrap(),
-            ConnectorMethod::Other("submitTransaction".to_string())
+            parse_connector_method(r#"{"method":"signData"}"#).unwrap(),
+            ConnectorMethod::Other("signData".to_string())
         );
+    }
+
+    /// A submit is named, never guessed from the bytes: a bare sealed transaction is still a maker to
+    /// complete, and the methods that sign never reach the submit check.
+    #[test]
+    fn only_a_named_submit_transaction_is_a_submission() {
+        let submit = r#"{"method":"submitTransaction","tx":"00"}"#;
+        assert_eq!(method_of(submit), ConnectorMethod::SubmitTransaction);
+        assert!(connector_submission("midnight:preview", submit).is_err());
+
+        let sealed_hex = hex::encode(
+            b"midnight:transaction[v12](signature[v2],proof,pedersen-schnorr[v1]):body",
+        );
+        let bare = normalize_connector_request(&sealed_hex).unwrap();
+        assert_eq!(method_of(&bare), ConnectorMethod::BalanceSealed);
+        for request in [
+            bare.as_str(),
+            r#"{"method":"makeTransfer","desiredOutputs":[]}"#,
+        ] {
+            assert!(connector_submission("midnight:preview", request)
+                .unwrap()
+                .is_none());
+        }
+    }
+
+    /// `sign tx` plans what it signs, and a submit has nothing to sign.
+    #[test]
+    fn planning_refuses_a_submit_transaction() {
+        let e = plan_connector_tx(
+            "midnight:preview",
+            &provider(),
+            r#"{"method":"submitTransaction","tx":"00"}"#,
+            None,
+        )
+        .err()
+        .unwrap();
+        assert!(e.to_string().contains("send-tx"), "{e}");
     }
 }

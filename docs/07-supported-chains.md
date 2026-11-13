@@ -41,7 +41,7 @@ OWS groups chains into families that share a cryptographic curve and address der
 | Filecoin | secp256k1 | 461 | `m/44'/461'/0'/0/{index}` | `f1` + base32(blake2b-160) | `fil` |
 | NEAR | ed25519 | 397 | `m/44'/397'/{index}'` | 64-char lowercase hex of pubkey (implicit account) | `near` |
 | Cardano | Ed25519-BIP32 (CIP-1852) | 1815 | Payment `m/1852'/1815'/{index}'/0/0` + stake `m/1852'/1815'/{index}'/2/0` | Shelley Bech32 base (`addr1…` mainnet; `addr_test1…` testnets) | `cip34` |
-| Midnight (unshielded/Night) | secp256k1 (Schnorr) | [2400](https://github.com/satoshilabs/slips/blob/master/slip-0044.md) (BIP-44) | `m/44'/2400'/0'/0/{index}` (unshielded); shielded `.../3/{index}`; dust `.../2/{index}` | Bech32m `mn_addr1...` (mainnet), `mn_addr_<network>1...` otherwise, e.g. `mn_addr_preview1...` (SHA-256 of x-only pubkey) | `midnight` |
+| Midnight (unshielded/Night) | secp256k1 (Schnorr) | [2400](https://github.com/satoshilabs/slips/blob/master/slip-0044.md) (BIP-44) | `m/44'/2400'/{index}'/0/0` (unshielded); shielded `.../3/0`; dust `.../2/0` | Bech32m `mn_addr1...` (mainnet), `mn_addr_<network>1...` otherwise, e.g. `mn_addr_preview1...` (SHA-256 of x-only pubkey) | `midnight` |
 
 
 ## Known Networks

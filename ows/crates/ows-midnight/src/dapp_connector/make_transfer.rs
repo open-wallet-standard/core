@@ -1,15 +1,20 @@
 //! DApp Connector `makeTransfer`.
 //!
 //! `makeTransfer(desiredOutputs, options?)` asks the wallet to build a transaction that sends
-//! `desiredOutputs` to their recipients. The wallet constructs the outputs (no inputs), proves them,
-//! and — since an outputs-only proven transaction is a wallet-funded deficit — funnels it through the
-//! same `plan_unsealed_proven_tx` → `authorize_proven_tx` tail as `balanceUnsealed`.
+//! `desiredOutputs` to their recipients. The wallet constructs the outputs (no inputs) and — since an
+//! outputs-only transaction is a wallet-funded deficit — funnels it through the same
+//! `plan_unsealed_proven_tx` → `authorize_proven_tx` tail as `balanceUnsealed`. The balancing is
+//! planned once, before the policy seam, over mock-proven outputs; `authorize` proves the same outputs
+//! for real and signs that plan, so the coins and fee the policy saw are the ones spent.
 
-use midnight_base_crypto::signatures::Signature as MnSig;
+use std::path::Path;
+
 use midnight_coin_structure::coin::Info as CoinInfo;
+use midnight_ledger::structure::Signature as MnSig;
 use midnight_ledger::structure::{
     Intent, ProofPreimageMarker, StandardTransaction, Transaction, UnshieldedOffer, UtxoOutput,
 };
+use midnight_serialize::tagged_serialize;
 use midnight_storage::arena::Sp;
 use midnight_storage::db::InMemoryDB;
 use midnight_storage::storage::HashMap as MnHashMap;
@@ -22,9 +27,9 @@ use transient_crypto::commitment::PedersenRandomness;
 use transient_crypto::proofs::ProofPreimage;
 
 use super::build::{
-    decode_shielded_recipient, decode_unshielded_recipient, err, far_future_ttl,
-    prove_to_unsealed_bytes, wire_type_to_shielded, wire_type_to_unshielded, DesiredOutput,
-    PreimageTx, TransferKind,
+    decode_shielded_recipient, decode_unshielded_recipient, default_intent_ttl, err,
+    mock_prove_unsealed, prove_preimage, wire_type_to_shielded, wire_type_to_unshielded,
+    DesiredOutput, PreimageTx, TransferKind,
 };
 
 /// The intent that carries the wallet's unshielded outputs keys at a fallible segment (>= 1): the
@@ -51,16 +56,21 @@ fn default_pay_fees() -> bool {
     true
 }
 
+/// The spec's options bag. Any other key is refused rather than ignored.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OptionsJson {
     #[serde(default = "default_pay_fees")]
     pay_fees: bool,
 }
 
+/// The request object. Any key it does not define is refused, as in `options`.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MakeTransferJson {
+    /// The key that routes the request ([`super::parse_connector_method`]); read there, not here.
+    #[serde(default, rename = "method")]
+    _method: Option<serde::de::IgnoredAny>,
     desired_outputs: Vec<DesiredOutput>,
     #[serde(default)]
     options: Option<OptionsJson>,
@@ -81,18 +91,72 @@ pub fn parse_make_transfer_json(json: &str) -> Result<MakeTransferRequest, std::
     })
 }
 
-/// Build, balance, prove, and seal a `makeTransfer` transaction. Runs **after** the policy seam.
+/// A `makeTransfer` planned before the policy seam: the outputs' preimage, kept so [`authorize`] proves
+/// exactly these outputs, and the balancing plan built over their mock-proven form, which the seam reads
+/// the effects from and [`authorize`] signs.
+pub struct TransferPlan {
+    preimage: PreimageTx,
+    plan: crate::BalancedPlan,
+}
+
+/// Plan a `makeTransfer`: build its outputs, **mock-prove** them (proofs are fixed-size, so the fee
+/// sized against them matches the real one exactly) and plan the balancing against the wallet's synced
+/// coins. No real proving happens here, so a transfer denied at the seam never reaches a real proof.
+pub(super) fn plan(
+    chain_id: &str,
+    crypto_provider: &MidnightCryptoProvider,
+    req: &MakeTransferRequest,
+    vault_path: Option<&Path>,
+) -> Result<TransferPlan, std::io::Error> {
+    let preimage = build_make_transfer_preimage(chain_id, req)?;
+    // Mock-prove into the *unsealed* proven form (`mock_prove` would seal it, and the balancer only
+    // consumes unsealed proven bytes).
+    let mock_proven = mock_prove_unsealed(preimage.clone())?;
+    let mut bytes = Vec::new();
+    tagged_serialize(&mock_proven, &mut bytes)
+        .map_err(|e| err(format!("serialize mock-proven makeTransfer: {e}")))?;
+    let plan = crate::plan_unsealed_proven_tx(
+        chain_id,
+        crypto_provider,
+        &bytes,
+        req.pay_fees,
+        vault_path,
+    )?;
+    Ok(TransferPlan { preimage, plan })
+}
+
+impl TransferPlan {
+    /// The wallet-relative effects this transfer will have, per segment, read off the balancing plan so
+    /// the **DUST fee** the transfer burns is included: a `sum(|diff|)` cap at the policy seam must see
+    /// it, and request-derived effects (outputs only) would under-state it. The plan nets the wallet's
+    /// inputs against its own change and outputs (the value to each recipient plus the dust fee),
+    /// attributing each to the segment (guaranteed or fallible) its offer rides.
+    pub(super) fn segment_effects(
+        &self,
+        chain_id: &str,
+        crypto_provider: &MidnightCryptoProvider,
+    ) -> Result<Vec<crate::balance_tx::SegmentEffects>, std::io::Error> {
+        self.plan.segment_effects(chain_id, crypto_provider)
+    }
+
+    /// The balancing plan the transfer signs, whose fee and registrations the policy seam reports.
+    pub(super) fn balanced(&self) -> &crate::BalancedPlan {
+        &self.plan
+    }
+}
+
+/// Prove the planned outputs for real, put the proofs into the planned transaction, and sign and seal
+/// it. Runs **after** the policy seam. Nothing is re-synced, re-selected or re-priced: the coins and the
+/// fee are the ones the seam's effects were read from.
 pub(super) fn authorize(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
-    req: MakeTransferRequest,
+    transfer: TransferPlan,
+    vault_path: Option<&Path>,
 ) -> Result<Vec<u8>, std::io::Error> {
-    let preimage = build_make_transfer_preimage(chain_id, &req)?;
-    let proven_bytes = prove_to_unsealed_bytes(chain_id, preimage)?;
-    // Reuse the balanceUnsealed diagonal: plan the balancing inertly, then authorize (sign + seal).
-    let plan =
-        crate::plan_unsealed_proven_tx(chain_id, crypto_provider, &proven_bytes, req.pay_fees)?;
-    crate::authorize_proven_tx(chain_id, crypto_provider, plan)
+    let TransferPlan { preimage, mut plan } = transfer;
+    plan.replace_mock_proofs(prove_preimage(chain_id, preimage, vault_path)?)?;
+    crate::authorize_proven_tx(chain_id, crypto_provider, plan, vault_path)
 }
 
 /// Construct the `proof-preimage` transaction for a `makeTransfer`: recipient outputs and no inputs.
@@ -123,9 +187,9 @@ fn build_make_transfer_preimage(
         fallible_unshielded_offer: unshielded_offer.map(Sp::new),
         actions: vec![].into(),
         dust_actions: None,
-        // The balancer re-aligns the TTL on the intent it owns (this one); a far-future stand-in avoids
-        // a spuriously-expired intent in the meantime.
-        ttl: far_future_ttl(),
+        // The balancer re-aligns the TTL on the intent it owns (this one); the wallet default avoids a
+        // spuriously-expired intent in the meantime.
+        ttl: default_intent_ttl(),
         binding_commitment: rng.r#gen(),
     };
     let intents: MnHashMap<u16, _, InMemoryDB> =
@@ -222,6 +286,20 @@ mod tests {
         assert!(!req.pay_fees);
         assert_eq!(req.desired_outputs[0].value, 5);
         assert_eq!(req.desired_outputs[0].kind, TransferKind::Shielded);
+    }
+
+    #[test]
+    fn a_misspelled_option_or_a_blank_token_type_is_refused() {
+        let misspelled = parse_make_transfer_json(
+            r#"{"desiredOutputs":[{"kind":"unshielded","type":"night","value":5,"recipient":"mn_addr_r"}],"options":{"payfees":false}}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(misspelled.contains("unknown field"), "{misspelled}");
+        assert!(parse_make_transfer_json(
+            r#"{"desiredOutputs":[{"kind":"unshielded","type":"","value":5,"recipient":"mn_addr_r"}]}"#,
+        )
+        .is_err());
     }
 
     #[test]
@@ -335,6 +413,202 @@ mod tests {
         assert!(
             intent.fallible_unshielded_offer.is_some(),
             "the NIGHT output rides the maker intent's fallible offer"
+        );
+    }
+
+    /// A valid preview *shielded* address — a shielded output carries a real ZK proof, so it exercises
+    /// the mock prover (an unshielded output has no proof to size).
+    fn preview_shielded_address() -> String {
+        let mut blob = b"MNK1".to_vec();
+        blob.extend_from_slice(&[0x11u8; 32]);
+        blob.extend_from_slice(&[0x22u8; 32]);
+        blob.extend_from_slice(&[0x33u8; 32]);
+        MidnightSigner::preview()
+            .derive_addresses(&blob)
+            .expect("derive addresses")
+            .shielded
+    }
+
+    /// Regression guard for the effect-sizing prover: `mock_prove_unsealed` must yield the **unsealed**
+    /// proven form (`proof,embedded-fr`) that the balancer and merge fee sizing consume — the plain ledger
+    /// `mock_prove` seals to `proof,pedersen-schnorr`, which cannot re-parse as unsealed and so silently
+    /// breaks the whole make* effects path. Uses a shielded output so a real output proof is mock-sized.
+    #[test]
+    fn mock_prove_unsealed_yields_unsealed_proven_not_sealed() {
+        use midnight_ledger::structure::ProofMarker;
+        use midnight_serialize::tagged_deserialize;
+        type UnsealedProven = Transaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>;
+
+        let req = MakeTransferRequest {
+            desired_outputs: vec![DesiredOutput {
+                kind: TransferKind::Shielded,
+                token_type: "night".into(),
+                value: 1_000,
+                recipient: preview_shielded_address(),
+            }],
+            pay_fees: true,
+        };
+        let preimage =
+            build_make_transfer_preimage("midnight:preview", &req).expect("build preimage");
+
+        // The plain ledger mock seals: its output is tagged pedersen-schnorr and must NOT parse as unsealed.
+        let sealed = preimage.mock_prove().expect("mock_prove");
+        let mut sealed_bytes = Vec::new();
+        tagged_serialize(&sealed, &mut sealed_bytes).unwrap();
+        assert!(
+            tagged_deserialize::<UnsealedProven>(&mut &sealed_bytes[..]).is_err(),
+            "mock_prove output is sealed and must not re-parse as unsealed proven"
+        );
+
+        // The effect-sizing prover keeps it unsealed: its output round-trips as embedded-fr.
+        let unsealed = mock_prove_unsealed(preimage).expect("mock_prove_unsealed");
+        let mut unsealed_bytes = Vec::new();
+        tagged_serialize(&unsealed, &mut unsealed_bytes).unwrap();
+        let back: UnsealedProven = tagged_deserialize(&mut &unsealed_bytes[..])
+            .expect("mock_prove_unsealed output must re-parse as unsealed proven (embedded-fr)");
+        assert!(matches!(back, Transaction::Standard(_)));
+    }
+
+    /// `authorize` swaps real proofs only into the transaction the policy seam saw: the comparison
+    /// ignores proofs, so the planned preimage proven again matches, while a rebuilt preimage (fresh
+    /// output randomness, so different commitments) does not.
+    #[test]
+    fn proofs_are_swapped_only_into_the_planned_transaction() {
+        let req = MakeTransferRequest {
+            desired_outputs: vec![DesiredOutput {
+                kind: TransferKind::Shielded,
+                token_type: "night".into(),
+                value: 1_000,
+                recipient: preview_shielded_address(),
+            }],
+            pay_fees: true,
+        };
+        let standard = |tx| match tx {
+            Transaction::Standard(stx) => stx,
+            Transaction::ClaimRewards(_) => panic!("not a standard transaction"),
+        };
+        let preimage =
+            build_make_transfer_preimage("midnight:preview", &req).expect("build preimage");
+        let planned = standard(mock_prove_unsealed(preimage.clone()).unwrap());
+        let proven_again = standard(mock_prove_unsealed(preimage).unwrap());
+        assert!(crate::balance_tx::same_apart_from_proofs(
+            &planned,
+            &proven_again
+        ));
+
+        let rebuilt =
+            build_make_transfer_preimage("midnight:preview", &req).expect("build preimage");
+        let rebuilt = standard(mock_prove_unsealed(rebuilt).unwrap());
+        assert!(!crate::balance_tx::same_apart_from_proofs(
+            &planned, &rebuilt
+        ));
+    }
+
+    /// `authorize` proves the planned outputs and spends the planned balancing as it stands: the
+    /// wallet's NIGHT coin and change in the transfer's fallible segment, a DUST fee of exactly the
+    /// planned amount, and the planned TTL. The vault names an indexer nothing listens on, so an
+    /// authorize that re-synced would fail, and a loopback proof server proves the DUST spend.
+    #[test]
+    fn authorize_spends_exactly_the_planned_transfer() {
+        use midnight_base_crypto::hash::HashOutput;
+        use midnight_base_crypto::time::Timestamp;
+        use midnight_coin_structure::coin::{UserAddress, NIGHT};
+        use midnight_ledger::structure::{IntentHash, UtxoSpend};
+        use midnight_serialize::tagged_deserialize;
+
+        let mut blob = b"MNK1".to_vec();
+        blob.extend_from_slice(&[0x44u8; 32]);
+        blob.extend_from_slice(&[0x55u8; 32]);
+        blob.extend_from_slice(&[0x66u8; 32]);
+        let provider = MidnightSigner::preview()
+            .crypto_provider(&ows_signer::SecretBytes::new(blob))
+            .unwrap();
+        let vault = crate::mock_prover::vault("midnight:preview", "planned-transfer");
+        let req = MakeTransferRequest {
+            desired_outputs: vec![DesiredOutput {
+                kind: TransferKind::Unshielded,
+                token_type: "night".into(),
+                value: 250,
+                recipient: preview_unshielded_address(),
+            }],
+            pay_fees: true,
+        };
+        let preimage = build_make_transfer_preimage("midnight:preview", &req).unwrap();
+        let Transaction::Standard(base) = mock_prove_unsealed(preimage.clone()).unwrap() else {
+            panic!("not a standard transaction");
+        };
+
+        // The wallet funds the 250 from a 300 coin, with 50 back, inside the transfer's fallible offer.
+        let vk = provider.unshielded_verifying_key().unwrap();
+        let mut outputs: Vec<UtxoOutput> = base
+            .intents
+            .get(&MAKE_TRANSFER_INTENT_SEGMENT)
+            .and_then(|intent| intent.fallible_unshielded_offer.clone())
+            .map(|offer| offer.outputs.iter_deref().cloned().collect())
+            .unwrap();
+        outputs.push(UtxoOutput {
+            value: 50,
+            owner: UserAddress::from(vk.clone()),
+            type_: NIGHT,
+        });
+        outputs.sort();
+        let inputs = vec![UtxoSpend {
+            value: 300,
+            owner: vk,
+            type_: NIGHT,
+            intent_hash: IntentHash(HashOutput([1; 32])),
+            output_no: 0,
+        }];
+        let funding = UnshieldedOffer {
+            inputs: inputs.clone().into(),
+            outputs: outputs.clone().into(),
+            signatures: vec![].into(),
+        };
+        let ttl = Timestamp::from_secs(3_600);
+        let plan = crate::BalancedPlan::spending_dust(
+            base,
+            MAKE_TRANSFER_INTENT_SEGMENT,
+            vec![(MAKE_TRANSFER_INTENT_SEGMENT, funding)],
+            ttl,
+            42,
+            Timestamp::from_secs(4_600),
+            crate::balance_tx::dust_state_with_one_note(
+                &[0x66; 32],
+                midnight_ledger::structure::STARS_PER_NIGHT,
+                Timestamp::from_secs(1_000),
+            ),
+        );
+
+        let signable = authorize(
+            "midnight:preview",
+            &provider,
+            TransferPlan { preimage, plan },
+            Some(&vault),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&vault);
+        let Transaction::Standard(stx) =
+            tagged_deserialize::<super::super::build::ProvenTx>(&mut &signable[..]).unwrap()
+        else {
+            panic!("not a standard transaction");
+        };
+        assert_eq!(stx.intents.iter().count(), 1);
+        let intent = stx.intents.get(&MAKE_TRANSFER_INTENT_SEGMENT).unwrap();
+        assert!(intent.guaranteed_unshielded_offer.is_none());
+        let leg = intent.fallible_unshielded_offer.as_ref().unwrap();
+        assert_eq!(leg.inputs.iter_deref().cloned().collect::<Vec<_>>(), inputs);
+        assert_eq!(
+            leg.outputs.iter_deref().cloned().collect::<Vec<_>>(),
+            outputs
+        );
+        assert_eq!(intent.ttl, ttl);
+        let dust = intent.dust_actions.as_ref().unwrap();
+        assert_eq!(dust.spends.iter_deref().map(|s| s.v_fee).sum::<u128>(), 42);
+        assert!(
+            dust.spends
+                .iter_deref()
+                .all(|s| s.proof.0.iter().all(|b| *b == 0xde)),
+            "proved by the vault's proof server"
         );
     }
 

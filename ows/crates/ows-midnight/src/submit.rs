@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use super::urls::{http_url_to_ws_url, without_credentials};
+use super::urls::{http_url_to_ws_url, is_loopback, without_credentials};
 
 fn err(msg: impl Into<String>) -> std::io::Error {
     std::io::Error::other(msg.into())
@@ -23,8 +23,8 @@ const LEDGER_BALANCE_CHECK_OVERSPEND: u16 = 138;
 /// Input references a UTXO absent from ledger state (`InvalidTransaction::Custom(195)`).
 const LEDGER_INPUT_NOT_IN_UTXOS: u16 = 195;
 
-type SealedTx = midnight_ledger::structure::Transaction<
-    midnight_base_crypto::signatures::Signature,
+pub(crate) type SealedTx = midnight_ledger::structure::Transaction<
+    midnight_ledger::structure::Signature,
     midnight_ledger::structure::ProofMarker,
     <midnight_ledger::structure::ProofMarker as midnight_ledger::structure::ProofKind<
         midnight_storage::db::InMemoryDB,
@@ -36,7 +36,7 @@ type SealedTx = midnight_ledger::structure::Transaction<
 /// another) rather than a self-contained contract call.
 fn is_swap_shaped_offer(
     stx: &midnight_ledger::structure::StandardTransaction<
-        midnight_base_crypto::signatures::Signature,
+        midnight_ledger::structure::Signature,
         midnight_ledger::structure::ProofMarker,
         <midnight_ledger::structure::ProofMarker as midnight_ledger::structure::ProofKind<
             midnight_storage::db::InMemoryDB,
@@ -82,7 +82,7 @@ fn is_swap_shaped_offer(
 
 /// Detect sealed txs that the ledger will reject on submit (error 138), using the ledger's own
 /// per-segment balance aggregation rather than an inputs-vs-outputs heuristic.
-fn preflight_sealed_tx_submit(tx: &SealedTx) -> Result<(), std::io::Error> {
+pub(crate) fn preflight_sealed_tx_submit(tx: &SealedTx) -> Result<(), std::io::Error> {
     use midnight_ledger::structure::Transaction;
 
     let Transaction::Standard(stx) = tx else {
@@ -147,7 +147,7 @@ fn append_input_not_in_utxos_hint(msg: &mut String) {
 
 /// Compute the **ledger** transaction hash (`0x` + 32-byte hex) for a `midnight:transaction…` blob.
 fn midnight_ledger_tx_hash_hex(midnight_tx: &[u8]) -> Result<String, std::io::Error> {
-    use midnight_base_crypto::signatures::Signature as MnSig;
+    use midnight_ledger::structure::Signature as MnSig;
     use midnight_ledger::structure::{ProofKind, ProofMarker, ProofPreimageMarker, Transaction};
     use midnight_serialize::tagged_deserialize;
     use midnight_storage::db::InMemoryDB;
@@ -198,15 +198,7 @@ fn require_tls_unless_loopback(node_rpc_url: &str) -> Result<(), std::io::Error>
         "http" | "ws" => {}
         _ => return Err(invalid_scheme(node_rpc_url)),
     }
-    let loopback = url.host_str().is_some_and(|host| {
-        host.eq_ignore_ascii_case("localhost")
-            || host
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback())
-    });
-    if loopback {
+    if is_loopback(&url) {
         Ok(())
     } else {
         Err(err(format!(
@@ -270,9 +262,16 @@ async fn dry_run_extrinsic(
     // Try HTTP first (some providers restrict this; we'll fall back to WS JSON-RPC).
     let http_attempt = async {
         let url = node_http_url(node_rpc_url)?;
-        let client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .connect_timeout(NODE_CONNECT_TIMEOUT)
-            .timeout(NODE_REQUEST_TIMEOUT)
+            .timeout(NODE_REQUEST_TIMEOUT);
+        // A node on this machine is plaintext, so a proxy named in the environment would receive the
+        // dry run and could answer it; reqwest makes no exception for loopback hosts. A remote node
+        // keeps the environment's proxy, which some deployments need to reach the network at all.
+        if reqwest::Url::parse(&url).is_ok_and(|u| is_loopback(&u)) {
+            builder = builder.no_proxy();
+        }
+        let client = builder
             .build()
             .map_err(|e| err(format!("system_dryRun client: {}", e.without_url())))?;
         let body = serde_json::json!({
@@ -363,7 +362,7 @@ pub async fn submit_unshielded_tx(
 
     // Best-effort local check before hitting the node (helps when broadcasting sealed swap offers).
     {
-        use midnight_base_crypto::signatures::Signature as MnSig;
+        use midnight_ledger::structure::Signature as MnSig;
         use midnight_ledger::structure::{ProofKind, ProofMarker, Transaction};
         use midnight_serialize::tagged_deserialize;
         use midnight_storage::db::InMemoryDB;
@@ -456,6 +455,51 @@ pub fn broadcast_sealed(node_rpc_url: &str, signed_bytes: &[u8]) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_net::{json_response, loopback_listener, run_child_behind_proxy};
+    use std::sync::atomic::Ordering;
+
+    const CHILD_NODE_VAR: &str = "OWS_TEST_NODE_CHILD_URL";
+
+    /// A node on this machine is plaintext, so a proxy named in the environment must not get its dry
+    /// run; a remote node keeps that proxy. The dry runs run in a child copy of this test binary with
+    /// the proxy variables set.
+    #[test]
+    fn only_a_remote_node_dry_run_goes_through_the_environments_proxy() {
+        let dry_run = json_response(r#"{"jsonrpc":"2.0","id":1,"result":"0x00"}"#);
+        let (proxy, proxy_hits) = loopback_listener(dry_run.clone());
+        let (node, node_hits) = loopback_listener(dry_run);
+
+        assert!(
+            run_child_behind_proxy(
+                "submit::tests::node_dry_runs_from_child",
+                CHILD_NODE_VAR,
+                &format!("http://{node}"),
+                proxy,
+            ),
+            "the child's dry runs did not end where they should"
+        );
+        assert_eq!(
+            node_hits.load(Ordering::SeqCst),
+            1,
+            "the loopback node was not asked"
+        );
+        assert_eq!(
+            proxy_hits.load(Ordering::SeqCst),
+            1,
+            "the remote dry run skipped the proxy"
+        );
+    }
+
+    /// The child half of the test above; a no-op when run on its own.
+    #[test]
+    #[ignore = "run by only_a_remote_node_dry_run_goes_through_the_environments_proxy"]
+    fn node_dry_runs_from_child() {
+        let Ok(loopback) = std::env::var(CHILD_NODE_VAR) else {
+            return;
+        };
+        crate::block_on(dry_run_extrinsic(&loopback, "00")).unwrap();
+        crate::block_on(dry_run_extrinsic("http://node.invalid", "00")).unwrap();
+    }
 
     #[test]
     fn node_ws_url_normalizes_schemes() {

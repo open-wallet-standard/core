@@ -11,7 +11,9 @@ use midnight_storage::db::InMemoryDB;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub(super) const SNAPSHOT_VERSION: u32 = 1;
+/// 2: a DUST state folded from a network's ledger 8 events is not carried into ledger 9, which
+/// replays that history as its own events, so the snapshots earlier builds wrote are dropped.
+pub(super) const SNAPSHOT_VERSION: u32 = 2;
 const CACHE_SUBDIR: &str = "dust";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

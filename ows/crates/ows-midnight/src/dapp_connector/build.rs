@@ -3,21 +3,24 @@
 //! against the network's Bech32m HRPs, and proving a constructed preimage into the unsealed bytes the
 //! balancing tail consumes.
 
+use std::collections::BTreeMap;
 use std::io::Cursor;
+use std::path::Path;
 
 use bech32::Hrp;
 use midnight_base_crypto::hash::HashOutput;
-use midnight_base_crypto::signatures::Signature as MnSig;
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::coin::{
     PublicKey as CoinPublicKey, ShieldedTokenType, UnshieldedTokenType, UserAddress, NIGHT,
 };
+use midnight_ledger::structure::Signature as MnSig;
 use midnight_ledger::structure::{
     ProofMarker, ProofPreimageMarker, Transaction, INITIAL_PARAMETERS,
 };
-use midnight_serialize::{tagged_serialize, Deserializable};
+use midnight_serialize::Deserializable;
 use midnight_storage::db::InMemoryDB;
-use ows_core::sync_cache::SyncCacheScope;
+use ows_core::policy::TransactionEffect;
+use ows_signer::chains::midnight::MidnightAddresses;
 use ows_signer::chains::MidnightSigner;
 use serde::{Deserialize, Deserializer};
 use transient_crypto::commitment::PedersenRandomness;
@@ -36,13 +39,30 @@ pub(super) fn err(msg: impl Into<String>) -> std::io::Error {
     std::io::Error::other(msg.into())
 }
 
-/// A TTL an hour past the current wall clock — a stand-in until the balancer re-aligns it to the tip.
-pub(super) fn far_future_ttl() -> Timestamp {
-    let now = std::time::SystemTime::now()
+/// Seconds since the Unix epoch on the wallet host's clock.
+pub(super) fn now_secs() -> u64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    Timestamp::from_secs(now.saturating_add(3600))
+        .as_secs()
+}
+
+/// How far past the block it lands in an intent's TTL may sit: the ledger rejects
+/// `ttl > tblock + global_ttl` as `IntentTtlTooFarInFuture`. A ledger parameter (currently an hour),
+/// not a protocol constant, so read it rather than hardcode it.
+pub(super) fn max_ttl_secs() -> u64 {
+    INITIAL_PARAMETERS
+        .global_ttl
+        .as_seconds()
+        .clamp(0, u64::MAX as i128) as u64
+}
+
+/// The TTL the wallet picks when the request names none: the widest window the ledger accepts for a
+/// transaction submitted now, matching the reference wallet SDK's own default. The balancing methods
+/// overwrite this with a tip-aligned TTL once they know the chain time; `makeIntent` does not balance,
+/// so for a maker offer this is the value that gets sealed.
+pub(super) fn default_intent_ttl() -> Timestamp {
+    Timestamp::from_secs(now_secs().saturating_add(max_ttl_secs()))
 }
 
 /// Whether a desired input/output moves value in the unshielded (Night) or shielded (Zswap) domain.
@@ -59,11 +79,75 @@ pub enum TransferKind {
 #[serde(rename_all = "camelCase")]
 pub struct DesiredOutput {
     pub kind: TransferKind,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", deserialize_with = "deserialize_token_type")]
     pub token_type: String,
     #[serde(deserialize_with = "deserialize_u128")]
     pub value: u128,
     pub recipient: String,
+}
+
+/// One wallet-relative movement a wallet-constructed request declares: a signed `value` (negative =
+/// outflow the wallet funds, positive = inflow the wallet receives) of `token_type` in `kind`'s domain.
+pub(super) struct Movement<'a> {
+    pub kind: TransferKind,
+    pub token_type: &'a str,
+    pub value: i128,
+}
+
+/// Fold the declared movements of a `make*` request into one [`TransactionEffect`] per domain
+/// (unshielded / shielded), keyed by the wallet's address for that domain; a domain/token that nets to
+/// zero is omitted. This is the request-derived counterpart to the plan-derived effects the `balance*`
+/// methods compute — the `make*` methods know their movement from the request alone, before any coin is
+/// selected.
+pub(super) fn effects_from_movements<'a>(
+    addresses: &MidnightAddresses,
+    movements: impl IntoIterator<Item = Movement<'a>>,
+) -> Result<Vec<TransactionEffect>, std::io::Error> {
+    let mut unshielded: BTreeMap<String, i128> = BTreeMap::new();
+    let mut shielded: BTreeMap<String, i128> = BTreeMap::new();
+    for m in movements {
+        let wire = parse_token_type(Some(m.token_type))?.to_wire_token_type();
+        let bucket = match m.kind {
+            TransferKind::Unshielded => &mut unshielded,
+            TransferKind::Shielded => &mut shielded,
+        };
+        crate::balance_tx::net_add(bucket.entry(wire).or_default(), m.value)?;
+    }
+
+    let mut effects = Vec::new();
+    for (address, bucket) in [
+        (&addresses.unshielded, unshielded),
+        (&addresses.shielded, shielded),
+    ] {
+        let diff: Vec<(String, String)> = bucket
+            .into_iter()
+            .filter(|(_, v)| *v != 0)
+            .map(|(token, v)| (token, v.to_string()))
+            .collect();
+        if !diff.is_empty() {
+            effects.push(TransactionEffect {
+                address: address.clone(),
+                diff,
+            });
+        }
+    }
+    Ok(effects)
+}
+
+/// A desired input's or output's `type`: it must name a token. An empty or blank string would
+/// otherwise parse as NIGHT, so an unfilled template field would move NIGHT.
+pub(super) fn deserialize_token_type<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    let token_type = <String as Deserialize>::deserialize(deserializer)?;
+    if token_type.trim().is_empty() {
+        return Err(D::Error::custom(
+            "a token type must be named: \"night\" or a 32-byte hex token id",
+        ));
+    }
+    Ok(token_type)
 }
 
 /// Accept a u128 amount as either a JSON number or a decimal string. Routes through `serde_json::Value`
@@ -130,6 +214,18 @@ pub(super) fn decode_unshielded_recipient(
     Ok(UserAddress(HashOutput(bytes)))
 }
 
+/// Encode an unshielded address as this network's Bech32m address: the inverse of
+/// [`decode_unshielded_recipient`].
+pub(super) fn encode_unshielded_address(
+    signer: &MidnightSigner,
+    address: &UserAddress,
+) -> Result<String, std::io::Error> {
+    let hrp = signer.unshielded_hrp().map_err(|e| err(e.to_string()))?;
+    let hrp = Hrp::parse(&hrp).map_err(|e| err(format!("invalid hrp: {e}")))?;
+    bech32::encode::<bech32::Bech32m>(hrp, &address.0 .0)
+        .map_err(|e| err(format!("bech32m encode: {e}")))
+}
+
 /// Decode a connector shielded recipient (Bech32m, this network's HRP) into its coin + encryption
 /// public keys.
 pub(super) fn decode_shielded_recipient(
@@ -153,32 +249,116 @@ pub(super) fn decode_shielded_recipient(
 }
 
 /// Prove a wallet-constructed preimage into a proven, still-unsealed (`proof,embedded-fr`)
-/// transaction. `makeIntent` keeps the proven transaction to merge authorized shielded-input
-/// fragments into it; the other methods serialize it straight away via [`prove_to_unsealed_bytes`].
+/// transaction. `makeIntent` merges authorized shielded-input fragments into it; `makeTransfer` swaps
+/// it into the plan built over its mock-proven twin.
 pub(super) fn prove_preimage(
     chain_id: &str,
     preimage: PreimageTx,
+    vault_path: Option<&Path>,
 ) -> Result<ProvenTx, std::io::Error> {
-    let scope = SyncCacheScope {
-        chain_id: Some(chain_id.to_string()),
-        ..Default::default()
-    };
-    let dir = crate::cache_io::proving_keys_dir(&scope)
-        .ok_or_else(|| err("could not resolve the Midnight proving-key directory"))?;
-    let prover = crate::Prover::new(dir);
+    let prover = crate::balance_tx::midnight_prover(chain_id, vault_path)?;
     let cost_model = &INITIAL_PARAMETERS.cost_model.runtime_cost_model;
     crate::block_on(preimage.prove(prover, cost_model))
         .map_err(|e| err(format!("prove constructed outputs: {e}")))
 }
 
-/// Prove a wallet-constructed preimage and serialize it — the exact input shape
-/// `plan_unsealed_proven_tx` consumes.
-pub(super) fn prove_to_unsealed_bytes(
-    chain_id: &str,
-    preimage: PreimageTx,
-) -> Result<Vec<u8>, std::io::Error> {
-    let proven = prove_preimage(chain_id, preimage)?;
-    let mut out = Vec::new();
-    tagged_serialize(&proven, &mut out).map_err(|e| err(format!("serialize proven tx: {e}")))?;
-    Ok(out)
+/// The builtin circuits a mock prover can size. A preimage for anything else (e.g. a contract call) has
+/// a variable proof size the mock cannot stand in for, so it is rejected — matching the ledger's own mock.
+const MOCK_PROVABLE_CIRCUITS: &[&str] = &[
+    "midnight/zswap/spend",
+    "midnight/zswap/output",
+    "midnight/dust/spend",
+];
+
+/// A [`ProvingProvider`](transient_crypto::proofs::ProvingProvider) that emits correctly-*sized* but
+/// non-verifying proofs for the builtin circuits — a reimplementation of the ledger's own (crate-private)
+/// mock prover. [`Transaction::mock_prove`] also mocks proofs, but it *seals* its output to
+/// `proof,pedersen-schnorr`; driving [`Transaction::prove`] with this provider instead keeps the result
+/// **unsealed** (`proof,embedded-fr`) — the form the balancing tail and the sealed-merge fee sizing
+/// consume. ZK proofs are fixed-size, so a fee sized against the mock matches the real one exactly.
+struct UnsealedMockProver;
+
+impl transient_crypto::proofs::ProvingProvider for UnsealedMockProver {
+    async fn check(
+        &self,
+        preimage: &transient_crypto::proofs::ProofPreimage,
+    ) -> Result<Vec<Option<usize>>, anyhow::Error> {
+        if MOCK_PROVABLE_CIRCUITS.contains(&preimage.key_location.0.as_ref()) {
+            Ok(vec![])
+        } else {
+            anyhow::bail!(
+                "cannot mock-prove non-builtin circuit {:?}",
+                preimage.key_location.0
+            )
+        }
+    }
+    async fn prove(
+        self,
+        preimage: &transient_crypto::proofs::ProofPreimage,
+        _overwrite_binding_input: Option<transient_crypto::curve::Fr>,
+    ) -> Result<transient_crypto::proofs::Proof, anyhow::Error> {
+        let size = match preimage.key_location.0.as_ref() {
+            "midnight/zswap/spend" => midnight_zswap::INPUT_PROOF_SIZE,
+            "midnight/zswap/output" => midnight_zswap::OUTPUT_PROOF_SIZE,
+            "midnight/dust/spend" => midnight_ledger::dust::DUST_SPEND_PROOF_SIZE,
+            other => anyhow::bail!("cannot mock-prove non-builtin circuit {other:?}"),
+        };
+        Ok(transient_crypto::proofs::Proof(vec![0xde; size]))
+    }
+    fn split(&mut self) -> Self {
+        UnsealedMockProver
+    }
+    fn resolver(&self) -> &impl transient_crypto::proofs::Resolver {
+        self
+    }
+}
+
+/// The ledger resolves a key only to read a contract call's verifier key, and a contract call is never
+/// mock-provable, so there is nothing to resolve.
+impl transient_crypto::proofs::Resolver for UnsealedMockProver {
+    async fn resolve_key(
+        &self,
+        _key: transient_crypto::proofs::KeyLocation,
+    ) -> std::io::Result<Option<transient_crypto::proofs::ProvingKeyMaterial>> {
+        Ok(None)
+    }
+}
+
+/// Mock-prove a wallet-constructed preimage into a proven, still-**unsealed** (`proof,embedded-fr`)
+/// transaction — the mock-proving twin of [`prove_preimage`]. Emits fixed-size, non-verifying proofs with
+/// no proving keys, network, or real proving, so an effect sized against the result gets the exact fee
+/// while a plan denied at the policy seam never triggers real proving. Only builtin circuits are
+/// mock-provable (a contract call is rejected). Unlike [`Transaction::mock_prove`], the output is *not*
+/// sealed, so it round-trips as the unsealed proven form the balancer and merge fee sizing expect.
+pub(super) fn mock_prove_unsealed(preimage: PreimageTx) -> Result<ProvenTx, std::io::Error> {
+    crate::block_on(preimage.prove(
+        UnsealedMockProver,
+        &onchain_runtime::cost_model::INITIAL_COST_MODEL,
+    ))
+    .map_err(|e| err(format!("mock-prove constructed preimage: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Declared outflows that together pass `i128::MIN` fail the effects instead of wrapping into an
+    /// inflow.
+    #[test]
+    fn effects_from_movements_refuses_a_net_outside_i128() {
+        let addresses = MidnightAddresses {
+            unshielded: "mn_addr_unshielded".into(),
+            shielded: "mn_shield-addr".into(),
+            dust: "mn_dust".into(),
+        };
+        let native = TokenType::Native.to_wire_token_type();
+        let out = |value| Movement {
+            kind: TransferKind::Unshielded,
+            token_type: &native,
+            value,
+        };
+        let at_min = effects_from_movements(&addresses, [out(-i128::MAX), out(-1)]).unwrap();
+        assert_eq!(at_min[0].diff[0].1, i128::MIN.to_string());
+        assert!(effects_from_movements(&addresses, [out(-i128::MAX), out(-2)]).is_err());
+    }
 }

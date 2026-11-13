@@ -119,10 +119,10 @@ pub fn peek_passphrase() -> Option<String> {
 pub fn resolve_signing_key(
     wallet_name: &str,
     chain_type: ows_core::ChainType,
-    index: u32,
+    index: Option<u32>,
 ) -> Result<SecretBytes, CliError> {
     // Try empty passphrase first.
-    match ows_lib::decrypt_signing_key(wallet_name, chain_type, "", Some(index), None) {
+    match ows_lib::decrypt_signing_key(wallet_name, chain_type, "", index, None) {
         Ok(key) => return Ok(key),
         Err(ows_lib::OwsLibError::Crypto(_)) => {
             // Empty passphrase didn't work — prompt the user.
@@ -135,7 +135,7 @@ pub fn resolve_signing_key(
         wallet_name,
         chain_type,
         &passphrase,
-        Some(index),
+        index,
         None,
     )?)
 }

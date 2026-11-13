@@ -11,8 +11,8 @@
 //! `<hash>` covers `(indexer_url, chain_id, stream-specific key)` so preview / preprod /
 //! mainnet never share a snapshot even when the key material matches.
 //!
-//! Without a wallet id, snapshots omit the `{wallet_id}/` segment. `{vault}` is the
-//! configured vault path (`config.vault_path`, default `~/.ows`).
+//! Without a wallet id, snapshots omit the `{wallet_id}/` segment. `{vault}` is the scope's
+//! vault path, the vault the caller named, else `~/.ows`.
 //!
 //! ## Environment
 //!
