@@ -807,8 +807,7 @@ imbalance, funds the merged tx's DUST fee, seals its half, and `Transaction::mer
   transaction whole: a contract call's proof (the contract's verifier key is on chain), a DUST
   spend's proof (it commits to tree roots the indexer does not expose), and the liveness of a
   shielded input (the indexer has no nullifier lookup, and the Merkle root's recency window is the
-  node's). A maker whose shielded coin is already spent still fails only at submission, which is
-  why the checked-in proven makers in `e2e/shielded-movement-cap/` are single-use.
+  node's). A maker whose shielded coin is already spent still fails only at submission.
 - The taker pays the merged transaction's fee as the wallet pays its own (see
   [Fees are always dust](#fees-are-always-dust)): with a generationless registration when it holds an
   unregistered NIGHT coin that has generated enough DUST, so a wallet freshly funded with NIGHT can
@@ -1081,14 +1080,14 @@ broadcasts, surfaced through a command that never submits. A `submitTransaction`
 wired, and checks that a malformed request is rejected with a precise error (all offline); then it runs
 the live path in two steps — **seal** the request with `sign tx` (no broadcast, printing the sealed
 tx), then **submit** it with `sign send-tx`. A DApp normally supplies the proven (`proof,embedded-fr`)
-input; the checkout bundles one per network at `e2e/shielded-movement-cap/tx-proven-preview.hex` and
-`tx-proven-preprod.hex`, so the live run works out of the box (override it with `TX_JSON=<path>`). Each
-maker is input-free, so each run re-selects fresh wallet inputs and is reusable.
+input; the checkout bundles one for preview at `e2e/shielded-movement-cap/tx-proven-preview.hex`, so
+the live run works there out of the box (on another network, or to override it, set `TX_JSON=<path>`).
+The maker is input-free, so each run re-selects fresh wallet inputs and it is reusable.
 
-Real round-trips landed on preprod at
-`0x379f10efcd2b82bac2c5e281d2d175b0367aef195b8845cdb75388737632fed3` (block 1762181) and on preview at
-`0xbb1753c3503c845881e998034138fa98817cc6f90a80cb9d62c2074ae9d63c3c` (block 1423263), crediting the
-wallet's own address with the balanced outputs.
+A real round-trip landed on preview at
+`0x6f3c0081f1752e217e9fa7262764c3f264c79f339ee33f5fea9f0517f8bb8962` (block 92652), crediting the
+wallet's own address with the balanced outputs, and the same maker landed again at
+`0x97362bd552ee3a066df3db58ce5c0a364054d12554c3738bf5bcf5c4991e515a` (block 92658).
 
 ### The three value domains
 

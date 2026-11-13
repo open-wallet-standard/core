@@ -351,7 +351,7 @@ env OWS_PASSPHRASE="$PASS" "$OWS" fund balance --wallet "$WALLET" --chain "$CHAI
 UNSH_ADDR="$(sed -n 's/^[[:space:]]*Unshielded:[[:space:]]*//p' "$BAL" | head -1)"
 SH_ADDR="$(sed -n 's/^[[:space:]]*Shielded:[[:space:]]*//p' "$BAL" | head -1)"
 UNSH_NIGHT="$(awk '/^Unshielded balances:/{f=1;next} /^Shielded balances:/{f=0} f&&$2~/^0+$/&&length($2)==64{print $1; exit}' "$BAL")"
-SH_LIST="$(awk '/^Shielded balances:/{f=1;next} /^Dust status/{f=0} f&&NF>=2{print $1" "$2}' "$BAL")"
+SH_LIST="$(awk '/^Shielded balances:/{f=1;next} /^Dust status/{f=0} f&&length($2)==64&&$2~/^[0-9a-fA-F]+$/{print $1" "$2}' "$BAL")"
 printf '  unshielded NIGHT: %s%s%s   shielded tokens: %s%s%s\n' \
   "$CYAN" "${UNSH_NIGHT:-0}" "$RESET" "$CYAN" "$([ -n "$SH_LIST" ] && echo yes || echo none)" "$RESET"
 
