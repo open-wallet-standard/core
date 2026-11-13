@@ -21,6 +21,7 @@ use super::ShieldedWalletState;
 use crate::cache_io::{self, SyncCacheScope};
 use crate::indexer_ws::{self, IndexerWs};
 use crate::midnight_env::{self, SyncStream};
+use crate::wallet_sync::ledger_fork::{self, EventLedger, ZswapLocalStateV8};
 
 const ZSWAP_LEDGER_SUB: &str = r#"
 subscription ZswapLedgerEvents($id: Int) {
@@ -201,6 +202,7 @@ discarding stale snapshot and replaying from genesis",
 
     let mut state = ZswapReplayState {
         wallet,
+        pre_fork: None,
         from_snapshot,
         last_seen_id,
         max_id,
@@ -293,7 +295,7 @@ discarding stale snapshot and replaying from genesis",
         drop(ws);
 
         if dropped {
-            save_zswap_snapshot(cache.as_ref(), &state);
+            save_zswap_snapshot(cache.as_ref(), &mut state);
         }
         if !dropped && state.max_id.is_some_and(|m| state.last_seen_id >= m) {
             eprintln!(
@@ -320,14 +322,15 @@ discarding stale snapshot and replaying from genesis",
         if attempt_events == 0 && state.max_id.is_some_and(|m| state.last_seen_id >= m) {
             break;
         }
-        save_zswap_snapshot(cache.as_ref(), &state);
+        save_zswap_snapshot(cache.as_ref(), &mut state);
         return Err(std::io::Error::other(format!(
             "zswap ledger sync incomplete: last_seen_id={} max_id={:?}; try again",
             state.last_seen_id, state.max_id
         )));
     }
 
-    save_zswap_snapshot(cache.as_ref(), &state);
+    state.settle()?;
+    save_zswap_snapshot(cache.as_ref(), &mut state);
 
     eprintln!(
         "[ows-midnight] zswapLedgerEvents replay done: events_seen={} last_seen_id={} max_id={:?}",
@@ -341,6 +344,9 @@ struct ZswapReplayState {
     /// Full spendable state (Merkle tree + qualified coins), built on every sync; the snapshot
     /// persists it and the balance is derived from it.
     wallet: ZswapLocalState<InMemoryDB>,
+    /// The state as ledger 8 while the replay folds events from before the network's hard fork to
+    /// ledger 9; it is then the current state and `wallet` is behind it until [`Self::settle`].
+    pre_fork: Option<ZswapLocalStateV8>,
     /// Whether `wallet` started from a disk snapshot, so a fold failure proves the snapshot stale.
     from_snapshot: bool,
     /// Highest event id folded into `wallet` — the wallet holds exactly the events up to it, so it
@@ -349,6 +355,16 @@ struct ZswapReplayState {
     max_id: Option<i64>,
     n_events: u64,
     last_event_at: Option<Instant>,
+}
+
+impl ZswapReplayState {
+    /// Carry a pre-fork state across to ledger 9, so `wallet` holds every event folded so far.
+    fn settle(&mut self) -> Result<(), std::io::Error> {
+        if let Some(pre_fork) = self.pre_fork.take() {
+            self.wallet = ledger_fork::zswap_to_v9(&pre_fork)?;
+        }
+        Ok(())
+    }
 }
 
 struct ZswapReplayCfg {
@@ -374,10 +390,13 @@ struct ZswapCache<'a> {
 /// Persist the spendable wallet state + cursor for the next run (best-effort; ignored when caching
 /// is disabled or serialization fails). The freshly built wallet is always current, so it is
 /// persisted directly — no stale-tree preservation dance.
-fn save_zswap_snapshot(cache: Option<&ZswapCache<'_>>, state: &ZswapReplayState) {
+fn save_zswap_snapshot(cache: Option<&ZswapCache<'_>>, state: &mut ZswapReplayState) {
     let Some(cache) = cache else {
         return;
     };
+    if state.settle().is_err() {
+        return;
+    }
     let Ok(zswap_state_hex) = super::cache::encode_zswap_state(&state.wallet) else {
         return;
     };
@@ -414,24 +433,39 @@ fn resume_subscribe_id(last_seen_id: i64) -> i64 {
 /// wallet's coins) and spends.
 fn fold_zswap_event(
     crypto_provider: &MidnightCryptoProvider,
-    wallet: &mut ZswapLocalState<InMemoryDB>,
+    state: &mut ZswapReplayState,
     raw: &str,
-    from_snapshot: bool,
 ) -> Result<(), std::io::Error> {
     let raw_hex = raw.strip_prefix("0x").unwrap_or(raw);
     let bytes = hex::decode(raw_hex)
         .map_err(|e| std::io::Error::other(format!("invalid zswap event raw hex: {e}")))?;
+    let from_snapshot = state.from_snapshot;
+    let fold_failure = |e| {
+        crate::tip_verify::fold_failure(
+            from_snapshot,
+            std::io::Error::other(format!("replay zswap event into wallet: {e}")),
+        )
+    };
+    if ledger_fork::event_ledger(&bytes) == EventLedger::Older {
+        let ev = ledger_fork::decode_event_v8(&bytes)
+            .map_err(|e| crate::ledger_params::network_decode_error("decode zswap event", e))?;
+        let pre_fork = match state.pre_fork.take() {
+            Some(pre_fork) => pre_fork,
+            None => ledger_fork::zswap_to_v8(&state.wallet)?,
+        };
+        let folded = crypto_provider
+            .fold_shielded_v8(pre_fork, &ev)
+            .map_err(fold_failure)?;
+        state.pre_fork = Some(folded);
+        return Ok(());
+    }
+    state.settle()?;
     let mut reader: &[u8] = &bytes;
     let ev: Event<InMemoryDB> = tagged_deserialize(&mut reader)
         .map_err(|e| crate::ledger_params::network_decode_error("decode zswap event", e))?;
-    *wallet = crypto_provider
-        .fold_shielded(wallet.clone(), &ev)
-        .map_err(|e| {
-            crate::tip_verify::fold_failure(
-                from_snapshot,
-                std::io::Error::other(format!("replay zswap event into wallet: {e}")),
-            )
-        })?;
+    state.wallet = crypto_provider
+        .fold_shielded(state.wallet.clone(), &ev)
+        .map_err(fold_failure)?;
     Ok(())
 }
 
@@ -540,12 +574,7 @@ indexer may be stalled",
                 // the indexer re-sends the event at the cursor. It is already in the wallet, and
                 // `replay_events` rejects re-inserting a committed output, so fold only past it.
                 if evt.id > state.last_seen_id {
-                    fold_zswap_event(
-                        crypto_provider,
-                        &mut state.wallet,
-                        &evt.raw,
-                        state.from_snapshot,
-                    )?;
+                    fold_zswap_event(crypto_provider, state, &evt.raw)?;
                     state.last_seen_id = evt.id;
                 }
 
@@ -594,11 +623,6 @@ struct ZswapLedgerEventWire {
 mod tests {
     use super::*;
     use crate::mock_indexer::{self, MockEvent};
-    use midnight_base_crypto::hash::HashOutput;
-    use midnight_coin_structure::coin::Commitment;
-    use midnight_ledger::events::{EventDetails, EventSource, ZswapPreimageEvidence};
-    use midnight_ledger::structure::TransactionHash;
-    use midnight_serialize::tagged_serialize;
     use ows_signer::chains::MidnightSigner;
     use ows_signer::SecretBytes;
 
@@ -621,25 +645,77 @@ mod tests {
     /// [`foreign_output`] carried by the stream event `id`, which a reset chain no longer keeps in
     /// step with the tree index.
     fn foreign_output_at(id: i64, mt_index: u64) -> MockEvent {
-        let event = Event::<InMemoryDB> {
-            source: EventSource {
-                transaction_hash: TransactionHash(HashOutput([0; 32])),
-                logical_segment: 0,
-                physical_segment: 0,
-            },
-            content: EventDetails::ZswapOutput {
-                commitment: Commitment(HashOutput([mt_index as u8 + 1; 32])),
-                preimage_evidence: ZswapPreimageEvidence::None,
-                contract: None,
-                mt_index,
-            },
+        mock_indexer::foreign_output(id, mt_index)
+    }
+
+    /// [`foreign_output`] as a network wrote it before its hard fork to ledger 9: a ledger 8 event.
+    fn foreign_output_v8(mt_index: u64) -> MockEvent {
+        mock_indexer::foreign_output_v8(mt_index as i64, mt_index)
+    }
+
+    /// `events` folded into a fresh replay state, as a sync from genesis folds them.
+    fn folded(provider: &MidnightCryptoProvider, events: Vec<MockEvent>) -> ZswapReplayState {
+        let mut state = ZswapReplayState {
+            wallet: ZswapLocalState::new(),
+            pre_fork: None,
+            from_snapshot: false,
+            last_seen_id: events.last().map_or(GENESIS_CURSOR, |e| e.id),
+            max_id: events.last().map(|e| e.id),
+            n_events: 0,
+            last_event_at: None,
         };
-        let mut raw = Vec::new();
-        tagged_serialize(&event, &mut raw).expect("serialize event");
-        MockEvent {
-            id,
-            raw: hex::encode(raw),
+        for e in &events {
+            fold_zswap_event(provider, &mut state, &e.raw).expect("fold");
         }
+        state.settle().expect("settle");
+        state
+    }
+
+    /// The history before a network's hard fork to ledger 9 is ledger 8 events. They are folded
+    /// with ledger 8 and the state carries on into the ledger 9 events at the tree index they
+    /// reached, so the wallet ends exactly where an all-ledger-9 history would leave it.
+    #[test]
+    fn the_pre_fork_history_folds_with_ledger_8_and_carries_into_ledger_9() {
+        let provider = provider();
+        let mixed: Vec<MockEvent> = (0..3)
+            .map(foreign_output_v8)
+            .chain((3..6).map(foreign_output))
+            .collect();
+        let state = folded(&provider, mixed);
+        assert!(state.pre_fork.is_none());
+        assert_eq!(state.wallet.first_free, 6);
+        let encode = super::super::cache::encode_zswap_state;
+        assert_eq!(
+            encode(&state.wallet).unwrap(),
+            encode(&folded(&provider, (0..6).map(foreign_output).collect()).wallet).unwrap()
+        );
+    }
+
+    /// A connection dropped part-way through the pre-fork history saves a snapshot, which holds
+    /// the state as ledger 9 bytes; the resumed replay carries it back to ledger 8 for the rest of
+    /// that history and on into the ledger 9 events.
+    #[tokio::test]
+    async fn a_replay_cut_inside_the_pre_fork_history_resumes_across_the_fork() {
+        let url = mock_indexer::spawn(
+            "zswapLedgerEvents",
+            (0..4)
+                .map(foreign_output_v8)
+                .chain((4..8).map(foreign_output))
+                .collect(),
+            Some(2),
+        )
+        .await;
+        let vault =
+            std::env::temp_dir().join(format!("ows-midnight-zswap-fork-{}", std::process::id()));
+        let scope = SyncCacheScope::for_wallet("w", Some(&vault));
+
+        let state = run_zswap_replay(&url, &provider(), &scope, "fp", None).await;
+        let _ = std::fs::remove_dir_all(&vault);
+
+        let state = state.expect("the replay must cross the fork");
+        assert_eq!(state.last_seen_id, 7);
+        assert!(state.pre_fork.is_none());
+        assert_eq!(state.wallet.first_free, 8);
     }
 
     /// A connection that drops mid-replay reconnects from the last event folded, and the indexer
@@ -713,10 +789,7 @@ mod tests {
 
         // The old chain's snapshot: six outputs folded, cursor at event 5, no genesis hash.
         let provider = provider();
-        let mut wallet = ZswapLocalState::new();
-        for e in (0..6).map(foreign_output) {
-            fold_zswap_event(&provider, &mut wallet, &e.raw, false).expect("fold");
-        }
+        let mut stale = folded(&provider, (0..6).map(foreign_output).collect());
         let fp = cache_io::sync_site_fingerprint(&url, &scope);
         let path = sync_cache::snapshot_path(&url, "fp", &scope).expect("cache path");
         let cache = ZswapCache {
@@ -727,15 +800,7 @@ mod tests {
             block_height: 0,
             genesis_hash: "",
         };
-        let stale = ZswapReplayState {
-            wallet,
-            from_snapshot: false,
-            last_seen_id: 5,
-            max_id: Some(5),
-            n_events: 0,
-            last_event_at: None,
-        };
-        save_zswap_snapshot(Some(&cache), &stale);
+        save_zswap_snapshot(Some(&cache), &mut stale);
 
         let state = run_zswap_replay(&url, &provider, &scope, "fp", None).await;
         let _ = std::fs::remove_dir_all(&vault);
@@ -776,10 +841,7 @@ mod tests {
         let recovered = recovered.expect("the sync recovers once the indexer is back");
         assert!(recovered.from_snapshot);
         assert_eq!(recovered.last_seen_id, 5);
-        let mut clean = ZswapLocalState::new();
-        for e in events() {
-            fold_zswap_event(&provider, &mut clean, &e.raw, false).expect("fold");
-        }
+        let clean = folded(&provider, events().collect()).wallet;
         let encode = super::super::cache::encode_zswap_state;
         assert_eq!(
             encode(&recovered.wallet).unwrap(),
