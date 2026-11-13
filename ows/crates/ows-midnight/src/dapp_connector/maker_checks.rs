@@ -16,15 +16,14 @@ use std::collections::BTreeMap;
 use std::ops::Deref as _;
 use std::path::Path;
 
-use midnight_base_crypto::signatures::{Signature as MnSig, VerifyingKey};
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::coin::UserAddress;
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_ledger::dust::DustParameters;
 use midnight_ledger::error::MalformedTransaction;
 use midnight_ledger::structure::{
-    ErasedIntent, LedgerParameters, LedgerState, ProofMarker, StandardTransaction, Transaction,
-    UtxoSpend,
+    ErasedIntent, LedgerParameters, LedgerState, ProofMarker, Signature as MnSig,
+    SignatureVerifyingKey, StandardTransaction, Transaction, UtxoSpend,
 };
 use midnight_ledger::verify::{StateReference, WellFormedStrictness};
 use midnight_serialize::tagged_deserialize;
@@ -183,7 +182,7 @@ impl StateReference<InMemoryDB> for ReceiverReference {
     fn generationless_fee_availability_check(
         &self,
         parent_intent: &ErasedIntent<InMemoryDB>,
-        night_key: &VerifyingKey,
+        night_key: &SignatureVerifyingKey,
         check: impl FnOnce(u128) -> Result<(), MalformedTransaction<InMemoryDB>>,
     ) -> Result<(), MalformedTransaction<InMemoryDB>> {
         self.0
@@ -200,6 +199,15 @@ impl StateReference<InMemoryDB> for ReceiverReference {
         ) -> Result<(), MalformedTransaction<InMemoryDB>>,
     ) -> Result<(), MalformedTransaction<InMemoryDB>> {
         Ok(())
+    }
+
+    fn fees_check(
+        &self,
+        check: impl FnOnce(
+            &dyn Fn(ContractAddress, &EntryPointBuf) -> Option<ContractOperation>,
+        ) -> Result<(), MalformedTransaction<InMemoryDB>>,
+    ) -> Result<(), MalformedTransaction<InMemoryDB>> {
+        self.0.fees_check(check)
     }
 
     fn network_check(&self, network: &str) -> Result<(), MalformedTransaction<InMemoryDB>> {
@@ -264,11 +272,11 @@ fn ensure_inputs_unspent(
 mod tests {
     use super::*;
 
-    const CHAIN: &str = "midnight:preprod";
+    const CHAIN: &str = "midnight:stagenet";
 
-    /// The checked-in preprod maker: a real `makeIntent` offer, sealed, with real signatures.
+    /// The checked-in stagenet maker: a real `makeIntent` offer, sealed, with real signatures.
     fn fixture() -> TxSealed {
-        let hex_str = include_str!("testdata/sealed_maker_preprod.hex").trim();
+        let hex_str = include_str!("testdata/sealed_maker_stagenet.hex").trim();
         let bytes = hex::decode(hex_str.strip_prefix("0x").unwrap_or(hex_str)).unwrap();
         let mut r: &[u8] = &bytes;
         tagged_deserialize(&mut r).unwrap()
@@ -345,7 +353,7 @@ mod tests {
         assert!(e.contains("does not verify"), "{e}");
     }
 
-    /// The fixture's coins are real preprod coins, and a submission of any offer built on them spends
+    /// The fixture's coins are real stagenet coins, and a submission of any offer built on them spends
     /// them, so the coin set is served here rather than read from the chain.
     #[test]
     fn a_maker_whose_input_is_spent_is_refused() {

@@ -395,25 +395,25 @@ mod tests {
         assert_eq!(out[1].entry_point, None);
     }
 
-    /// A real, settled preprod contract call, read from the bytes the chain actually carries.
+    /// A real, settled stagenet contract call, read from the bytes the chain actually carries.
     ///
-    /// Fixture: tx `9d506439b5ffe3942ec0592e262b864cc2c64a2b865354b64679b5e9fea824fd`, block
-    /// 1851195 on `midnight:preprod`, status SUCCESS — refetch with
-    /// `{ transactions(offset:{hash:"9d5064…"}) { raw } }` against
-    /// `https://indexer.preprod.midnight.network/api/v4/graphql`.
+    /// Fixture: tx `bbe2acc327f072605403eede4d640d7cae0d47cb9b98a5319a8066aa82f0142d`, block
+    /// 975946 on `midnight:stagenet` (ledger 9), status SUCCESS — refetch with
+    /// `{ transactions(offset:{hash:"bbe2ac…"}) { raw } }` against
+    /// `https://indexer.stagenet.shielded.tools/api/v4/graphql`.
     ///
     /// The indexer reports this call independently as address
-    /// `3b477afdd03085630c0afca689ba0cd5fab475bcfd9e021f47e9c0e8699164ce`, entry point
-    /// `addUnshieldedLiquidity` — so the address and entry point below are cross-checked against a
-    /// source other than our own decoding, and the amounts are what a real dapp's transcript declares.
+    /// `f973e22e0a15c1c4ef9dd5d6d6c87f6c60728b6277e09421de8f780644477421`, entry point
+    /// `deposit_unshielded` — so the address and entry point below are cross-checked against a
+    /// source other than our own decoding, and the amount is what a real dapp's transcript declares.
     #[test]
-    fn a_real_preprod_contract_call_is_read_from_the_chain_bytes() {
-        use midnight_base_crypto::signatures::Signature as MnSig;
+    fn a_real_stagenet_contract_call_is_read_from_the_chain_bytes() {
+        use midnight_ledger::structure::Signature as MnSig;
         use midnight_ledger::structure::{ProofMarker, Transaction};
         use midnight_serialize::tagged_deserialize;
         use transient_crypto::commitment::PureGeneratorPedersen;
 
-        let hex_str = include_str!("testdata/contract_call_preprod.hex").trim();
+        let hex_str = include_str!("testdata/contract_call_stagenet.hex").trim();
         let bytes = hex::decode(hex_str.strip_prefix("0x").unwrap_or(hex_str)).unwrap();
         let mut reader: &[u8] = &bytes;
         let tx: Transaction<MnSig, ProofMarker, PureGeneratorPedersen, InMemoryDB> =
@@ -433,27 +433,18 @@ mod tests {
         assert_eq!(call.kind, ContractActionKind::Call);
         assert_eq!(
             call.address,
-            "3b477afdd03085630c0afca689ba0cd5fab475bcfd9e021f47e9c0e8699164ce"
+            "f973e22e0a15c1c4ef9dd5d6d6c87f6c60728b6277e09421de8f780644477421"
         );
-        assert_eq!(call.entry_point.as_deref(), Some("addUnshieldedLiquidity"));
+        assert_eq!(call.entry_point.as_deref(), Some("deposit_unshielded"));
         assert!(call.payouts.is_empty());
 
-        // The call declares only a fallible transcript, so it is keyed by its intent's own segment —
-        // and a real segment id is an arbitrary `u16` the author picked (this tx's intents are 2260
-        // and 15441), not a small sequential number. Guaranteed-vs-fallible is `== 0` vs `!= 0`.
-        assert_eq!(call.segment, 15441);
-        assert_ne!(call.segment, GUARANTEED_SEGMENT);
+        // The deposit declares only a guaranteed transcript, so it is keyed by the guaranteed segment.
+        assert_eq!(call.segment, GUARANTEED_SEGMENT);
 
-        // Adding liquidity pays value IN and takes none out: NIGHT plus the pool's other token.
+        // A deposit pays value IN and takes none out: 10 NIGHT into the account contract.
         assert_eq!(
             call.sent_to,
-            vec![
-                (hex::encode([0u8; 32]), "5000000".to_string()),
-                (
-                    "86590203209b68bf2d422c7e76a0e4daf6ebef6b229bb3d6efec5d359e883142".to_string(),
-                    "27388373".to_string()
-                ),
-            ]
+            vec![(hex::encode([0u8; 32]), "10000000".to_string())]
         );
         assert!(call.received_from.is_empty());
     }

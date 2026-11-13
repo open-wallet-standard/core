@@ -41,7 +41,6 @@ use std::collections::BTreeMap;
 use std::ops::Deref as _;
 use std::path::Path;
 
-use midnight_base_crypto::signatures::{Signature as MnSig, VerifyingKey};
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::coin::{
     Info as CoinInfo, QualifiedInfo, ShieldedTokenType, UserAddress, NIGHT,
@@ -50,6 +49,7 @@ use midnight_ledger::structure::{
     Intent, ProofMarker, ProofPreimageMarker, StandardTransaction, Transaction, UnshieldedOffer,
     UtxoOutput, UtxoSpend,
 };
+use midnight_ledger::structure::{Signature as MnSig, SignatureVerifyingKey};
 use midnight_serialize::tagged_serialize;
 use midnight_storage::arena::Sp;
 use midnight_storage::db::InMemoryDB;
@@ -743,7 +743,7 @@ fn place_zswap_offer(
 fn build_unshielded_offer(
     signer: &MidnightSigner,
     sender_addr: &str,
-    sender_vk: &VerifyingKey,
+    sender_vk: &SignatureVerifyingKey,
     pool: &[crate::UnshieldedUtxo],
     reserve: Option<&crate::UnshieldedUtxo>,
     inputs_requested: &[&DesiredInput],
@@ -814,7 +814,7 @@ fn select_unshielded_inputs(
     utxos: &[crate::UnshieldedUtxo],
     inputs_requested: &[&DesiredInput],
     sender_addr: &str,
-    sender_vk: &VerifyingKey,
+    sender_vk: &SignatureVerifyingKey,
     maker: UserAddress,
 ) -> Result<SelectedInputs, std::io::Error> {
     let mut inputs: Vec<UtxoSpend> = Vec::new();
@@ -1011,9 +1011,11 @@ mod tests {
     #[test]
     fn same_token_desired_inputs_claim_disjoint_coins() {
         let seed = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
-        let vk = MidnightSigningKey::from_bytes(&hex::decode(seed).unwrap())
-            .unwrap()
-            .verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(seed).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         // Two equal NIGHT coins; each row needs one coin's worth.
         let pool = vec![night_utxo(100, 1, 0), night_utxo(100, 2, 1)];
         let d1 = night_input(60);

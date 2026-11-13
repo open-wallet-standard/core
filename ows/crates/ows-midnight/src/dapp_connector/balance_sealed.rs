@@ -13,9 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref as _;
 use std::path::Path;
 
-use midnight_base_crypto::signatures::Signature as MnSig;
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::coin::{TokenType as LedgerTokenType, UserAddress};
+use midnight_ledger::structure::Signature as MnSig;
 use midnight_ledger::structure::{ProofMarker, StandardTransaction, Transaction};
 use midnight_serialize::{tagged_deserialize, tagged_serialize};
 use midnight_storage::arena::Sp;
@@ -841,8 +841,9 @@ mod merge_tests {
 
     #[test]
     fn complement_of_a_real_sealed_maker_negates_its_balance() {
-        // A real preprod makeIntent output — proof,pedersen-schnorr, sealed and imbalanced.
-        let hex_str = include_str!("testdata/sealed_maker_preprod.hex");
+        // A real stagenet makeIntent output — proof,pedersen-schnorr, sealed and imbalanced (2 NIGHT
+        // offered for 3000000 of a token 0x5a…5a). Sealed with `ows sign tx`, never broadcast.
+        let hex_str = include_str!("testdata/sealed_maker_stagenet.hex");
         let hex_str = hex_str.trim();
         let bytes = hex::decode(hex_str.strip_prefix("0x").unwrap_or(hex_str)).unwrap();
 
@@ -899,18 +900,18 @@ mod merge_tests {
             .unwrap()
     }
 
-    /// The real preprod maker, the taker's complement of it for the [`provider`]'s wallet, and a taker
+    /// The real stagenet maker, the taker's complement of it for the [`provider`]'s wallet, and a taker
     /// half planned over `pool` with the wallet's fee-registration reserve, as of `tip`.
     fn registration_merge(
         pool: &[crate::UnshieldedUtxo],
         tip: Timestamp,
     ) -> (Vec<u8>, TxSealed, MakeIntentRequest, OfferPlan) {
-        let chain = "midnight:preprod";
+        let chain = "midnight:stagenet";
         let provider = provider();
         let addresses = provider
             .addresses(&MidnightNetwork::from_chain_id(chain))
             .unwrap();
-        let hex_str = include_str!("testdata/sealed_maker_preprod.hex").trim();
+        let hex_str = include_str!("testdata/sealed_maker_stagenet.hex").trim();
         let maker_bytes = hex::decode(hex_str.strip_prefix("0x").unwrap_or(hex_str)).unwrap();
         let mut r: &[u8] = &maker_bytes;
         let maker: TxSealed = tagged_deserialize(&mut r).unwrap();
@@ -944,7 +945,7 @@ mod merge_tests {
         (maker_bytes, maker, complement, taker)
     }
 
-    /// A NIGHT coin of the [`provider`]'s wallet on preprod that was never registered and has long
+    /// A NIGHT coin of the [`provider`]'s wallet on stagenet that was never registered and has long
     /// since generated all the DUST it can.
     fn unregistered_coin() -> crate::UnshieldedUtxo {
         crate::UnshieldedUtxo {
@@ -953,7 +954,7 @@ mod merge_tests {
             intent_hash: hex::encode([9u8; 32]),
             output_index: 0,
             owner: provider()
-                .addresses(&MidnightNetwork::from_chain_id("midnight:preprod"))
+                .addresses(&MidnightNetwork::from_chain_id("midnight:stagenet"))
                 .unwrap()
                 .unshielded,
             ctime_unix_secs: Some(1_000),
@@ -961,16 +962,26 @@ mod merge_tests {
         }
     }
 
+    /// The [`provider`]'s coin of the token the stagenet maker wants, exactly the 3 000 000 it asks for.
+    fn wanted_coin() -> crate::UnshieldedUtxo {
+        crate::UnshieldedUtxo {
+            token_type: "5a".repeat(32),
+            value: 3_000_000,
+            intent_hash: hex::encode([8u8; 32]),
+            ..unregistered_coin()
+        }
+    }
+
     /// A taker whose NIGHT was never registered, and that holds no DUST, pays the merged fee with a
     /// generationless registration of a NIGHT coin its half spends and returns whole. The policy pass
     /// sees how: a registration fee, the registration the taker signs, and no DUST leaving the wallet.
     ///
-    /// The fixture swaps NIGHT alone, and a merge that small falls under the node's time-to-dismiss
-    /// floor with any fee section (see the next test), so the floor is raised here to size the
-    /// registration on its own.
+    /// A merge of the fixture's two-token swap is still small enough to fall under the node's
+    /// time-to-dismiss floor with any fee section (see the next test), so the floor is raised here to
+    /// size the registration on its own.
     #[test]
     fn a_taker_holding_only_unregistered_night_pays_the_merge_fee_by_registration() {
-        let chain = "midnight:preprod";
+        let chain = "midnight:stagenet";
         let provider = provider();
         let addresses = provider
             .addresses(&MidnightNetwork::from_chain_id(chain))
@@ -979,8 +990,8 @@ mod merge_tests {
         let coin = unregistered_coin();
         let tip = Timestamp::from_secs(10_000_000);
         let (maker_bytes, maker, complement, taker) =
-            registration_merge(std::slice::from_ref(&coin), tip);
-        assert_eq!(taker.spent(), std::slice::from_ref(&coin));
+            registration_merge(&[coin.clone(), wanted_coin()], tip);
+        assert_eq!(taker.spent(), [wanted_coin(), coin.clone()]);
 
         let seg = complement.intent_segment;
         let taker_base = taker.mock_proven(&provider).unwrap();
@@ -992,7 +1003,7 @@ mod merge_tests {
             .clone()
             .unwrap();
         let spent: Vec<u128> = offer.inputs.iter_deref().map(|i| i.value).collect();
-        assert_eq!(spent, vec![coin.value]);
+        assert_eq!(spent, vec![wanted_coin().value, coin.value]);
         assert!(offer
             .outputs
             .iter_deref()
@@ -1035,13 +1046,13 @@ mod merge_tests {
     }
 
     /// A registration that cannot pay the merged fee declines rather than failing the merge, so the
-    /// taker falls back to a DUST spend: under the real time-to-dismiss floor the NIGHT-only fixture
-    /// cannot carry one, and a coin that generated nothing yet has no DUST to give.
+    /// taker falls back to a DUST spend: under the real time-to-dismiss floor the fixture's merge cannot
+    /// carry one, and a coin that generated nothing yet has no DUST to give.
     #[test]
     fn a_registration_that_cannot_pay_the_merge_fee_declines() {
         let tip = Timestamp::from_secs(10_000_000);
         let (_, maker, complement, taker) =
-            registration_merge(std::slice::from_ref(&unregistered_coin()), tip);
+            registration_merge(&[unregistered_coin(), wanted_coin()], tip);
         let declined = registration_fee(
             &provider(),
             &maker,
@@ -1057,7 +1068,8 @@ mod merge_tests {
             ctime_unix_secs: Some(10_000_000),
             ..unregistered_coin()
         };
-        let (_, maker, complement, taker) = registration_merge(std::slice::from_ref(&fresh), tip);
+        let (_, maker, complement, taker) =
+            registration_merge(&[fresh.clone(), wanted_coin()], tip);
         let mut params = midnight_ledger::structure::INITIAL_PARAMETERS;
         params.limits.min_time_to_dismiss = params.limits.min_time_to_dismiss * 100usize;
         let declined = registration_fee(
@@ -1075,16 +1087,16 @@ mod merge_tests {
         );
 
         // The spend that pays instead does not carry the reserved coin, which would only add cost.
-        let pool = [fresh];
+        let pool = [fresh, wanted_coin()];
         let taker = taker
-            .without_reserve("midnight:preprod", &provider(), &complement, &pool)
+            .without_reserve("midnight:stagenet", &provider(), &complement, &pool)
             .unwrap();
-        assert!(taker.spent().is_empty());
+        assert_eq!(taker.spent(), [wanted_coin()]);
     }
 
     #[test]
     fn contracts_of_a_real_sealed_maker_are_read_from_its_intents() {
-        let hex_str = include_str!("testdata/sealed_maker_preprod.hex");
+        let hex_str = include_str!("testdata/sealed_maker_stagenet.hex");
         let hex_str = hex_str.trim();
         let bytes = hex::decode(hex_str.strip_prefix("0x").unwrap_or(hex_str)).unwrap();
 
@@ -1132,7 +1144,7 @@ mod tests {
 
     #[test]
     fn a_swapoffer_maker_decodes_to_the_sealed_offer() {
-        let hex_str = include_str!("testdata/sealed_maker_preprod.hex").trim();
+        let hex_str = include_str!("testdata/sealed_maker_stagenet.hex").trim();
         let sealed = hex::decode(hex_str.strip_prefix("0x").unwrap_or(hex_str)).unwrap();
         let json = format!(
             r#"{{"makerTx":"{}"}}"#,
@@ -1145,20 +1157,24 @@ mod tests {
 
     #[test]
     fn a_stringified_payload_maker_is_validated_against_its_offer() {
-        let hex_str = include_str!("testdata/sealed_maker_preprod.hex").trim();
+        let hex_str = include_str!("testdata/sealed_maker_stagenet.hex").trim();
         let sealed = hex::decode(hex_str.strip_prefix("0x").unwrap_or(hex_str)).unwrap();
-        // The fixture gives NIGHT and wants nothing, so its payload is refused as one-sided.
-        let payload = serde_json::json!({
-            "version": 1,
-            "offerBech32": swap_offer::encode_swap_offer(&sealed),
-            "computed": {
-                "gives": [{ "token": "00".repeat(32), "amount": "500000", "type": "UNSHIELDED" }],
-                "wants": [],
-            },
-        });
-        let json = serde_json::json!({ "makerTx": payload.to_string() }).to_string();
-        let e = parse_balance_sealed_json(&json).unwrap_err();
-        assert!(e.to_string().contains("one-sided"), "{e}");
+        // The fixture gives 2 000 000 NIGHT and wants 3 000 000 of an unshielded token.
+        let payload = |wants: &str| {
+            let payload = serde_json::json!({
+                "version": 1,
+                "offerBech32": swap_offer::encode_swap_offer(&sealed),
+                "computed": {
+                    "gives": [{ "token": "00".repeat(32), "amount": "2000000", "type": "UNSHIELDED" }],
+                    "wants": [{ "token": "5a".repeat(32), "amount": wants, "type": "UNSHIELDED" }],
+                },
+            });
+            serde_json::json!({ "makerTx": payload.to_string() }).to_string()
+        };
+        let req = parse_balance_sealed_json(&payload("3000000")).unwrap();
+        assert_eq!(req.maker_tx, sealed);
+        let e = parse_balance_sealed_json(&payload("3000001")).unwrap_err();
+        assert!(e.to_string().contains("wants do not match"), "{e}");
     }
 
     #[test]
@@ -1166,7 +1182,7 @@ mod tests {
         // A fully sealed maker blob (proof,pedersen-schnorr tag) decodes as raw bytes and is
         // recognized as sealed, so plan() takes the precise sealed-merge error path rather than the
         // generic fallthrough.
-        let sealed_tag = b"midnight:transaction[v9](signature[v1],proof,pedersen-schnorr[v1]):";
+        let sealed_tag = b"midnight:transaction[v12](signature[v2],proof,pedersen-schnorr[v1]):";
         let mut blob = sealed_tag.to_vec();
         blob.extend_from_slice(&[0u8; 8]);
         let json = format!(r#"{{"makerTx":"{}"}}"#, hex::encode(&blob));
@@ -1183,7 +1199,7 @@ mod tests {
             Commitment, ShieldedTokenType, UnshieldedTokenType, UserAddress, NIGHT,
         };
         use midnight_ledger::structure::{
-            Intent, IntentHash, UnshieldedOffer, UtxoOutput, UtxoSpend,
+            Intent, IntentHash, SignatureVerifyingKey, UnshieldedOffer, UtxoOutput, UtxoSpend,
         };
         use midnight_storage::storage::HashMap as MnHashMap;
         use midnight_zswap::{Delta, Offer as ZswapOffer, Output};
@@ -1204,7 +1220,9 @@ mod tests {
         fn give() -> UtxoSpend {
             UtxoSpend {
                 value: 1_000_000,
-                owner: SigningKey::from_bytes(&[0x11; 32]).unwrap().verifying_key(),
+                owner: SignatureVerifyingKey::Schnorr(
+                    SigningKey::from_bytes(&[0x11; 32]).unwrap().verifying_key(),
+                ),
                 type_: NIGHT,
                 intent_hash: IntentHash(HashOutput([7; 32])),
                 output_no: 0,

@@ -9,11 +9,11 @@ use std::path::Path;
 
 use bech32::Hrp;
 use midnight_base_crypto::hash::HashOutput;
-use midnight_base_crypto::signatures::Signature as MnSig;
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::coin::{
     PublicKey as CoinPublicKey, ShieldedTokenType, UnshieldedTokenType, UserAddress, NIGHT,
 };
+use midnight_ledger::structure::Signature as MnSig;
 use midnight_ledger::structure::{
     ProofMarker, ProofPreimageMarker, Transaction, INITIAL_PARAMETERS,
 };
@@ -307,6 +307,20 @@ impl transient_crypto::proofs::ProvingProvider for UnsealedMockProver {
     }
     fn split(&mut self) -> Self {
         UnsealedMockProver
+    }
+    fn resolver(&self) -> &impl transient_crypto::proofs::Resolver {
+        self
+    }
+}
+
+/// The ledger resolves a key only to read a contract call's verifier key, and a contract call is never
+/// mock-provable, so there is nothing to resolve.
+impl transient_crypto::proofs::Resolver for UnsealedMockProver {
+    async fn resolve_key(
+        &self,
+        _key: transient_crypto::proofs::KeyLocation,
+    ) -> std::io::Result<Option<transient_crypto::proofs::ProvingKeyMaterial>> {
+        Ok(None)
     }
 }
 

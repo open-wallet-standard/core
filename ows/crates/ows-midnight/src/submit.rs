@@ -24,7 +24,7 @@ const LEDGER_BALANCE_CHECK_OVERSPEND: u16 = 138;
 const LEDGER_INPUT_NOT_IN_UTXOS: u16 = 195;
 
 pub(crate) type SealedTx = midnight_ledger::structure::Transaction<
-    midnight_base_crypto::signatures::Signature,
+    midnight_ledger::structure::Signature,
     midnight_ledger::structure::ProofMarker,
     <midnight_ledger::structure::ProofMarker as midnight_ledger::structure::ProofKind<
         midnight_storage::db::InMemoryDB,
@@ -36,7 +36,7 @@ pub(crate) type SealedTx = midnight_ledger::structure::Transaction<
 /// another) rather than a self-contained contract call.
 fn is_swap_shaped_offer(
     stx: &midnight_ledger::structure::StandardTransaction<
-        midnight_base_crypto::signatures::Signature,
+        midnight_ledger::structure::Signature,
         midnight_ledger::structure::ProofMarker,
         <midnight_ledger::structure::ProofMarker as midnight_ledger::structure::ProofKind<
             midnight_storage::db::InMemoryDB,
@@ -147,7 +147,7 @@ fn append_input_not_in_utxos_hint(msg: &mut String) {
 
 /// Compute the **ledger** transaction hash (`0x` + 32-byte hex) for a `midnight:transaction…` blob.
 fn midnight_ledger_tx_hash_hex(midnight_tx: &[u8]) -> Result<String, std::io::Error> {
-    use midnight_base_crypto::signatures::Signature as MnSig;
+    use midnight_ledger::structure::Signature as MnSig;
     use midnight_ledger::structure::{ProofKind, ProofMarker, ProofPreimageMarker, Transaction};
     use midnight_serialize::tagged_deserialize;
     use midnight_storage::db::InMemoryDB;
@@ -362,7 +362,7 @@ pub async fn submit_unshielded_tx(
 
     // Best-effort local check before hitting the node (helps when broadcasting sealed swap offers).
     {
-        use midnight_base_crypto::signatures::Signature as MnSig;
+        use midnight_ledger::structure::Signature as MnSig;
         use midnight_ledger::structure::{ProofKind, ProofMarker, Transaction};
         use midnight_serialize::tagged_deserialize;
         use midnight_storage::db::InMemoryDB;

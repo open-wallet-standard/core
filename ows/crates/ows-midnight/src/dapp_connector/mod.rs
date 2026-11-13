@@ -382,8 +382,9 @@ mod tests {
 
     #[test]
     fn bare_sealed_maker_hex_wraps_as_balance_sealed() {
-        let sealed_hex =
-            hex::encode(b"midnight:transaction[v9](signature[v1],proof,pedersen-schnorr[v1]):body");
+        let sealed_hex = hex::encode(
+            b"midnight:transaction[v12](signature[v2],proof,pedersen-schnorr[v1]):body",
+        );
         let out = normalize_connector_request(&sealed_hex).unwrap();
         assert_eq!(method_of(&out), ConnectorMethod::BalanceSealed);
         assert_eq!(field_of(&out, "makerTx"), sealed_hex);
@@ -392,7 +393,7 @@ mod tests {
     #[test]
     fn bare_unsealed_hex_wraps_as_balance_unsealed() {
         let unsealed_hex =
-            hex::encode(b"midnight:transaction[v9](signature[v1],proof,embedded-fr[v1]):body");
+            hex::encode(b"midnight:transaction[v12](signature[v2],proof,embedded-fr[v1]):body");
         let out = normalize_connector_request(&unsealed_hex).unwrap();
         assert_eq!(method_of(&out), ConnectorMethod::BalanceUnsealed);
         assert_eq!(field_of(&out, "tx"), unsealed_hex);
@@ -491,8 +492,9 @@ mod tests {
         assert_eq!(method_of(submit), ConnectorMethod::SubmitTransaction);
         assert!(connector_submission("midnight:preview", submit).is_err());
 
-        let sealed_hex =
-            hex::encode(b"midnight:transaction[v9](signature[v1],proof,pedersen-schnorr[v1]):body");
+        let sealed_hex = hex::encode(
+            b"midnight:transaction[v12](signature[v2],proof,pedersen-schnorr[v1]):body",
+        );
         let bare = normalize_connector_request(&sealed_hex).unwrap();
         assert_eq!(method_of(&bare), ConnectorMethod::BalanceSealed);
         for request in [

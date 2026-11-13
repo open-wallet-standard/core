@@ -94,7 +94,7 @@ const GENERATIONLESS_FEE_HEADROOM_ABS: u128 = 50_000;
 /// A proven-flow dust-action section carrying one generationless registration (no spends → no proof).
 fn registration_dust_actions(
     dust_pk: DustPublicKey,
-    night_vk: VerifyingKey,
+    night_vk: SignatureVerifyingKey,
     allow_fee_payment: u128,
     dust_ctime: Timestamp,
 ) -> DustActions<MnSig, ProofMarker, InMemoryDB> {
@@ -119,7 +119,7 @@ fn try_registration_dust_actions(
     selected: &[UnshieldedUtxo],
     fee_dust: u128,
     dust_pk: DustPublicKey,
-    night_vk: VerifyingKey,
+    night_vk: SignatureVerifyingKey,
     dust_ctime: Timestamp,
 ) -> Result<Option<DustActions<MnSig, ProofMarker, InMemoryDB>>, std::io::Error> {
     let dust_allow = dust_allowance_from_night_inputs(selected, dust_ctime)?;
@@ -227,7 +227,7 @@ pub(super) struct DustFeeContext<'a> {
     pub(super) fallible_offer: Option<&'a UnshieldedOffer<MnSig, InMemoryDB>>,
     pub(super) selected: &'a [UnshieldedUtxo],
     pub(super) dust_pk: DustPublicKey,
-    pub(super) night_vk: VerifyingKey,
+    pub(super) night_vk: SignatureVerifyingKey,
     pub(super) crypto_provider: &'a MidnightCryptoProvider,
     pub(super) dust_ctime: Timestamp,
     pub(super) ledger_params: &'a LedgerParameters,
@@ -576,7 +576,7 @@ pub(crate) fn size_merge_registration_fee(
     dust_seg: u16,
     selected: &[UnshieldedUtxo],
     dust_pk: DustPublicKey,
-    night_vk: VerifyingKey,
+    night_vk: SignatureVerifyingKey,
     dust_ctime: Timestamp,
     ledger_params: &LedgerParameters,
 ) -> Result<Option<MergeRegistrationFee>, std::io::Error> {
@@ -927,9 +927,11 @@ mod tests {
     #[test]
     fn capacity_short_of_the_fee_yields_no_registration() {
         let dust_pk = DustPublicKey::from(DustSecretKey::derive_secret_key(&[0x22u8; 32]));
-        let night_vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
+        let night_vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         let now = Timestamp::from_secs(2_000);
         let young = [night_utxo(STARS_PER_NIGHT, false, Some(1_999))];
         assert!(dust_allowance_from_night_inputs(&young, now).unwrap() > 0);
@@ -942,9 +944,11 @@ mod tests {
     #[test]
     fn all_registered_night_yields_no_registration_forcing_the_spend_fallback() {
         let dust_pk = DustPublicKey::from(DustSecretKey::derive_secret_key(&[0x22u8; 32]));
-        let night_vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
+        let night_vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         let now = Timestamp::from_secs(2_000);
 
         // All NIGHT registered for dust generation → zero generationless allowance → no registration.

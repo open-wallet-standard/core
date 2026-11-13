@@ -17,7 +17,6 @@ use std::io::Cursor;
 use std::ops::Deref as _;
 use std::path::Path;
 
-use midnight_base_crypto::signatures::{Signature as MnSig, VerifyingKey};
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::coin::{
     Nullifier, QualifiedInfo, ShieldedTokenType, TokenType as LedgerTokenType, UnshieldedTokenType,
@@ -31,6 +30,7 @@ use midnight_ledger::structure::{
     Intent, LedgerParameters, ProofKind, ProofMarker, StandardTransaction, Transaction,
     UnshieldedOffer, UtxoOutput, UtxoSpend,
 };
+use midnight_ledger::structure::{Signature as MnSig, SignatureVerifyingKey};
 use midnight_serialize::{
     tagged_deserialize, tagged_serialize, Deserializable as _, Serializable as _,
 };
@@ -86,13 +86,14 @@ pub(crate) fn parse_intent_hash_hex(
 pub(crate) fn resolve_owner_vk(
     owner_field: &str,
     sender_bech32: &str,
-    sender_vk: &VerifyingKey,
-) -> Result<VerifyingKey, std::io::Error> {
+    sender_vk: &SignatureVerifyingKey,
+) -> Result<SignatureVerifyingKey, std::io::Error> {
     let hex_s = owner_field.strip_prefix("0x").unwrap_or(owner_field);
     if let Ok(bytes) = hex::decode(hex_s) {
         if bytes.len() == 32 {
             let mut cur = Cursor::new(bytes);
-            return VerifyingKey::deserialize(&mut cur, 0)
+            return midnight_base_crypto::signatures::VerifyingKey::deserialize(&mut cur, 0)
+                .map(SignatureVerifyingKey::Schnorr)
                 .map_err(|e| err(format!("invalid owner verifying key: {e}")));
         }
     }
@@ -102,6 +103,18 @@ pub(crate) fn resolve_owner_vk(
     Err(err(
         "UTXO owner must be 32-byte hex x-only pubkey or the sender's unshielded address",
     ))
+}
+
+/// A NIGHT verifying key's own bytes, without the ledger's key-kind prefix: the form the indexer
+/// reports a UTXO owner in.
+pub(crate) fn night_key_bytes(vk: &SignatureVerifyingKey) -> Result<Vec<u8>, std::io::Error> {
+    let mut raw = Vec::new();
+    match vk {
+        SignatureVerifyingKey::Schnorr(key) => key.serialize(&mut raw),
+        SignatureVerifyingKey::ECDSA(key) => key.serialize(&mut raw),
+    }
+    .map_err(|e| err(e.to_string()))?;
+    Ok(raw)
 }
 
 fn owner_matches_sender(owner: &str, sender_bech32: &str, vk_hex: &str) -> bool {
@@ -116,14 +129,10 @@ fn owner_matches_sender(owner: &str, sender_bech32: &str, vk_hex: &str) -> bool 
 fn sender_utxos_sorted(
     utxos: &[UnshieldedUtxo],
     sender_bech32: &str,
-    sender_vk: &VerifyingKey,
+    sender_vk: &SignatureVerifyingKey,
     token_wire: &str,
 ) -> Result<Vec<UnshieldedUtxo>, std::io::Error> {
-    let mut vk_raw = Vec::new();
-    sender_vk
-        .serialize(&mut vk_raw)
-        .map_err(|e| err(e.to_string()))?;
-    let vk_hex = hex::encode(&vk_raw);
+    let vk_hex = hex::encode(night_key_bytes(sender_vk)?);
 
     let mut cand: Vec<_> = utxos
         .iter()
@@ -131,7 +140,7 @@ fn sender_utxos_sorted(
         .filter(|u| u.token_type.eq_ignore_ascii_case(token_wire))
         .cloned()
         .collect();
-    cand.sort_by(|a, b| b.value.cmp(&a.value));
+    cand.sort_by_key(|c| std::cmp::Reverse(c.value));
     Ok(cand)
 }
 
@@ -139,7 +148,7 @@ fn sender_utxos_sorted(
 pub(crate) fn select_utxos_for_token(
     utxos: &[UnshieldedUtxo],
     sender_bech32: &str,
-    sender_vk: &VerifyingKey,
+    sender_vk: &SignatureVerifyingKey,
     token_wire: &str,
     need: u128,
 ) -> Result<Vec<UnshieldedUtxo>, std::io::Error> {
@@ -363,7 +372,7 @@ fn claim_utxo_spend(
     token: UnshieldedTokenType,
     claimed: &mut Vec<UtxoKey>,
     sender_addr: &str,
-    sender_vk: &VerifyingKey,
+    sender_vk: &SignatureVerifyingKey,
 ) -> Result<UtxoSpend, std::io::Error> {
     claimed.push((u.intent_hash.clone(), u.output_index));
     let ih = parse_intent_hash_hex(&u.intent_hash)?;
@@ -388,7 +397,7 @@ fn claim_utxo_spend(
 fn build_unshielded_balancing_offer(
     pool: &[UnshieldedUtxo],
     claimed: &mut Vec<UtxoKey>,
-    sender_vk: &VerifyingKey,
+    sender_vk: &SignatureVerifyingKey,
     sender_addr: &str,
     deficits: &[(UnshieldedTokenType, u128)],
     outputs_in: Vec<UtxoOutput>,
@@ -477,7 +486,7 @@ fn build_unshielded_balancing_offer(
 fn build_night_offer(
     pool: &[UnshieldedUtxo],
     claimed: &mut Vec<UtxoKey>,
-    sender_vk: &VerifyingKey,
+    sender_vk: &SignatureVerifyingKey,
     sender_addr: &str,
     need_night: u128,
     outputs_in: Vec<UtxoOutput>,
@@ -508,7 +517,7 @@ fn build_night_offer(
 fn build_fallible_consolidation_offer(
     coins: &[UnshieldedUtxo],
     claimed: &mut Vec<UtxoKey>,
-    sender_vk: &VerifyingKey,
+    sender_vk: &SignatureVerifyingKey,
     sender_addr: &str,
 ) -> Result<UnshieldedOffer<MnSig, InMemoryDB>, std::io::Error> {
     if coins.is_empty() {
@@ -550,7 +559,7 @@ fn consolidation_leftovers(
     pool: &[UnshieldedUtxo],
     claimed: &[UtxoKey],
     sender_addr: &str,
-    sender_vk: &VerifyingKey,
+    sender_vk: &SignatureVerifyingKey,
 ) -> Result<Vec<UnshieldedUtxo>, std::io::Error> {
     let night_wire = crate::parse_token_type(Some("night"))?.to_wire_token_type();
     let mut seen: Vec<UtxoKey> = claimed.to_vec();
@@ -680,7 +689,7 @@ struct CarriedRegistration {
 fn check_carried_registration(
     intent_id: u16,
     reg: &DustRegistration<MnSig, InMemoryDB>,
-    wallet_vk: &VerifyingKey,
+    wallet_vk: &SignatureVerifyingKey,
     wallet_dust_address: &DustPublicKey,
 ) -> Result<CarriedRegistration, std::io::Error> {
     if reg.night_key != *wallet_vk {
@@ -856,7 +865,7 @@ pub(crate) fn plan_shielded_inputs(
             .copied()
             .filter(|c| c.type_ == *token)
             .collect();
-        candidates.sort_by(|a, b| b.value.cmp(&a.value));
+        candidates.sort_by_key(|c| std::cmp::Reverse(c.value));
 
         let mut remaining = *need;
         let mut spent = 0u128;
@@ -1476,7 +1485,7 @@ struct FallibleUnshieldedDeficit {
 /// first never reaches the reserve, which would otherwise have been picked in the dry run.
 fn reserve_for_fee_registration(
     pool: &[UnshieldedUtxo],
-    sender_vk: &VerifyingKey,
+    sender_vk: &SignatureVerifyingKey,
     sender_addr: &str,
     guaranteed_deficits: &[(UnshieldedTokenType, u128)],
     outputs_in: &[UtxoOutput],
@@ -1521,7 +1530,7 @@ fn reserve_for_fee_registration(
 /// the half spends anyway, and is otherwise spent beside it and returned whole.
 pub(crate) fn reserve_for_merge_fee_registration(
     pool: &[UnshieldedUtxo],
-    sender_vk: &VerifyingKey,
+    sender_vk: &SignatureVerifyingKey,
     sender_addr: &str,
     tip: Timestamp,
 ) -> Result<Option<UnshieldedUtxo>, std::io::Error> {
@@ -1606,7 +1615,7 @@ struct BalancingInputs<'a> {
     base: &'a StandardTransaction<MnSig, ProofMarker, PedersenRandomness, InMemoryDB>,
     seg_id: u16,
     pool: &'a [UnshieldedUtxo],
-    sender_vk: &'a VerifyingKey,
+    sender_vk: &'a SignatureVerifyingKey,
     sender_addr: &'a str,
     guaranteed_deficits: &'a [(UnshieldedTokenType, u128)],
     outputs_in: &'a [UtxoOutput],
@@ -1732,7 +1741,7 @@ fn balance_and_size_fee(
 fn plan_unsealed_proven_standard_tx(
     indexer_url: &str,
     crypto_provider: &MidnightCryptoProvider,
-    sender_vk: &VerifyingKey,
+    sender_vk: &SignatureVerifyingKey,
     sender_addr: &str,
     tx_bytes: &[u8],
     pay_fees: bool,
@@ -2160,10 +2169,15 @@ mod tests {
     use midnight_base_crypto::time::Timestamp;
     use midnight_ledger::dust::{DustActions, DustPublicKey, DustRegistration, DustSecretKey};
     use midnight_ledger::structure::IntentHash;
+    use midnight_ledger::structure::SignatureKind;
     use ows_signer::chains::MidnightSigner;
     use ows_signer::traits::ChainSigner;
     use ows_signer::SecretBytes;
     use transient_crypto::commitment::PureGeneratorPedersen;
+
+    fn night_verifies(vk: &SignatureVerifyingKey, data: &[u8], sig: &MnSig) -> bool {
+        <MnSig as SignatureKind<InMemoryDB>>::signature_verify::<()>(data, vk.clone(), sig)
+    }
 
     // Unshielded role-0 seed for the abandon-phrase wallet at index 0; matches the signer's
     // address vectors. A second valid seed drives the wrong-owner test.
@@ -2184,7 +2198,9 @@ mod tests {
 
     /// A generationless dust fee registration owned by `vk` — the signature-based (no-proof) fee
     /// path — to the dust address of [`packed_signing_key`]'s dust seed, the only target it signs.
-    fn dust_fee_registration(vk: &VerifyingKey) -> DustActions<MnSig, ProofMarker, InMemoryDB> {
+    fn dust_fee_registration(
+        vk: &SignatureVerifyingKey,
+    ) -> DustActions<MnSig, ProofMarker, InMemoryDB> {
         dust_registration_to(vk, Some(own_dust_address()))
     }
 
@@ -2195,7 +2211,7 @@ mod tests {
 
     /// A dust registration of `vk`'s NIGHT to `dust_address` (`None` deregisters).
     fn dust_registration_to(
-        vk: &VerifyingKey,
+        vk: &SignatureVerifyingKey,
         dust_address: Option<DustPublicKey>,
     ) -> DustActions<MnSig, ProofMarker, InMemoryDB> {
         DustActions {
@@ -2216,7 +2232,7 @@ mod tests {
     /// given optional dust actions. Structurally what the balancer emits, so it exercises sign →
     /// reattach → seal without a prover or indexer.
     fn build_proven_unshielded_tx(
-        vk: &VerifyingKey,
+        vk: &SignatureVerifyingKey,
         dust_actions: Option<DustActions<MnSig, ProofMarker, InMemoryDB>>,
     ) -> Vec<u8> {
         let input = UtxoSpend {
@@ -2270,9 +2286,11 @@ mod tests {
     fn a_message_signature_over_data_to_sign_does_not_authorize_the_intent() {
         let signer = MidnightSigner::mainnet();
         let key = packed_signing_key(UNSHIELDED_SEED_HEX);
-        let vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         let tx_bytes = build_proven_unshielded_tx(&vk, None);
         let mut r: &[u8] = tx_bytes.as_slice();
         let Transaction::Standard(stx) = tagged_deserialize::<TxProven>(&mut r).unwrap() else {
@@ -2289,22 +2307,28 @@ mod tests {
 
         let authorized = signer.sign_transaction(key.expose(), &tx_bytes).unwrap();
         let authorized = MnSig::deserialize(&mut &authorized.signature[..], 0).unwrap();
-        assert!(vk.verify(&data, &authorized));
+        assert!(night_verifies(&vk, &data, &authorized));
 
         // The same key asked to sign those bytes as a message frames them first, so the result
-        // is not a signature over the intent.
+        // is not a signature over the intent. A message signature is a bare BIP-340 signature.
         let message = signer.sign_message(key.expose(), &data, None).unwrap();
-        let message = MnSig::deserialize(&mut &message.signature[..], 0).unwrap();
-        assert!(!vk.verify(&data, &message));
+        let message = midnight_base_crypto::signatures::Signature::deserialize(
+            &mut &message.signature[..],
+            0,
+        )
+        .unwrap();
+        assert!(!night_verifies(&vk, &data, &MnSig::Schnorr(message)));
     }
 
     #[test]
     fn sign_then_encode_seals_a_tx_carrying_a_valid_signature() {
         let signer = MidnightSigner::mainnet();
         let key = packed_signing_key(UNSHIELDED_SEED_HEX);
-        let vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         let tx_bytes = build_proven_unshielded_tx(&vk, None);
 
         // Sign: one detached signature over the intent's signing message, no seal.
@@ -2328,7 +2352,7 @@ mod tests {
             .data_to_sign(seg_id);
         let sig = MnSig::deserialize(&mut &out.signature[..], 0).unwrap();
         assert!(
-            vk.verify(&data, &sig),
+            night_verifies(&vk, &data, &sig),
             "signature must verify over data_to_sign"
         );
 
@@ -2355,9 +2379,11 @@ mod tests {
     #[test]
     fn sign_rejects_a_tx_whose_inputs_it_does_not_own() {
         let signer = MidnightSigner::mainnet();
-        let vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         let tx_bytes = build_proven_unshielded_tx(&vk, None);
 
         // Sign the same tx with a different wallet key — the ownership check must reject it.
@@ -2377,9 +2403,11 @@ mod tests {
     fn sign_refuses_a_registration_away_from_the_wallets_own_dust_address() {
         let signer = MidnightSigner::mainnet();
         let key = packed_signing_key(UNSHIELDED_SEED_HEX);
-        let vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         let elsewhere = DustPublicKey::from(DustSecretKey::derive_secret_key(&[0x33u8; 32]));
 
         for (dust_address, expected) in [
@@ -2401,7 +2429,7 @@ mod tests {
     /// A registration of `night_key`'s NIGHT to `dust_address` (`None` deregisters) allowing the fee
     /// `allow_fee_payment`.
     fn registration(
-        night_key: &VerifyingKey,
+        night_key: &SignatureVerifyingKey,
         dust_address: Option<DustPublicKey>,
         allow_fee_payment: u128,
     ) -> DustRegistration<MnSig, InMemoryDB> {
@@ -2418,12 +2446,14 @@ mod tests {
     #[test]
     fn a_carried_registration_must_register_the_wallets_night_to_its_own_dust() {
         let vk = wallet_vk();
-        let other_vk = MidnightSigningKey::from_bytes(&hex::decode(OTHER_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
+        let other_vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(OTHER_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         let own = own_dust_address();
         let elsewhere = DustPublicKey::from(DustSecretKey::derive_secret_key(&[0x33u8; 32]));
-        let check = |night_key: &VerifyingKey,
+        let check = |night_key: &SignatureVerifyingKey,
                      dust_address: Option<DustPublicKey>,
                      allow_fee_payment: u128| {
             check_carried_registration(
@@ -2549,9 +2579,11 @@ mod tests {
     fn sign_then_encode_signs_the_dust_fee_registration() {
         let signer = MidnightSigner::mainnet();
         let key = packed_signing_key(UNSHIELDED_SEED_HEX);
-        let vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         let tx_bytes = build_proven_unshielded_tx(&vk, Some(dust_fee_registration(&vk)));
 
         // Sign: one signature for the input plus one for the dust fee registration.
@@ -2576,7 +2608,7 @@ mod tests {
             .erase_proofs()
             .erase_signatures()
             .data_to_sign(seg_id);
-        assert!(vk.verify(&data, &sig_a) && vk.verify(&data, &sig_b));
+        assert!(night_verifies(&vk, &data, &sig_a) && night_verifies(&vk, &data, &sig_b));
 
         // Seal: the sealed tx's dust registration carries a signature, and the offer has one too.
         let sealed_bytes = signer.encode_signed_transaction(&tx_bytes, &out).unwrap();
@@ -2695,15 +2727,17 @@ mod tests {
         }
     }
 
-    fn wallet_vk() -> VerifyingKey {
-        MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key()
+    fn wallet_vk() -> SignatureVerifyingKey {
+        SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        )
     }
 
     /// An unshielded offer spending one `value` coin of `token` owned by `vk`, with `outputs`.
     fn spend_offer(
-        vk: &VerifyingKey,
+        vk: &SignatureVerifyingKey,
         token: UnshieldedTokenType,
         value: u128,
         outputs: Vec<UtxoOutput>,
@@ -2981,9 +3015,11 @@ mod tests {
     /// supplies no dust of its own; the wallet's dust wins when it does.
     #[test]
     fn assemble_preserves_a_dapp_intents_own_dust() {
-        let vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         let intent_in = intent_with(None, Some(dust_fee_registration(&vk)));
 
         // No dust of our own → the intent's existing dust survives.
@@ -3049,12 +3085,12 @@ mod tests {
 
     /// The wallet's verifying-key as the lowercase hex the indexer reports for a UTXO owner.
     fn sender_vk_hex() -> String {
-        let vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
-        let mut raw = Vec::new();
-        vk.serialize(&mut raw).unwrap();
-        hex::encode(raw)
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
+        hex::encode(night_key_bytes(&vk).unwrap())
     }
 
     /// A sender-owned NIGHT UTXO for the coin pool; `ih_byte` makes each one a distinct coin.
@@ -3074,9 +3110,11 @@ mod tests {
     /// first claimed.
     #[test]
     fn build_night_offer_claims_disjoint_coins() {
-        let vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         let vk_hex = sender_vk_hex();
         let pool = vec![
             night_pool_utxo(&vk_hex, 100, 1, 0),
@@ -3107,7 +3145,9 @@ mod tests {
             .unwrap()
             .try_into()
             .unwrap();
-        let vk = MidnightSigningKey::from_bytes(&sk).unwrap().verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&sk).unwrap().verifying_key(),
+        );
         let vk_hex = sender_vk_hex();
 
         let reserve = night_pool_utxo(&vk_hex, 5_000_000, 7, 0);
@@ -3140,9 +3180,11 @@ mod tests {
     #[test]
     fn build_unshielded_balancing_offer_funds_custom_token() {
         use midnight_base_crypto::hash::HashOutput;
-        let vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         let vk_hex = sender_vk_hex();
         let custom = UnshieldedTokenType(HashOutput([0xab; 32]));
         let custom_wire = unshielded_token_wire(custom);
@@ -3308,7 +3350,9 @@ mod tests {
             .unwrap()
             .try_into()
             .unwrap();
-        let vk = MidnightSigningKey::from_bytes(&sk).unwrap().verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&sk).unwrap().verifying_key(),
+        );
         let vk_hex = sender_vk_hex();
 
         let coins = vec![
@@ -4113,7 +4157,9 @@ mod tests {
             .unwrap()
             .try_into()
             .unwrap();
-        let vk = MidnightSigningKey::from_bytes(&sk).unwrap().verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&sk).unwrap().verifying_key(),
+        );
         let vk_hex = sender_vk_hex();
 
         // A dapp fallible offer at segment 2: a 100-NIGHT output, no inputs (the deficit).
@@ -4188,7 +4234,9 @@ mod tests {
             .unwrap()
             .try_into()
             .unwrap();
-        let vk = MidnightSigningKey::from_bytes(&sk).unwrap().verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&sk).unwrap().verifying_key(),
+        );
         let vk_hex = sender_vk_hex();
         let token = UnshieldedTokenType(HashOutput([0x5a; 32]));
 
@@ -4253,7 +4301,9 @@ mod tests {
             .unwrap()
             .try_into()
             .unwrap();
-        let vk = MidnightSigningKey::from_bytes(&sk).unwrap().verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&sk).unwrap().verifying_key(),
+        );
         let vk_hex = sender_vk_hex();
 
         // A call whose fallible transcript declares 100 NIGHT taken IN by the contract.
@@ -4319,7 +4369,7 @@ mod tests {
 
     /// A proven tx whose single intent carries both a guaranteed and a fallible wallet input, at a
     /// non-zero segment — the shape the signer must sign across both offers.
-    fn build_proven_tx_with_fallible(vk: &VerifyingKey) -> Vec<u8> {
+    fn build_proven_tx_with_fallible(vk: &SignatureVerifyingKey) -> Vec<u8> {
         let night_offer = |value: u128, ih: u8| UnshieldedOffer {
             inputs: vec![UtxoSpend {
                 value,
@@ -4365,9 +4415,11 @@ mod tests {
     fn sign_and_seal_covers_the_fallible_offer_inputs() {
         let signer = MidnightSigner::mainnet();
         let key = packed_signing_key(UNSHIELDED_SEED_HEX);
-        let vk = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_SEED_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         let tx_bytes = build_proven_tx_with_fallible(&vk);
 
         // Two signatures: one guaranteed input, one fallible input.
@@ -4427,13 +4479,15 @@ mod tests {
         }
     }
 
-    fn vk_of(seed_hex: &str) -> VerifyingKey {
-        MidnightSigningKey::from_bytes(&hex::decode(seed_hex).unwrap())
-            .unwrap()
-            .verifying_key()
+    fn vk_of(seed_hex: &str) -> SignatureVerifyingKey {
+        SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(seed_hex).unwrap())
+                .unwrap()
+                .verifying_key(),
+        )
     }
 
-    fn night_input(value: u128, owner: VerifyingKey) -> UtxoSpend {
+    fn night_input(value: u128, owner: SignatureVerifyingKey) -> UtxoSpend {
         UtxoSpend {
             value,
             owner,

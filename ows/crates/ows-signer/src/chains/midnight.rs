@@ -1,8 +1,6 @@
 use bech32::{Bech32m, Hrp};
 use k256::schnorr::SigningKey;
-use midnight_base_crypto::signatures::{
-    Signature as MnSignature, SigningKey as MidnightSigningKey,
-};
+use midnight_base_crypto::signatures::SigningKey as MidnightSigningKey;
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::coin::{Info as CoinInfo, QualifiedInfo, ShieldedTokenType};
 use midnight_coin_structure::transfer;
@@ -12,7 +10,8 @@ use midnight_ledger::dust::{
 };
 use midnight_ledger::semantics::ZswapLocalStateExt as _;
 use midnight_ledger::structure::{
-    Intent, LedgerParameters, ProofMarker, ProofPreimageMarker, StandardTransaction, Transaction,
+    Intent, LedgerParameters, ProofMarker, ProofPreimageMarker, Signature as MnSignature,
+    SignatureVerifyingKey, SigningKey as LedgerSigningKey, StandardTransaction, Transaction,
 };
 use midnight_serialize::{
     tagged_deserialize, tagged_serialize, Deserializable, ScaleBigInt, Serializable,
@@ -602,11 +601,9 @@ impl MidnightCryptoProvider {
 
     /// Verifying key for the unshielded (Night) role — the counterpart to the signing key stored
     /// in `seeds.unshielded`. The ledger `UtxoSpend.owner` field is this key.
-    pub fn unshielded_verifying_key(
-        &self,
-    ) -> Result<midnight_base_crypto::signatures::VerifyingKey, SignerError> {
-        midnight_base_crypto::signatures::SigningKey::from_bytes(self.seeds.unshielded.expose())
-            .map(|sk| sk.verifying_key())
+    pub fn unshielded_verifying_key(&self) -> Result<SignatureVerifyingKey, SignerError> {
+        MidnightSigningKey::from_bytes(self.seeds.unshielded.expose())
+            .map(|sk| SignatureVerifyingKey::Schnorr(sk.verifying_key()))
             .map_err(|e| {
                 SignerError::InvalidPrivateKey(format!("invalid midnight signing key: {e}"))
             })
@@ -1063,9 +1060,11 @@ fn sign_proven_intent(private_key: &[u8], tx_bytes: &[u8]) -> Result<Vec<u8>, Si
     }
 
     let seeds = MidnightSigner::decode_keys(private_key)?;
-    let signing_key = MidnightSigningKey::from_bytes(seeds.unshielded.expose()).map_err(|e| {
-        SignerError::InvalidPrivateKey(format!("invalid midnight signing key: {e}"))
-    })?;
+    let signing_key = MidnightSigningKey::from_bytes(seeds.unshielded.expose())
+        .map(LedgerSigningKey::Schnorr)
+        .map_err(|e| {
+            SignerError::InvalidPrivateKey(format!("invalid midnight signing key: {e}"))
+        })?;
     let vk = signing_key.verifying_key();
     let own_dust_address = MidnightSigner::dust_public_key_from_seed(seeds.dust.expose())?;
 
@@ -2003,11 +2002,13 @@ mod tests {
                 binding_commitment: Default::default(),
             };
         let intent_data = intent.erase_proofs().erase_signatures().data_to_sign(1);
-        assert!(intent_data.starts_with(b"midnight:hash-intent:"));
+        assert!(intent_data.starts_with(b"midnight:intent-signing-envelope[v9]:"));
 
-        let owner = MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_KEY_HEX).unwrap())
-            .unwrap()
-            .verifying_key();
+        let owner = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_KEY_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
         let claim = ClaimRewardsTransaction::<(), InMemoryDB> {
             network_id: "mainnet".into(),
             value: 1,
@@ -2017,12 +2018,12 @@ mod tests {
             kind: ClaimKind::Reward,
         };
         let claim_data = claim.data_to_sign();
-        assert!(claim_data.starts_with(b"midnight:sig-claim_rewards_transaction:"));
+        assert!(claim_data.starts_with(b"midnight:claim-rewards-transaction-signing-envelope[v2]:"));
 
         for payload in [
             &intent_data[..],
             &claim_data[..],
-            b"midnight:contract-update:",
+            b"midnight:contract-maintenance-update-signing-envelope[v3]:",
             b"",
         ] {
             let framed = signed_message_bytes(payload);

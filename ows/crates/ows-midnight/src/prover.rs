@@ -378,6 +378,26 @@ impl ProvingProvider for Prover {
             },
         }
     }
+
+    fn resolver(&self) -> &impl Resolver {
+        self
+    }
+}
+
+/// The ledger resolves a contract call's key to read its verifier-key version. Keys come from the local
+/// store; a remote prover without one resolves nothing.
+impl Resolver for Prover {
+    async fn resolve_key(&self, key: KeyLocation) -> std::io::Result<Option<ProvingKeyMaterial>> {
+        let provider = match &self.backend {
+            ProverBackend::Local { provider, .. } => provider,
+            ProverBackend::Remote {
+                provider: Some(provider),
+                ..
+            } => provider,
+            ProverBackend::Remote { provider: None, .. } => return Ok(None),
+        };
+        KeyResolver(provider.clone()).resolve_key(key).await
+    }
 }
 
 #[cfg(test)]

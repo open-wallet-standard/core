@@ -19,7 +19,7 @@ pub fn runtime() -> &'static tokio::runtime::Runtime {
 }
 
 /// Make `ring` the process's rustls provider unless one is already installed. midnight-base-crypto
-/// 1.0.2 pulls in reqwest 0.13, which compiles rustls's `aws-lc-rs` provider next to the `ring` one the
+/// 1.1.0 pulls in reqwest 0.13, which compiles rustls's `aws-lc-rs` provider next to the `ring` one the
 /// rest of this crate uses. With both compiled in, rustls cannot pick a default, and the first TLS
 /// client built without an explicit provider (the indexer WebSocket, the node RPC) panics. A provider
 /// the host application installed first is left alone.

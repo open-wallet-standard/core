@@ -9,8 +9,8 @@
 
 use std::path::Path;
 
-use midnight_base_crypto::signatures::Signature as MnSig;
 use midnight_coin_structure::coin::Info as CoinInfo;
+use midnight_ledger::structure::Signature as MnSig;
 use midnight_ledger::structure::{
     Intent, ProofPreimageMarker, StandardTransaction, Transaction, UnshieldedOffer, UtxoOutput,
 };
