@@ -12,6 +12,40 @@ Commands with no Midnight-specific behavior work on a Midnight wallet exactly as
 docs describe: `fund deposit` (MoonPay only), `pay request` / `pay discover` (x402 only),
 `wallet export` / `rename` / `delete`, `mnemonic generate`, `update`, and `uninstall`.
 
+## Ledger version
+
+OWS builds against Midnight **ledger 9** (`midnight-ledger-v9` 1.0.1), the ledger mainnet,
+preprod and preview run: their nodes report `crate-ledger-9.1.0.1` from the
+`midnight_ledgerVersion` RPC. Each ledger version has its own transaction format, keys and
+proofs, so a build reads and builds transactions only for the ledger it was compiled against,
+and a network's move to a new ledger needs an OWS release built for it. Until then, syncing on
+that network fails with an error that names the ledger mismatch and says to upgrade OWS.
+Key derivation, addresses and message signing read no ledger bytes and do not depend on the
+network's ledger.
+
+The history a network wrote before its hard fork to ledger 9 stays in ledger 8's format: the
+indexer serves each event in the ledger that wrote it. OWS therefore links ledger 8 too, only to
+read that history. The shielded sync folds the pre-fork zswap events with ledger 8 and carries the
+wallet's state across to ledger 9 as bytes (both ledgers write `ZswapLocalState` with the same
+`zswap-local-state[v6]` codec), so every coin keeps its commitment-tree index; the resulting tree
+root matches the node's `midnight_zswapStateRoot`. The DUST sync skips the pre-fork events, which
+the indexer replays after the fork as ledger 9 events; DUST snapshots written by earlier builds are
+discarded once, so a ledger 8 DUST state is never counted twice.
+
+What ledger 9 changes for a wallet, against ledger 8:
+
+- **Transaction format.** Headers are `midnight:transaction[v12](signature[v2],…)` (ledger 8:
+  `transaction[v9](signature[v1],…)`), and ledger events are `event[v14]` (ledger 8:
+  `event[v9]`). Neither ledger reads the other's bytes.
+- **Unshielded keys.** `Signature`, `SigningKey` and `SignatureVerifyingKey` are enums with a
+  Schnorr and an ECDSA arm. The Night key stays BIP-340 Schnorr in the Schnorr arm, so addresses
+  and the owner hex the indexer reports do not change, and a message signature is still a bare
+  64-byte BIP-340 signature.
+- **Proving.** A `ProvingProvider` also hands the ledger a key `Resolver`, which reads a
+  contract call's verifier key to tell its proof version. Proving keys are named after
+  `midnight-ledger-static` 10, and a `:prover` endpoint must be a proof server built for
+  ledger 9.
+
 ## Network identifiers
 
 OWS registers `midnight:mainnet`, `midnight:preview`, and `midnight:preprod`, with the aliases
