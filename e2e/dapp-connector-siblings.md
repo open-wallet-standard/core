@@ -116,7 +116,7 @@ against its own inputs, then signs and seals.
 ```sh
 # 4a. proof,embedded-fr → balanced + sealed (the spec-conformant input):
 $OWS sign tx --chain $CHAIN --wallet $WALLET --json --tx '{
-  "tx": "<proof,embedded-fr hex, e.g. e2e/shielded-movement-cap/tx-proven.hex>",
+  "tx": "<proof,embedded-fr hex, e.g. e2e/shielded-movement-cap/tx-proven-preview.hex>",
   "options": { "payFees": true }
 }'
 #   → { … "transaction": "0x…" }
