@@ -10,6 +10,63 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::Message;
 
+/// A zswap ledger event, as stream event `id`, committing someone else's output at `mt_index`: a
+/// wallet inserts it into its commitment tree, which accepts only the next free index.
+pub(crate) fn foreign_output(id: i64, mt_index: u64) -> MockEvent {
+    use midnight_ledger::events::{Event, EventDetails, EventSource, ZswapPreimageEvidence};
+    let event = Event::<midnight_storage::db::InMemoryDB> {
+        source: EventSource {
+            transaction_hash: midnight_ledger::structure::TransactionHash(
+                midnight_base_crypto::hash::HashOutput([0; 32]),
+            ),
+            logical_segment: 0,
+            physical_segment: 0,
+        },
+        content: EventDetails::ZswapOutput {
+            commitment: midnight_coin_structure::coin::Commitment(
+                midnight_base_crypto::hash::HashOutput([mt_index as u8 + 1; 32]),
+            ),
+            preimage_evidence: ZswapPreimageEvidence::None,
+            contract: None,
+            mt_index,
+        },
+    };
+    let mut raw = Vec::new();
+    midnight_serialize::tagged_serialize(&event, &mut raw).expect("serialize event");
+    MockEvent {
+        id,
+        raw: hex::encode(raw),
+    }
+}
+
+/// [`foreign_output`] as a ledger 8 event: history a network wrote before its hard fork to ledger 9.
+pub(crate) fn foreign_output_v8(id: i64, mt_index: u64) -> MockEvent {
+    use midnight_ledger_v8::events::{Event, EventDetails, EventSource, ZswapPreimageEvidence};
+    let event = Event::<midnight_storage_v8::db::InMemoryDB> {
+        source: EventSource {
+            transaction_hash: midnight_ledger_v8::structure::TransactionHash(
+                midnight_base_crypto::hash::HashOutput([0; 32]),
+            ),
+            logical_segment: 0,
+            physical_segment: 0,
+        },
+        content: EventDetails::ZswapOutput {
+            commitment: midnight_coin_structure_v8::coin::Commitment(
+                midnight_base_crypto::hash::HashOutput([mt_index as u8 + 1; 32]),
+            ),
+            preimage_evidence: ZswapPreimageEvidence::None,
+            contract: None,
+            mt_index,
+        },
+    };
+    let mut raw = Vec::new();
+    midnight_serialize::tagged_serialize(&event, &mut raw).expect("serialize event");
+    MockEvent {
+        id,
+        raw: hex::encode(raw),
+    }
+}
+
 /// One event of the served stream: its id and its hex-encoded `raw` payload.
 pub(crate) struct MockEvent {
     pub id: i64,

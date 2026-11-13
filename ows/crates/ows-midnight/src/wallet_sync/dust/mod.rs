@@ -22,6 +22,7 @@ use crate::cache_io::{self, SyncCacheScope};
 mod sync_cache;
 use crate::indexer_ws;
 use crate::midnight_env::{stall_timeout, ws_idle_timeout, SyncStream};
+use crate::wallet_sync::ledger_fork::{self, EventLedger};
 
 /// Consecutive connections that advance nothing before a dust replay gives up. Only a stalled
 /// connection counts: a provider that recycles long-lived sockets mid-replay never exhausts the
@@ -408,11 +409,16 @@ discarding stale snapshot and replaying from genesis",
                     let bytes = hex::decode(raw_hex).map_err(|e| {
                         std::io::Error::other(format!("invalid event raw hex: {e}"))
                     })?;
-                    let mut reader: &[u8] = &bytes;
-                    let ev: Event<InMemoryDB> = tagged_deserialize(&mut reader).map_err(|e| {
-                        crate::ledger_params::network_decode_error("decode dust event", e)
-                    })?;
-                    batch.push(ev);
+                    // DUST history from before the network's hard fork to ledger 9 is replayed
+                    // after it as ledger 9 events, so the ledger 8 originals are skipped.
+                    if ledger_fork::event_ledger(&bytes) != EventLedger::Older {
+                        let mut reader: &[u8] = &bytes;
+                        let ev: Event<InMemoryDB> =
+                            tagged_deserialize(&mut reader).map_err(|e| {
+                                crate::ledger_params::network_decode_error("decode dust event", e)
+                            })?;
+                        batch.push(ev);
+                    }
                     // Track indexer activity per frame (not per fold), so buffering between
                     // flushes can't trip the stall guard.
                     last_applied_at = Some(Instant::now());
@@ -687,6 +693,38 @@ pub fn format_dust_specks(specks: u128) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DUST events from before the network's hard fork to ledger 9 are ledger 8 bytes, which the
+    /// indexer replays after the fork as ledger 9 events; the sync skips them instead of failing to
+    /// decode them, and folds the ledger 9 events that follow.
+    #[tokio::test]
+    async fn the_pre_fork_dust_history_is_skipped_not_decoded() {
+        use crate::mock_indexer;
+        let url = mock_indexer::spawn(
+            "dustLedgerEvents",
+            vec![
+                mock_indexer::foreign_output_v8(0, 0),
+                mock_indexer::foreign_output_v8(1, 1),
+                mock_indexer::foreign_output(2, 0),
+            ],
+            None,
+        )
+        .await;
+        let vault =
+            std::env::temp_dir().join(format!("ows-midnight-dust-fork-{}", std::process::id()));
+        let scope = SyncCacheScope::for_wallet("w", Some(&vault));
+        let mut blob = b"MNK1".to_vec();
+        blob.extend_from_slice(&[0x11; 32]);
+        blob.extend_from_slice(&[0x22; 32]);
+        blob.extend_from_slice(&[0x33; 32]);
+        let provider = ows_signer::chains::MidnightSigner::mainnet()
+            .crypto_provider(&ows_signer::SecretBytes::new(blob))
+            .expect("provider");
+
+        let state = sync_dust_local_state(&url, &provider, &scope, None).await;
+        let _ = std::fs::remove_dir_all(&vault);
+        state.expect("the pre-fork DUST events must be skipped");
+    }
 
     #[test]
     fn merge_max_id_ignores_nonpositive_and_keeps_highest() {

@@ -13,6 +13,7 @@ use midnight_ledger::structure::{
     Intent, LedgerParameters, ProofMarker, ProofPreimageMarker, Signature as MnSignature,
     SignatureVerifyingKey, SigningKey as LedgerSigningKey, StandardTransaction, Transaction,
 };
+use midnight_ledger_v8::semantics::ZswapLocalStateExt as _;
 use midnight_serialize::{
     tagged_deserialize, tagged_serialize, Deserializable, ScaleBigInt, Serializable,
 };
@@ -22,6 +23,7 @@ use midnight_storage::storage::HashMap as MnHashMap;
 use midnight_zswap::keys::{SecretKeys as ZswapSecretKeys, Seed as ZswapSeed};
 use midnight_zswap::local::State as ZswapLocalState;
 use midnight_zswap::{Offer as ZswapOffer, Output as ZswapOutput};
+use midnight_zswap_v8::keys::{SecretKeys as ZswapSecretKeysV8, Seed as ZswapSeedV8};
 use num_bigint::BigUint;
 use rand::rngs::{OsRng, StdRng};
 use rand::SeedableRng as _;
@@ -436,6 +438,18 @@ impl MidnightSigner {
         Ok(ZswapSecretKeys::from(ZswapSeed::from(*seed_arr)))
     }
 
+    /// The ledger 8 Zswap keys of the same shielded role seed, for replaying the shielded history a
+    /// network wrote before its hard fork to ledger 9. Both ledgers derive them the same way.
+    fn zswap_secret_keys_v8_from_seed(seed: &[u8]) -> Result<ZswapSecretKeysV8, SignerError> {
+        let seed_arr = Zeroizing::new(<[u8; 32]>::try_from(seed).map_err(|_| {
+            SignerError::InvalidPrivateKey(format!(
+                "expected 32-byte shielded seed, got {} bytes",
+                seed.len()
+            ))
+        })?);
+        Ok(ZswapSecretKeysV8::from(ZswapSeedV8::from(*seed_arr)))
+    }
+
     /// Decode the `credential` (a packed Midnight signing key) into a [`MidnightCryptoProvider`]
     /// that holds the account seeds and the keys derived from them. All key material stays inside
     /// the provider — balance call sites in `ows-midnight` hold only `&MidnightCryptoProvider`.
@@ -526,6 +540,7 @@ type ShieldedPreimages = (
 pub struct MidnightCryptoProvider {
     seeds: MidnightSeeds,
     shielded_keys: ZswapSecretKeys,
+    shielded_keys_v8: ZswapSecretKeysV8,
     dust_sk: DustSecretKey,
 }
 
@@ -545,6 +560,8 @@ impl MidnightCryptoProvider {
     fn from_credential(credential: &SecretBytes) -> Result<Self, SignerError> {
         let seeds = MidnightSigner::decode_keys(credential.expose())?;
         let shielded_keys = MidnightSigner::zswap_secret_keys_from_seed(seeds.shielded.expose())?;
+        let shielded_keys_v8 =
+            MidnightSigner::zswap_secret_keys_v8_from_seed(seeds.shielded.expose())?;
         let dust_seed =
             Zeroizing::new(<[u8; 32]>::try_from(seeds.dust.expose()).map_err(|_| {
                 SignerError::InvalidPrivateKey("dust seed must be 32 bytes".into())
@@ -553,6 +570,7 @@ impl MidnightCryptoProvider {
         Ok(Self {
             seeds,
             shielded_keys,
+            shielded_keys_v8,
             dust_sk,
         })
     }
@@ -647,6 +665,21 @@ impl MidnightCryptoProvider {
         state
             .replay_events(&self.shielded_keys, std::iter::once(ev))
             .map_err(|e| SignerError::SigningFailed(format!("replay zswap event failed: {e:?}")))
+    }
+
+    /// [`Self::fold_shielded`] for a zswap event a network wrote before its hard fork to ledger 9:
+    /// the event and the state are ledger 8 types, folded with the ledger 8 keys of the same seed.
+    pub fn fold_shielded_v8(
+        &self,
+        state: midnight_zswap_v8::local::State<midnight_storage_v8::db::InMemoryDB>,
+        ev: &midnight_ledger_v8::events::Event<midnight_storage_v8::db::InMemoryDB>,
+    ) -> Result<midnight_zswap_v8::local::State<midnight_storage_v8::db::InMemoryDB>, SignerError>
+    {
+        state
+            .replay_events(&self.shielded_keys_v8, std::iter::once(ev))
+            .map_err(|e| {
+                SignerError::SigningFailed(format!("replay ledger 8 zswap event failed: {e:?}"))
+            })
     }
 
     /// Recognize the wallet-owned shielded receipts a Zswap offer routes to this wallet: trial-decrypt
@@ -1403,6 +1436,21 @@ impl ChainSigner for MidnightSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pre-fork shielded history is replayed with ledger 8 keys, so they have to recognize the
+    /// same coins as the ledger 9 keys of the same seed.
+    #[test]
+    fn ledger_8_and_ledger_9_shielded_keys_of_one_seed_share_their_public_keys() {
+        let seed = [0x22u8; 32];
+        let v9 = MidnightSigner::zswap_secret_keys_from_seed(&seed).unwrap();
+        let v8 = MidnightSigner::zswap_secret_keys_v8_from_seed(&seed).unwrap();
+        assert_eq!(v9.coin_public_key().0 .0, v8.coin_public_key().0 .0);
+        let mut v9_epk = Vec::new();
+        let mut v8_epk = Vec::new();
+        midnight_serialize::Serializable::serialize(&v9.enc_public_key(), &mut v9_epk).unwrap();
+        midnight_serialize::Serializable::serialize(&v8.enc_public_key(), &mut v8_epk).unwrap();
+        assert_eq!(v9_epk, v8_epk);
+    }
 
     // Unshielded role 0 seed for the abandon-phrase wallet at index 0
     // (path m/44'/2400'/0'/0/0). Hardcoded so tests don't depend on
