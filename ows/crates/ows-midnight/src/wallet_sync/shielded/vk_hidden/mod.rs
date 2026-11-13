@@ -423,7 +423,7 @@ fn fold_zswap_event(
         .map_err(|e| std::io::Error::other(format!("invalid zswap event raw hex: {e}")))?;
     let mut reader: &[u8] = &bytes;
     let ev: Event<InMemoryDB> = tagged_deserialize(&mut reader)
-        .map_err(|e| std::io::Error::other(format!("decode zswap event: {e}")))?;
+        .map_err(|e| crate::ledger_params::network_decode_error("decode zswap event", e))?;
     *wallet = crypto_provider
         .fold_shielded(wallet.clone(), &ev)
         .map_err(|e| {

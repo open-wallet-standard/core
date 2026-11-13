@@ -409,8 +409,9 @@ discarding stale snapshot and replaying from genesis",
                         std::io::Error::other(format!("invalid event raw hex: {e}"))
                     })?;
                     let mut reader: &[u8] = &bytes;
-                    let ev: Event<InMemoryDB> = tagged_deserialize(&mut reader)
-                        .map_err(|e| std::io::Error::other(format!("decode dust event: {e}")))?;
+                    let ev: Event<InMemoryDB> = tagged_deserialize(&mut reader).map_err(|e| {
+                        crate::ledger_params::network_decode_error("decode dust event", e)
+                    })?;
                     batch.push(ev);
                     // Track indexer activity per frame (not per fold), so buffering between
                     // flushes can't trip the stall guard.

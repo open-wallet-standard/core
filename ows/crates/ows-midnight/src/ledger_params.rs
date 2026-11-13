@@ -21,6 +21,47 @@ struct IndexerBlockData {
     timestamp: serde_json::Value,
 }
 
+/// The error for ledger bytes the network served that failed to decode. Bytes whose Midnight header
+/// tag is a later version than the one this build expects come from a ledger it was not built
+/// against, which no retry or resync can read, so the error tells the user to upgrade OWS.
+pub(crate) fn network_decode_error(what: &str, e: impl std::fmt::Display) -> std::io::Error {
+    let detail = e.to_string();
+    if network_tag_is_later(&detail) {
+        std::io::Error::other(format!(
+            "{what}: {detail}. The network runs a later Midnight ledger than this OWS build \
+             supports; upgrade OWS to a release built for the network's ledger"
+        ))
+    } else {
+        std::io::Error::other(format!("{what}: {detail}"))
+    }
+}
+
+/// Whether a header-tag mismatch, `expected header tag 'midnight:<kind>[v<A>]:', got
+/// 'midnight:<kind>[v<B>]…'`, names a later version `B` of the same kind. The decoder reads only as
+/// many bytes as the expected tag, so a longer `B` arrives cut off: digits up to the closing quote.
+fn network_tag_is_later(detail: &str) -> bool {
+    let tag = |marker: &str| -> Option<(&str, &str, char)> {
+        let rest = &detail[detail.find(marker)? + marker.len()..];
+        let open = rest.find("[v")?;
+        let digits = &rest[open + 2..];
+        let end = digits.find(|c: char| !c.is_ascii_digit())?;
+        Some((&rest[..open], &digits[..end], digits[end..].chars().next()?))
+    };
+    let (Some((kind, expected, _)), Some((got_kind, got, after))) =
+        (tag("expected header tag 'midnight:"), tag("got 'midnight:"))
+    else {
+        return false;
+    };
+    if kind != got_kind || got.is_empty() {
+        return false;
+    }
+    match (after, expected.parse::<u64>(), got.parse::<u64>()) {
+        (']', Ok(expected), Ok(got)) => got > expected,
+        ('\'', Ok(_), _) => true,
+        _ => false,
+    }
+}
+
 pub(crate) fn parse_indexer_timestamp_secs(v: &serde_json::Value) -> Option<u64> {
     let n = if let Some(n) = v.as_u64() {
         n
@@ -147,10 +188,9 @@ pub async fn fetch_indexer_tip_with_client(
     let raw = hex::decode(lp_hex.strip_prefix("0x").unwrap_or(lp_hex.as_str()))
         .map_err(|e| std::io::Error::other(format!("invalid ledgerParameters hex: {e}")))?;
     let mut r: &[u8] = &raw;
-    let ledger_parameters = tagged_deserialize::<midnight_ledger::structure::LedgerParameters>(
-        &mut r,
-    )
-    .map_err(|e| std::io::Error::other(format!("failed to decode ledger parameters: {e}")))?;
+    let ledger_parameters =
+        tagged_deserialize::<midnight_ledger::structure::LedgerParameters>(&mut r)
+            .map_err(|e| network_decode_error("failed to decode ledger parameters", e))?;
     Ok((ledger_parameters, timestamp_secs))
 }
 
@@ -250,6 +290,40 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     const CHILD_INDEXER_VAR: &str = "OWS_TEST_INDEXER_CHILD_URL";
+
+    #[test]
+    fn bytes_from_a_later_ledger_say_to_upgrade_ows() {
+        let decode = |bytes: &[u8]| {
+            let err =
+                tagged_deserialize::<midnight_ledger::structure::LedgerParameters>(&mut &bytes[..])
+                    .unwrap_err();
+            network_decode_error("failed to decode ledger parameters", err).to_string()
+        };
+        let tag =
+            <midnight_ledger::structure::LedgerParameters as midnight_serialize::Tagged>::tag();
+        let ours: u64 = tag
+            .trim_start_matches("ledger-parameters[v")
+            .trim_end_matches(']')
+            .parse()
+            .unwrap();
+        for later in [
+            format!("midnight:ledger-parameters[v{}]:", ours + 1),
+            "midnight:ledger-parameters[v999]:".to_string(),
+        ] {
+            let msg = decode(later.as_bytes());
+            assert!(msg.contains("expected header tag"), "{msg}");
+            assert!(msg.contains("upgrade OWS"), "{msg}");
+        }
+
+        for not_later in [
+            &b"midnight:ledger-parameters[v0]:"[..],
+            &b"<html>bad gateway</html>"[..],
+        ] {
+            let msg = decode(not_later);
+            assert!(msg.contains("expected header tag"), "{msg}");
+            assert!(!msg.contains("upgrade OWS"), "{msg}");
+        }
+    }
 
     /// An indexer on this machine is plaintext, so a proxy named in the environment must not get its
     /// queries: it could answer them in the indexer's place. Any other indexer keeps that proxy, which
