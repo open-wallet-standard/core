@@ -67,6 +67,51 @@ pub(crate) fn foreign_output_v8(id: i64, mt_index: u64) -> MockEvent {
     }
 }
 
+/// A ledger 8 zswap event, as stream event `id`, paying `value` to the shielded `address` at
+/// `mt_index`: the coin is encrypted to the address's key, as a sender encrypts a transfer. The
+/// same arguments build the same event.
+pub(crate) fn received_output_v8(id: i64, mt_index: u64, address: &str, value: u128) -> MockEvent {
+    use midnight_base_crypto::hash::HashOutput;
+    use midnight_coin_structure_v8::coin::{Info, Nonce, PublicKey, ShieldedTokenType};
+    use midnight_coin_structure_v8::transfer::Recipient;
+    use midnight_ledger_v8::events::{Event, EventDetails, EventSource, ZswapPreimageEvidence};
+    use rand::{Rng as _, SeedableRng as _};
+
+    let (_, payload) = bech32::decode(address).expect("shielded address");
+    let coin_public_key = PublicKey(HashOutput(
+        payload[..32].try_into().expect("64-byte payload"),
+    ));
+    let encryption_public_key =
+        midnight_serialize::Deserializable::deserialize(&mut &payload[32..], 0)
+            .expect("encryption public key");
+    let mut rng = rand::rngs::StdRng::seed_from_u64(mt_index);
+    let coin = Info {
+        nonce: Nonce(rng.r#gen()),
+        type_: ShieldedTokenType(HashOutput([7; 32])),
+        value,
+    };
+    let ciphertext = midnight_zswap_v8::CoinCiphertext::new(&mut rng, &coin, encryption_public_key);
+    let event = Event::<midnight_storage_v8::db::InMemoryDB> {
+        source: EventSource {
+            transaction_hash: midnight_ledger_v8::structure::TransactionHash(HashOutput([0; 32])),
+            logical_segment: 0,
+            physical_segment: 0,
+        },
+        content: EventDetails::ZswapOutput {
+            commitment: coin.commitment(&Recipient::User(coin_public_key)),
+            preimage_evidence: ZswapPreimageEvidence::Ciphertext(Box::new(ciphertext)),
+            contract: None,
+            mt_index,
+        },
+    };
+    let mut raw = Vec::new();
+    midnight_serialize::tagged_serialize(&event, &mut raw).expect("serialize event");
+    MockEvent {
+        id,
+        raw: hex::encode(raw),
+    }
+}
+
 /// One event of the served stream: its id and its hex-encoded `raw` payload.
 pub(crate) struct MockEvent {
     pub id: i64,

@@ -623,7 +623,7 @@ struct ZswapLedgerEventWire {
 mod tests {
     use super::*;
     use crate::mock_indexer::{self, MockEvent};
-    use ows_signer::chains::MidnightSigner;
+    use ows_signer::chains::{MidnightNetwork, MidnightSigner, ShieldedSpendPlan};
     use ows_signer::SecretBytes;
 
     fn provider() -> MidnightCryptoProvider {
@@ -651,6 +651,19 @@ mod tests {
     /// [`foreign_output`] as a network wrote it before its hard fork to ledger 9: a ledger 8 event.
     fn foreign_output_v8(mt_index: u64) -> MockEvent {
         mock_indexer::foreign_output_v8(mt_index as i64, mt_index)
+    }
+
+    /// A ledger 8 event at `mt_index` paying `value` to `provider`'s shielded address.
+    fn received_output_v8(
+        provider: &MidnightCryptoProvider,
+        mt_index: u64,
+        value: u128,
+    ) -> MockEvent {
+        let address = provider
+            .addresses(&MidnightNetwork::mainnet())
+            .expect("addresses")
+            .shielded;
+        mock_indexer::received_output_v8(mt_index as i64, mt_index, &address, value)
     }
 
     /// `events` folded into a fresh replay state, as a sync from genesis folds them.
@@ -691,31 +704,100 @@ mod tests {
         );
     }
 
+    /// A coin the wallet received before the fork is still its coin after it: the same coin at the
+    /// same tree index under the same nullifier. A ledger 9 spend of it, built from the tree the
+    /// state carried across, publishes that nullifier against the wallet's tree root.
+    #[test]
+    fn a_coin_received_before_the_fork_is_still_held_and_spendable_after_it() {
+        let provider = provider();
+        let pre_fork = vec![
+            foreign_output_v8(0),
+            received_output_v8(&provider, 1, 5_000),
+            foreign_output_v8(2),
+        ];
+        let before = pre_fork.iter().fold(ZswapLocalStateV8::new(), |state, e| {
+            let ev = ledger_fork::decode_event_v8(&hex::decode(&e.raw).unwrap()).unwrap();
+            provider
+                .fold_shielded_v8(state, &ev)
+                .expect("fold ledger 8")
+        });
+        let held_before: Vec<_> = before.coins.iter().collect();
+        let [(nullifier_before, coin_before)] = &held_before[..] else {
+            panic!("the wallet holds one coin before the fork");
+        };
+
+        let after = folded(
+            &provider,
+            pre_fork
+                .into_iter()
+                .chain((3..6).map(foreign_output))
+                .collect(),
+        );
+        let held_after: Vec<_> = after.wallet.coins.iter().collect();
+        let [(nullifier, coin)] = &held_after[..] else {
+            panic!("the wallet holds one coin after the fork");
+        };
+        assert_eq!(nullifier.0, nullifier_before.0);
+        assert_eq!(coin.mt_index, 1);
+        assert_eq!(coin.mt_index, coin_before.mt_index);
+        assert_eq!(coin.value, 5_000);
+        assert_eq!(coin.nonce.0, coin_before.nonce.0);
+        assert_eq!(coin.type_.0, coin_before.type_.0);
+
+        let spend = provider
+            .mock_shielded_offers(
+                MidnightSigner::mainnet().ledger_network_id(),
+                &[ShieldedSpendPlan {
+                    segment: 0,
+                    coins: vec![**coin],
+                    change: vec![],
+                }],
+                &after.wallet,
+            )
+            .expect("a ledger 9 spend of the coin");
+        let inputs: Vec<_> = spend.proven[0].1.inputs.iter().collect();
+        let [input] = &inputs[..] else {
+            panic!("the spend has one input");
+        };
+        assert_eq!(input.nullifier, *nullifier);
+        assert_eq!(
+            Some(input.merkle_tree_root),
+            after.wallet.merkle_tree.root()
+        );
+    }
+
     /// A connection dropped part-way through the pre-fork history saves a snapshot, which holds
     /// the state as ledger 9 bytes; the resumed replay carries it back to ledger 8 for the rest of
-    /// that history and on into the ledger 9 events.
+    /// that history and on into the ledger 9 events, with the coin the wallet received in it.
     #[tokio::test]
     async fn a_replay_cut_inside_the_pre_fork_history_resumes_across_the_fork() {
-        let url = mock_indexer::spawn(
-            "zswapLedgerEvents",
-            (0..4)
-                .map(foreign_output_v8)
+        let provider = provider();
+        let events = || {
+            std::iter::once(foreign_output_v8(0))
+                .chain(std::iter::once(received_output_v8(&provider, 1, 5_000)))
+                .chain((2..4).map(foreign_output_v8))
                 .chain((4..8).map(foreign_output))
-                .collect(),
-            Some(2),
-        )
-        .await;
+                .collect::<Vec<_>>()
+        };
+        let url = mock_indexer::spawn("zswapLedgerEvents", events(), Some(2)).await;
         let vault =
             std::env::temp_dir().join(format!("ows-midnight-zswap-fork-{}", std::process::id()));
         let scope = SyncCacheScope::for_wallet("w", Some(&vault));
 
-        let state = run_zswap_replay(&url, &provider(), &scope, "fp", None).await;
+        let state = run_zswap_replay(&url, &provider, &scope, "fp", None).await;
         let _ = std::fs::remove_dir_all(&vault);
 
         let state = state.expect("the replay must cross the fork");
         assert_eq!(state.last_seen_id, 7);
         assert!(state.pre_fork.is_none());
         assert_eq!(state.wallet.first_free, 8);
+        assert_eq!(state.wallet.coins.iter().count(), 1);
+        let encode = super::super::cache::encode_zswap_state;
+        assert_eq!(
+            encode(&state.wallet).unwrap(),
+            encode(&folded(&provider, events()).wallet).unwrap(),
+            "the resumed wallet differs from a replay without the cut"
+        );
     }
 
     /// A connection that drops mid-replay reconnects from the last event folded, and the indexer
