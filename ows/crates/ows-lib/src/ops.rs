@@ -854,6 +854,50 @@ pub fn sign_nep413_message(
     })
 }
 
+pub fn sign_delegate_action(
+    wallet: &str,
+    chain: &str,
+    delegate_action_hex: &str,
+    passphrase: Option<&str>,
+    index: Option<u32>,
+    vault_path: Option<&Path>,
+) -> Result<SignResult, OwsLibError> {
+    let credential = passphrase.unwrap_or("");
+    let chain = parse_chain(chain)?;
+    if chain.chain_type != ChainType::Near {
+        return Err(OwsLibError::InvalidInput(
+            "NEP-366 delegate action signing is only supported for NEAR chains".into(),
+        ));
+    }
+    let hex_clean = delegate_action_hex
+        .strip_prefix("0x")
+        .unwrap_or(delegate_action_hex);
+    let delegate_action = hex::decode(hex_clean)
+        .map_err(|e| OwsLibError::InvalidInput(format!("invalid hex delegate action: {e}")))?;
+    ows_signer::chains::near::DelegateAction::from_borsh(&delegate_action)?;
+
+    if credential.starts_with(crate::key_store::TOKEN_PREFIX) {
+        return crate::key_ops::sign_delegate_action_with_api_key(
+            credential,
+            wallet,
+            &chain,
+            &delegate_action,
+            index,
+            vault_path,
+        );
+    }
+
+    let key = decrypt_signing_key(wallet, chain.chain_type, credential, index, vault_path)?;
+    let output =
+        ows_signer::chains::NearSigner.sign_delegate_action(key.expose(), &delegate_action)?;
+
+    Ok(SignResult {
+        signature: hex::encode(&output.signature),
+        recovery_id: output.recovery_id,
+        transaction: None,
+    })
+}
+
 /// Sign EIP-712 typed structured data. Returns hex-encoded signature.
 /// Only supported for EVM chains.
 ///
@@ -4571,6 +4615,169 @@ mod tests {
                 );
                 // We expect errors like "insufficient funds" or simulation failure
             }
+        }
+    }
+
+    const NEP366_FT_TRANSFER: &str = "40000000643735613938303138326231306162376435346266656433633936343037336130656531373266336461613632333235616630323161363866373037353131610f00000066742e6578616d706c652e6e65617201000000020b00000066745f7472616e736665723a0000007b2272656365697665725f6964223a226d65726368616e742e6578616d706c652e6e656172222c22616d6f756e74223a2231303030303030227d00e057eb481b0000010000000000000000000000000000002a0000000000000000e1f5050000000000d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+    const NEP366_FT_TRANSFER_SIGNATURE: &str = "b01b4df30474223b0892e3bc1fe7b8fb9362b8783e89017be2e9a4bbc88d9c9054e6f33067c97fc2de71602b54844990cc72c382a23b1a5e0a1390b9b72c4200";
+    const NEP366_ESCROW: &str = "120000006167656e742e6578616d706c652e6e65617213000000657363726f772e6578616d706c652e6e6561720300000003000000a1edccce1bc2d3000000000000021000000066745f7472616e736665725f63616c6c3b0000007b2272656365697665725f6964223a22657363726f772e6578616d706c652e6e656172222c22616d6f756e74223a2235222c226d7367223a22227d00203d88792d0000010000000000000000000000000000000500070707070707070707070707070707070707070707070707070707070707070700000000000000000001000040683bb3f386f03400000000000013000000657363726f772e6578616d706c652e6e6561720200000005000000636c61696d06000000726566756e64ffffffffffffffff010000000000000000d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+
+    #[test]
+    fn sign_delegate_action_owner_path_matches_near_api_js() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = save_near_wallet("nep366-owner", "pass", vault);
+
+        for delegate in [
+            NEP366_FT_TRANSFER.to_string(),
+            format!("0x{NEP366_FT_TRANSFER}"),
+        ] {
+            let result = sign_delegate_action(
+                &wallet.id,
+                "near",
+                &delegate,
+                Some("pass"),
+                None,
+                Some(vault),
+            )
+            .unwrap();
+            assert_eq!(result.signature, NEP366_FT_TRANSFER_SIGNATURE);
+            assert_eq!(result.recovery_id, None);
+            assert_eq!(result.transaction, None);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sign_delegate_action_api_key_policy_sees_decoded_delegate() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = save_near_wallet("nep366-ctx", "", vault);
+
+        let preimage = format!("6e010040{NEP366_FT_TRANSFER}");
+        let script = vault.join("check-nep366.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nctx=$(cat)\n\
+                 case \"$ctx\" in *'\"request_type\":\"sign_transaction\"'*) ;; *) echo '{{\"allow\": false, \"reason\": \"request_type\"}}'; exit 0;; esac\n\
+                 case \"$ctx\" in *'\"kind\":\"nep366_delegate_action\"'*) ;; *) echo '{{\"allow\": false, \"reason\": \"kind\"}}'; exit 0;; esac\n\
+                 case \"$ctx\" in *'\"receiver_id\":\"ft.example.near\"'*) ;; *) echo '{{\"allow\": false, \"reason\": \"receiver\"}}'; exit 0;; esac\n\
+                 case \"$ctx\" in *'\"raw_hex\":\"{preimage}\"'*) echo '{{\"allow\": true}}';; *) echo '{{\"allow\": false, \"reason\": \"raw_hex\"}}';; esac\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let policy = ows_core::Policy {
+            id: "nep366-ctx".to_string(),
+            name: "nep366 context".to_string(),
+            version: 1,
+            created_at: "2026-11-12T00:00:00Z".to_string(),
+            rules: vec![],
+            executable: Some(script.display().to_string()),
+            config: None,
+            action: ows_core::PolicyAction::Deny,
+        };
+        crate::policy_store::save_policy(&policy, Some(vault)).unwrap();
+        let (token, _) = crate::key_ops::create_api_key(
+            "nep366-ctx-key",
+            std::slice::from_ref(&wallet.id),
+            &["nep366-ctx".to_string()],
+            "",
+            None,
+            Some(vault),
+        )
+        .unwrap();
+
+        let allowed = sign_delegate_action(
+            &wallet.id,
+            "near",
+            NEP366_FT_TRANSFER,
+            Some(&token),
+            None,
+            Some(vault),
+        )
+        .unwrap();
+        assert_eq!(allowed.signature, NEP366_FT_TRANSFER_SIGNATURE);
+
+        let denied = sign_delegate_action(
+            &wallet.id,
+            "near",
+            NEP366_ESCROW,
+            Some(&token),
+            None,
+            Some(vault),
+        );
+        match denied.unwrap_err() {
+            OwsLibError::Core(OwsError::PolicyDenied { reason, .. }) => {
+                assert_eq!(reason, "receiver");
+            }
+            other => panic!("expected PolicyDenied, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn sign_delegate_action_rejects_non_near_chains() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = save_near_wallet("nep366-solana", "", vault);
+        for credential in ["", "ows_key_not_a_real_token"] {
+            let err = sign_delegate_action(
+                &wallet.id,
+                "solana",
+                NEP366_FT_TRANSFER,
+                Some(credential),
+                None,
+                Some(vault),
+            )
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("only supported for NEAR chains"),
+                "{err}"
+            );
+        }
+
+        let chain = parse_chain("solana").unwrap();
+        let err = crate::key_ops::sign_delegate_action_with_api_key(
+            "ows_key_not_a_real_token",
+            &wallet.id,
+            &chain,
+            &hex::decode(NEP366_FT_TRANSFER).unwrap(),
+            None,
+            Some(vault),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("only supported for NEAR chains"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn sign_delegate_action_rejects_bad_input_before_decrypting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        let wallet = save_near_wallet("nep366-input", "pass", vault);
+        for (delegate, expected) in [
+            ("zz", "invalid hex delegate action"),
+            ("", "NEP-366 delegate action"),
+            (
+                &NEP366_FT_TRANSFER[..NEP366_FT_TRANSFER.len() - 2],
+                "NEP-366 delegate action",
+            ),
+        ] {
+            let err = sign_delegate_action(
+                &wallet.id,
+                "near",
+                delegate,
+                Some("wrong-pass"),
+                None,
+                Some(vault),
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains(expected), "{delegate}: {err}");
         }
     }
 }

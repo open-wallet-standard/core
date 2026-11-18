@@ -274,6 +274,17 @@ result = sign_nep413_message(
 signature_b64 = base64.b64encode(bytes.fromhex(result["signature"])).decode()
 ```
 
+#### `sign_delegate_action(wallet, chain, delegate_action_hex, passphrase=None, index=None, vault_path=None)`
+
+Sign a NEAR [NEP-366](https://github.com/near/NEPs/blob/master/neps/nep-0366.md) delegate action: Ed25519 over `sha256(borsh(u32 1073742190) || borsh(DelegateAction))`, the same signature `near-api-js`'s `signDelegateAction` produces.
+
+`chain` must resolve to a NEAR chain. `delegate_action_hex` is `borsh(DelegateAction)` without the prefix, hex-encoded (`0x` prefix optional). Its `public_key` must be the wallet's key. The relayer submits `delegate_action_hex + "00" + signature` as the `SignedDelegateAction`.
+
+```python
+result = sign_delegate_action("agent-treasury", "near", delegate_action_hex)
+signed_delegate_action_hex = delegate_action_hex + "00" + result["signature"]
+```
+
 #### `sign_typed_data(wallet, chain, typed_data_json, passphrase=None, index=None, vault_path=None, address=None)`
 
 Sign EIP-712 typed structured data (EVM only).

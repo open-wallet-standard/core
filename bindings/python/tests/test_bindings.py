@@ -282,6 +282,39 @@ def test_sign_nep413_message_api_key_mode(vault_dir):
         )
 
 
+NEP366_FT_TRANSFER = (
+    "400000006437356139383031383262313061623764353462666564336339363430373361306565313732663364616136323332356166303231613638"
+    "66373037353131610f00000066742e6578616d706c652e6e65617201000000020b00000066745f7472616e736665723a0000007b2272656365697665"
+    "725f6964223a226d65726368616e742e6578616d706c652e6e656172222c22616d6f756e74223a2231303030303030227d00e057eb481b0000010000"
+    "000000000000000000000000002a0000000000000000e1f5050000000000d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+)
+NEP366_FT_TRANSFER_SIGNATURE = (
+    "b01b4df30474223b0892e3bc1fe7b8fb9362b8783e89017be2e9a4bbc88d9c90"
+    "54e6f33067c97fc2de71602b54844990cc72c382a23b1a5e0a1390b9b72c4200"
+)
+
+
+def test_sign_delegate_action_owner_mode(vault_dir):
+    wallet = ows.import_wallet_private_key(
+        "nep366-owner", NEAR_SEED, chain="near", vault_path_opt=vault_dir
+    )
+
+    result = ows.sign_delegate_action(
+        wallet["id"], "near", NEP366_FT_TRANSFER, vault_path_opt=vault_dir
+    )
+    assert result["signature"] == NEP366_FT_TRANSFER_SIGNATURE
+    assert result["recovery_id"] is None
+
+    with pytest.raises(RuntimeError, match="NEP-366 delegate action"):
+        ows.sign_delegate_action(
+            wallet["id"], "near", NEP366_FT_TRANSFER[:-2], vault_path_opt=vault_dir
+        )
+    with pytest.raises(RuntimeError, match="only supported for NEAR chains"):
+        ows.sign_delegate_action(
+            wallet["id"], "solana", NEP366_FT_TRANSFER, vault_path_opt=vault_dir
+        )
+
+
 def test_sign_typed_data_with_api_key(vault_dir):
     wallet = ows.create_wallet("td-api-test", vault_path_opt=vault_dir)
 

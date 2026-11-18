@@ -16,6 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
   `sha256(borsh(2^31 + 413) || borsh({ message, nonce, recipient, callbackUrl }))`, byte-for-byte
   what `near-api-js` produces. In agent mode policies see a `sign_message` request whose `raw_hex`
   is the tagged pre-image, with the decoded fields in `chain_extra`
+- NEAR NEP-366 delegate action signing: `sign_delegate_action` (`signDelegateAction` in Node) takes
+  `borsh(DelegateAction)` and signs `sha256(borsh(2^30 + 366) || borsh(DelegateAction))`, byte-for-byte
+  what `near-api-js` produces. The bytes must decode, must not nest another delegate action, and must
+  name the wallet's key as `public_key`. In agent mode policies see a `sign_transaction` request whose
+  `raw_hex` is the tagged pre-image, with the decoded delegate action in `chain_extra`
 - Cardano support across mainnet, preprod and preview (`cip34:` CAIP-2 namespace):
   Ed25519-BIP32 curve with CIP-3 Icarus master-key derivation, CIP-1852 payment and
   stake paths, Shelley base/enterprise/reward addresses, CIP-8 COSE message signing,

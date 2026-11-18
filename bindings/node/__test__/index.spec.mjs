@@ -20,6 +20,7 @@ import {
   signHash,
   signAuthorization,
   signNep413Message,
+  signDelegateAction,
   signTypedData,
   createPolicy,
   listPolicies,
@@ -377,6 +378,28 @@ describe('@open-wallet-standard/core', () => {
     );
     assert.throws(
       () => signNep413Message(wallet.id, 'solana', 'hi', nonce, 'example.com', null, undefined, undefined, vaultDir),
+      (err) => err.message.includes('only supported for NEAR chains'),
+    );
+
+    deleteWallet(wallet.id, vaultDir);
+  });
+
+  it('signs NEAR NEP-366 delegate actions matching near-api-js', () => {
+    const seed = '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60';
+    const wallet = importWalletPrivateKey('nep366-owner', seed, undefined, vaultDir, 'near');
+    const delegateAction = '40000000643735613938303138326231306162376435346266656433633936343037336130656531373266336461613632333235616630323161363866373037353131610f00000066742e6578616d706c652e6e65617201000000020b00000066745f7472616e736665723a0000007b2272656365697665725f6964223a226d65726368616e742e6578616d706c652e6e656172222c22616d6f756e74223a2231303030303030227d00e057eb481b0000010000000000000000000000000000002a0000000000000000e1f5050000000000d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a';
+    const expected = 'b01b4df30474223b0892e3bc1fe7b8fb9362b8783e89017be2e9a4bbc88d9c9054e6f33067c97fc2de71602b54844990cc72c382a23b1a5e0a1390b9b72c4200';
+
+    const sig = signDelegateAction(wallet.id, 'near', delegateAction, undefined, undefined, vaultDir);
+    assert.equal(sig.signature, expected);
+    assert.equal(sig.recoveryId, undefined);
+
+    assert.throws(
+      () => signDelegateAction(wallet.id, 'near', delegateAction.slice(0, -2), undefined, undefined, vaultDir),
+      (err) => err.message.includes('NEP-366 delegate action'),
+    );
+    assert.throws(
+      () => signDelegateAction(wallet.id, 'solana', delegateAction, undefined, undefined, vaultDir),
       (err) => err.message.includes('only supported for NEAR chains'),
     );
 
