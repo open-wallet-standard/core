@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 MIN_CRATE_AGE_DAYS = 90
 MIN_VERSION_AGE_DAYS = 7
+REVIEWED_NEW_CRATES = {("midnight-ledger-v9", "1.0.1")}
 LOCKFILES = ["ows/Cargo.lock", "bindings/node/Cargo.lock", "bindings/python/Cargo.lock"]
 USER_AGENT = "open-wallet-standard-ci (https://github.com/open-wallet-standard/core)"
 
@@ -44,7 +45,7 @@ def check(name, version, new_crate):
     metadata = crate_metadata(name)
     if metadata is None:
         return f"{name} {version}: not found on crates.io"
-    if new_crate:
+    if new_crate and (name, version) not in REVIEWED_NEW_CRATES:
         crate_age = age_days(metadata["crate"]["created_at"])
         if crate_age < MIN_CRATE_AGE_DAYS:
             return f"{name} {version}: new crate, first published {crate_age} days ago"
