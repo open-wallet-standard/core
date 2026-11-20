@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use bech32::Bech32m;
-use midnight_base_crypto::signatures::Signature as MnSig;
 use midnight_coin_structure::coin::TokenType as LedgerTokenType;
+use midnight_ledger::structure::Signature as MnSig;
 use midnight_ledger::structure::{ProofMarker, Transaction};
 use midnight_serialize::{tagged_deserialize, tagged_serialize, Deserializable as _};
 use midnight_storage::db::InMemoryDB;
@@ -280,7 +280,7 @@ mod tests {
     use midnight_serialize::{tagged_deserialize, Serializable as _};
 
     fn sealed_maker() -> Vec<u8> {
-        let hex_str = include_str!("testdata/sealed_maker_preprod.hex").trim();
+        let hex_str = include_str!("testdata/sealed_maker_stagenet.hex").trim();
         hex::decode(hex_str.strip_prefix("0x").unwrap_or(hex_str)).unwrap()
     }
 
@@ -340,12 +340,22 @@ mod tests {
 
     /// A sealed offer that gives 600 000 NIGHT and wants 50 of an unshielded token.
     fn two_sided_offer() -> Vec<u8> {
+        night_offer(true)
+    }
+
+    /// A sealed offer that gives 600 000 NIGHT and wants nothing.
+    fn give_only_offer() -> Vec<u8> {
+        night_offer(false)
+    }
+
+    fn night_offer(wants_token: bool) -> Vec<u8> {
         use midnight_base_crypto::hash::HashOutput;
         use midnight_base_crypto::signatures::SigningKey;
         use midnight_base_crypto::time::Timestamp;
         use midnight_coin_structure::coin::{UnshieldedTokenType, UserAddress, NIGHT};
         use midnight_ledger::structure::{
-            Intent, IntentHash, StandardTransaction, UnshieldedOffer, UtxoOutput, UtxoSpend,
+            Intent, IntentHash, SignatureVerifyingKey, StandardTransaction, UnshieldedOffer,
+            UtxoOutput, UtxoSpend,
         };
         use midnight_storage::arena::Sp;
         use midnight_storage::storage::HashMap as MnHashMap;
@@ -353,8 +363,22 @@ mod tests {
         use rand::SeedableRng as _;
         use transient_crypto::commitment::PedersenRandomness;
 
-        let vk = SigningKey::from_bytes(&[0x11; 32]).unwrap().verifying_key();
+        let vk = SignatureVerifyingKey::Schnorr(
+            SigningKey::from_bytes(&[0x11; 32]).unwrap().verifying_key(),
+        );
         let owner = UserAddress::from(vk.clone());
+        let mut outputs = vec![UtxoOutput {
+            value: 400_000,
+            owner,
+            type_: NIGHT,
+        }];
+        if wants_token {
+            outputs.push(UtxoOutput {
+                value: 50,
+                owner,
+                type_: UnshieldedTokenType(HashOutput([0x22; 32])),
+            });
+        }
         let offer = UnshieldedOffer {
             inputs: vec![UtxoSpend {
                 value: 1_000_000,
@@ -364,19 +388,7 @@ mod tests {
                 output_no: 0,
             }]
             .into(),
-            outputs: vec![
-                UtxoOutput {
-                    value: 400_000,
-                    owner,
-                    type_: NIGHT,
-                },
-                UtxoOutput {
-                    value: 50,
-                    owner,
-                    type_: UnshieldedTokenType(HashOutput([0x22; 32])),
-                },
-            ]
-            .into(),
+            outputs: outputs.into(),
             signatures: vec![].into(),
         };
         let intent: Intent<MnSig, ProofMarker, PedersenRandomness, InMemoryDB> = Intent {
@@ -444,15 +456,14 @@ mod tests {
 
     #[test]
     fn refuses_a_give_only_offer() {
-        // The preprod fixture gives 500 000 NIGHT and wants nothing.
-        let bytes = sealed_maker();
+        let bytes = give_only_offer();
         let (gives, wants) = derived_legs(&bytes).unwrap();
         assert_eq!(
             gives,
-            Legs::from([((Layer::Unshielded, NIGHT_WIRE.to_string()), 500_000)])
+            Legs::from([((Layer::Unshielded, NIGHT_WIRE.to_string()), 600_000)])
         );
         assert!(wants.is_empty());
-        let json = payload(&bytes, &gives_night("500000"), "[]");
+        let json = payload(&bytes, &gives_night("600000"), "[]");
         let e = decode_offer_payload(&json).unwrap_err();
         assert!(e.to_string().contains("one-sided"), "{e}");
     }

@@ -1,4 +1,4 @@
-use crate::CliError;
+use crate::{audit, CliError};
 
 /// Create a new API key for agent access to wallets.
 pub fn create(
@@ -31,6 +31,8 @@ pub fn create(
         expires_at,
         None,
     )?;
+
+    audit::log_api_key_created(&key_file.id, name, &wallet_ids, policy_ids);
 
     println!("API key created: {}", key_file.id);
     println!("Name:            {name}");
@@ -83,6 +85,8 @@ pub fn revoke(id: &str, confirm: bool) -> Result<(), CliError> {
 
     let key = ows_lib::key_store::load_api_key(id, None)?;
     ows_lib::key_store::delete_api_key(id, None)?;
+
+    audit::log_api_key_revoked(&key.id, &key.name, &key.wallet_ids);
 
     println!("API key revoked: {} ({})", key.id, key.name);
     Ok(())

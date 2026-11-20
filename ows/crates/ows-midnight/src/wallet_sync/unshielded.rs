@@ -58,7 +58,17 @@ struct UnshieldedSnapshot {
     utxos: Vec<UnshieldedUtxo>,
 }
 
-const UNSHIELDED_SNAPSHOT_VERSION: u32 = 1;
+/// 2: the hard fork to ledger 9 wiped the DUST generation of the NIGHT coins made before it and
+/// restored only cNIGHT's, so the indexer reports those coins as unregistered while a snapshot saved
+/// before the fork still marks them registered; the snapshots earlier builds wrote are dropped once.
+const UNSHIELDED_SNAPSHOT_VERSION: u32 = 2;
+
+/// Only a snapshot of this version: the shared loader also takes older ones, and an older one here
+/// can carry the registration flags from before the fork.
+fn try_load_snapshot(path: &std::path::Path) -> Option<UnshieldedSnapshot> {
+    cache_io::try_load_versioned::<UnshieldedSnapshot>(path, UNSHIELDED_SNAPSHOT_VERSION)
+        .filter(|snap| snap.version == UNSHIELDED_SNAPSHOT_VERSION)
+}
 
 /// GraphQL subscription (indexer v4 supports optional `transactionId` resume).
 const UNSHIELDED_SUBSCRIPTION: &str = r#"
@@ -201,9 +211,7 @@ async fn get_unshielded_utxos_inner(
     // an absent or mismatched snapshot syncs fresh from genesis.
     let resume = snapshot_path
         .as_ref()
-        .and_then(|p| {
-            cache_io::try_load_versioned::<UnshieldedSnapshot>(p, UNSHIELDED_SNAPSHOT_VERSION)
-        })
+        .and_then(|p| try_load_snapshot(p))
         .filter(|snap| {
             cache_io::snapshot_site_matches(scope, &snap.chain_id, &site_fp, &snap.site_fp)
         })
@@ -528,6 +536,36 @@ struct UnshieldedUtxoWire {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An earlier build's snapshot can mark NIGHT made before the fork as registered for DUST,
+    /// which the shared loader would still take; only the current version is resumed.
+    #[test]
+    fn only_a_current_version_unshielded_snapshot_is_resumed() {
+        let write = |version: u32| {
+            let path = std::env::temp_dir().join(format!(
+                "ows-midnight-unshielded-snapshot-v{version}-{}.json",
+                std::process::id()
+            ));
+            let snap = UnshieldedSnapshot {
+                version,
+                chain_id: "midnight:preprod".to_string(),
+                site_fp: String::new(),
+                genesis_hash: String::new(),
+                last_seen_tx_id: 1,
+                utxos: Vec::new(),
+            };
+            std::fs::write(&path, serde_json::to_vec(&snap).expect("encode")).expect("write");
+            path
+        };
+        let earlier = write(1);
+        let current = write(UNSHIELDED_SNAPSHOT_VERSION);
+        let earlier_loaded = try_load_snapshot(&earlier);
+        let current_loaded = try_load_snapshot(&current);
+        let _ = std::fs::remove_file(&earlier);
+        let _ = std::fs::remove_file(&current);
+        assert!(earlier_loaded.is_none());
+        assert!(current_loaded.is_some());
+    }
 
     #[test]
     fn tx_hashes_match_normalizes_0x_and_case() {

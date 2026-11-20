@@ -274,7 +274,7 @@ ows sign message --wallet "my-wallet" --chain 8453 --message "hello world"
 | `--encoding <ENC>` | Message encoding: `utf8` (default) or `hex` |
 | `--address <ADDR>` | Address that will be used to sign the message (e.g. stake/base/enterprise address on Cardano) |
 | `--typed-data <JSON>` | EIP-712 typed data JSON (EVM only) |
-| `--index <N>` | Account index (HD derivation; default `0`) |
+| `--index <N>` | Account index (HD derivation; default `0`, or on Midnight the wallet's stored account) |
 | `--json` | Output structured JSON |
 
 ### `ows sign tx`

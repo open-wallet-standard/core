@@ -88,6 +88,7 @@ pub fn sign_with_api_key(
     vault_path: Option<&Path>,
 ) -> Result<crate::types::SignResult, OwsLibError> {
     let (key_file, wallet) = load_authorized_wallet(token, wallet_name_or_id, vault_path)?;
+    let wallet_id = wallet.id.clone();
 
     let signer = signer_for_chain(chain)?;
     let rpc_url = if signer.transaction_context_needs_rpc() {
@@ -99,21 +100,38 @@ pub fn sign_with_api_key(
     } else {
         None
     };
-    let transaction = signer.make_transaction_context(tx_bytes, rpc_url.as_deref())?;
+    let policy_tx = signer.make_transaction_context(tx_bytes, rpc_url.as_deref())?;
 
-    let (key, _) = enforce_policies_and_decrypt_key(
+    let (key, key_file) = enforce_policies_and_decrypt_key(
         token,
         key_file,
         wallet,
         chain,
         PolicyRequestType::SignTransaction,
-        Some(transaction),
+        Some(policy_tx.clone()),
         None,
         index,
         vault_path,
     )?;
 
-    let signable_tx = crate::ops::prepare_signable_tx(chain, tx_bytes.to_vec(), &key)?;
+    // Second, effect-aware policy pass at the plan→authorize seam: a denial drops the key unused, so a
+    // transaction the policy rejects is never proved.
+    let signable_tx = crate::ops::prepare_signable_tx(
+        chain,
+        tx_bytes.to_vec(),
+        &key,
+        |chain_extra| {
+            enforce_effect_policies(
+                &key_file,
+                &wallet_id,
+                chain,
+                policy_tx,
+                chain_extra,
+                vault_path,
+            )
+        },
+        vault_path,
+    )?;
     let signable = signer.extract_signable_bytes(&signable_tx)?;
     let output = signer.sign_transaction(key.expose(), signable)?;
     let transaction =
@@ -376,13 +394,37 @@ pub fn enforce_policies_and_decrypt_key(
     index: Option<u32>,
     vault_path: Option<&Path>,
 ) -> Result<(SecretBytes, ApiKeyFile), OwsLibError> {
-    let policies = load_policies_for_key(&key_file, vault_path)?;
+    enforce_policies(
+        &key_file,
+        &wallet.id,
+        chain,
+        request_type,
+        transaction,
+        typed_data,
+        vault_path,
+    )?;
+    let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
+    Ok((key, key_file))
+}
+
+/// Run every policy on the key over the request, as [`enforce_policies_and_decrypt_key`] does before
+/// it releases the key.
+fn enforce_policies(
+    key_file: &ApiKeyFile,
+    wallet_id: &str,
+    chain: &ows_core::Chain,
+    request_type: PolicyRequestType,
+    transaction: Option<ows_core::policy::TransactionContext>,
+    typed_data: Option<ows_core::policy::TypedDataContext>,
+    vault_path: Option<&Path>,
+) -> Result<(), OwsLibError> {
+    let policies = load_policies_for_key(key_file, vault_path)?;
     let now = chrono::Utc::now();
     let date = now.format("%Y-%m-%d").to_string();
 
     let context = ows_core::PolicyContext {
         chain_id: chain.chain_id.to_string(),
-        wallet_id: wallet.id.clone(),
+        wallet_id: wallet_id.to_string(),
         api_key_id: key_file.id.clone(),
         request_type,
         transaction,
@@ -398,9 +440,81 @@ pub fn enforce_policies_and_decrypt_key(
             reason: result.reason.unwrap_or_else(|| "denied".into()),
         }));
     }
+    Ok(())
+}
 
-    let key = decrypt_key_from_api_key(&key_file, &wallet, token, chain.chain_type, index)?;
-    Ok((key, key_file))
+/// The gate of a Midnight `submitTransaction`, which relays a transaction that is already sealed and
+/// releases no key: the policies on the key decide whether the agent may relay it, over the request
+/// as the first pass sees it and again with the `chain_extra` of a request that moves nothing, as the
+/// connector seam's second pass sees it. A policy written for the two passes of a signing request
+/// therefore judges a relay the same way, and the wallet is never decrypted.
+pub(crate) fn enforce_submission_policies(
+    key_file: &ApiKeyFile,
+    wallet_id: &str,
+    chain: &ows_core::Chain,
+    transaction: ows_core::policy::TransactionContext,
+    chain_extra: serde_json::Value,
+    vault_path: Option<&Path>,
+) -> Result<(), OwsLibError> {
+    enforce_policies(
+        key_file,
+        wallet_id,
+        chain,
+        PolicyRequestType::SignTransaction,
+        Some(transaction.clone()),
+        None,
+        vault_path,
+    )?;
+    enforce_effect_policies(
+        key_file,
+        wallet_id,
+        chain,
+        transaction,
+        chain_extra,
+        vault_path,
+    )
+}
+
+/// The connector seam's second policy pass, as a gate: re-evaluate every policy on the key with the
+/// transaction's key-derived `chain_extra` context filled in — after the balancing plan is built,
+/// before it is authorized. A denial returns an error, so no bearer spend witness is ever built for a
+/// transaction the policy rejects. Planning can take minutes (a cold sync), so the key is reloaded
+/// from the store first: a key revoked since the first pass ([`enforce_policies_and_decrypt_key`]) is
+/// refused, and the key's own expiry and its policies are those it has now. The declarative rules
+/// run again too, since one may have lapsed in the meantime. An executable policy therefore sees a
+/// Midnight transaction twice, first without `chain_extra` and then with it.
+pub(crate) fn enforce_effect_policies(
+    key_file: &ApiKeyFile,
+    wallet_id: &str,
+    chain: &ows_core::Chain,
+    mut transaction: ows_core::policy::TransactionContext,
+    chain_extra: serde_json::Value,
+    vault_path: Option<&Path>,
+) -> Result<(), OwsLibError> {
+    let key_file = &reload_api_key(key_file, vault_path)?;
+    check_expiry(key_file)?;
+    let policies = load_policies_for_key(key_file, vault_path)?;
+    let now = chrono::Utc::now();
+    let date = now.format("%Y-%m-%d").to_string();
+    transaction.chain_extra = Some(chain_extra);
+    let context = ows_core::PolicyContext {
+        chain_id: chain.chain_id.to_string(),
+        wallet_id: wallet_id.to_string(),
+        api_key_id: key_file.id.clone(),
+        request_type: PolicyRequestType::SignTransaction,
+        transaction: Some(transaction),
+        spending: noop_spending_context(&date),
+        timestamp: now.to_rfc3339(),
+        typed_data: None,
+    };
+    let result = policy_engine::evaluate_policies(&policies, &context);
+    if !result.allow {
+        return Err(OwsLibError::Core(OwsError::PolicyDenied {
+            policy_id: result.policy_id.unwrap_or_default(),
+            reason: result.reason.unwrap_or_else(|| "denied".into()),
+        }));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +534,20 @@ fn noop_spending_context(date: &str) -> ows_core::policy::SpendingContext {
         daily_total: "0".to_string(),
         date: date.to_string(),
     }
+}
+
+/// The key `key_file` was read from, as the store holds it now. Revoking a key deletes its file, so a
+/// key revoked since `key_file` was read fails with `ApiKeyNotFound`, and so does one whose file now
+/// holds another token.
+fn reload_api_key(
+    key_file: &ApiKeyFile,
+    vault_path: Option<&Path>,
+) -> Result<ApiKeyFile, OwsLibError> {
+    let current = key_store::load_api_key(&key_file.id, vault_path)?;
+    if current.token_hash != key_file.token_hash {
+        return Err(OwsLibError::Core(OwsError::ApiKeyNotFound));
+    }
+    Ok(current)
 }
 
 fn check_expiry(key_file: &ApiKeyFile) -> Result<(), OwsLibError> {
@@ -450,6 +578,29 @@ fn load_policies_for_key(
     Ok(policies)
 }
 
+/// The derivation index a token unseals a key at. On Midnight an index names a whole account of the
+/// phrase, and neither the policy context nor the audit record says which account signed, so a token
+/// signs only from the account the wallet stored: an index naming another one is refused. Other chains
+/// keep the index they are given.
+fn token_signing_index(
+    wallet: &EncryptedWallet,
+    chain_type: ows_core::ChainType,
+    index: Option<u32>,
+) -> Result<Option<u32>, OwsLibError> {
+    let resolved = crate::ops::signing_index(wallet, chain_type, index)?;
+    if chain_type != ows_core::ChainType::Midnight {
+        return Ok(resolved);
+    }
+    let stored = crate::ops::signing_index(wallet, chain_type, None)?.unwrap_or(0);
+    match index {
+        Some(requested) if requested != stored => Err(OwsLibError::InvalidInput(format!(
+            "an API token signs Midnight only from the wallet's stored account {stored}; index \
+             {requested} is another account of the same phrase"
+        ))),
+        _ => Ok(resolved),
+    }
+}
+
 fn decrypt_key_from_api_key(
     key_file: &ApiKeyFile,
     wallet: &EncryptedWallet,
@@ -464,6 +615,7 @@ fn decrypt_key_from_api_key(
         ))
     })?;
 
+    let index = token_signing_index(wallet, chain_type, index)?;
     let envelope: CryptoEnvelope = serde_json::from_value(envelope_value.clone())?;
     let secret = decrypt(&envelope, token)?;
     crate::ops::secret_to_signing_key(&secret, &wallet.key_type, chain_type, index)
@@ -702,6 +854,122 @@ mod tests {
         );
         let sign_result = result.unwrap();
         assert!(!sign_result.signature.is_empty());
+    }
+
+    /// A token signing without an index, as the CLI does by default, signs with the Midnight
+    /// account the wallet stored rather than account 0.
+    #[test]
+    fn api_key_midnight_message_defaults_to_the_wallets_stored_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let info = crate::ops::import_wallet_mnemonic(
+            "mn-agent",
+            phrase,
+            Some(passphrase),
+            Some(2),
+            Some(&vault),
+        )
+        .unwrap();
+        let stored = &info
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "midnight:mainnet")
+            .unwrap()
+            .address;
+        let preview = ows_signer::chains::MidnightSigner::preview()
+            .reencode_unshielded_address(stored)
+            .unwrap();
+        let policy = ows_core::Policy {
+            id: "midnight-preview".to_string(),
+            name: "Midnight preview".to_string(),
+            version: 1,
+            created_at: "2026-03-22T10:00:00Z".to_string(),
+            rules: vec![PolicyRule::AllowedChains {
+                chain_ids: vec!["midnight:preview".to_string()],
+            }],
+            executable: None,
+            config: None,
+            action: PolicyAction::Deny,
+        };
+        policy_store::save_policy(&policy, Some(&vault)).unwrap();
+        let (token, _) = create_api_key(
+            "midnight-agent",
+            &[info.id],
+            &[policy.id],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+
+        let chain = ows_core::parse_chain("midnight:preview").unwrap();
+        sign_message_with_api_key(
+            &token,
+            "mn-agent",
+            &chain,
+            b"hello",
+            None,
+            Some(&preview),
+            Some(&vault),
+        )
+        .expect("the token signs with the stored account's key");
+    }
+
+    /// An index names another Midnight account of the phrase, which neither the policy nor the audit
+    /// record would show, so a token refuses any index but the wallet's stored account.
+    #[test]
+    fn api_key_midnight_refuses_an_index_naming_another_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let info = crate::ops::import_wallet_mnemonic(
+            "mn-agent",
+            phrase,
+            Some(passphrase),
+            Some(2),
+            Some(&vault),
+        )
+        .unwrap();
+        let stored = &info
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "midnight:mainnet")
+            .unwrap()
+            .address;
+        let preview = ows_signer::chains::MidnightSigner::preview()
+            .reencode_unshielded_address(stored)
+            .unwrap();
+        let (token, _) = create_api_key(
+            "midnight-agent",
+            &[info.id],
+            &[],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+        let chain = ows_core::parse_chain("midnight:preview").unwrap();
+        let sign = |index| {
+            sign_message_with_api_key(
+                &token,
+                "mn-agent",
+                &chain,
+                b"hello",
+                index,
+                Some(&preview),
+                Some(&vault),
+            )
+        };
+
+        let refused = sign(Some(0)).unwrap_err().to_string();
+        assert!(
+            refused.contains("stored account 2") && refused.contains("index 0"),
+            "{refused}"
+        );
+        sign(Some(2)).expect("the stored account's own index is allowed");
     }
 
     #[test]
@@ -1419,5 +1687,349 @@ else:
             "message signing should still be allowed: {:?}",
             allowed.err()
         );
+    }
+
+    /// Save an executable policy capping a Midnight transaction's summed absolute movement across its
+    /// per-segment `chain_extra` effects at `cap`, the kind of cap a real deployment writes as a custom
+    /// program. It is written as `docs/midnight.md` recommends: it tells the first pass by the request
+    /// being a Midnight `sign_transaction`, never by `chain_extra` being absent, and denies anything
+    /// else.
+    fn save_midnight_cap_policy(dir: &Path, vault: &Path, cap: u64) -> ows_core::Policy {
+        let script = dir.join("cap.py");
+        std::fs::write(
+            &script,
+            r#"#!/usr/bin/env python3
+import sys, json
+ctx = json.load(sys.stdin)
+midnight = ctx["chain_id"].startswith("midnight:")
+signing = ctx["request_type"] == "sign_transaction"
+extra = (ctx.get("transaction") or {}).get("chain_extra")
+def verdict(allow, reason):
+    print(json.dumps({"allow": allow, "reason": reason}))
+    sys.exit()
+if midnight and ctx["request_type"] == "read_balance":
+    verdict(True, "balance read")
+if not (midnight and signing):
+    verdict(False, ctx["request_type"] + " on " + ctx["chain_id"] + " is not what this key is for")
+if extra is None:
+    verdict(True, "first pass")
+segs = extra.get("segment_effects", [])
+total = sum(abs(int(d)) for s in segs for e in s.get("effects", []) for _, d in e.get("diff", []))
+verdict(total <= CAP, "summed movement %d (cap CAP)" % total)
+"#
+            .replace("CAP", &cap.to_string()),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let policy = ows_core::Policy {
+            id: "effect-cap".to_string(),
+            name: "Effect Cap".to_string(),
+            version: 1,
+            created_at: "2026-03-22T10:00:00Z".to_string(),
+            rules: vec![],
+            executable: Some(script.to_str().unwrap().to_string()),
+            config: None,
+            action: PolicyAction::Deny,
+        };
+        policy_store::save_policy(&policy, Some(vault)).unwrap();
+        policy
+    }
+
+    /// The connector seam's second, effect-aware pass denies a signing request whose wallet-relative
+    /// movement exceeds an executable policy's cap, and allows one within it — driving
+    /// `enforce_effect_policies` (the gate `prepare_signable_tx` runs between planning and authorizing)
+    /// over constructed effects, the way the executable programs consume `transaction.effects`.
+    #[test]
+    fn effect_policy_pass_gates_via_executable_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let policy = save_midnight_cap_policy(dir.path(), &vault, 1000);
+
+        let (_token, key_file) = create_api_key(
+            "agent",
+            std::slice::from_ref(&wallet_id),
+            std::slice::from_ref(&policy.id),
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+
+        let chain = ows_core::parse_chain("midnight:mainnet").unwrap();
+        let tx = || ows_core::policy::TransactionContext {
+            effects: vec![],
+            raw_hex: "00".into(),
+            data: None,
+            chain_extra: None,
+        };
+        // The per-segment `chain_extra` a Midnight plan hands to the seam: one guaranteed-segment native
+        // movement of `amount`.
+        let chain_extra = |amount: i64| {
+            serde_json::json!({
+                "segment_effects": [{
+                    "segment": 0,
+                    "effects": [{
+                        "address": "mn_addr_wallet",
+                        "diff": [["0".repeat(64), amount.to_string()]],
+                    }],
+                }],
+            })
+        };
+
+        // Over the cap → denied at the seam (in the real path the key drops unused, nothing is proved).
+        let denied = enforce_effect_policies(
+            &key_file,
+            &wallet_id,
+            &chain,
+            tx(),
+            chain_extra(-5_000),
+            Some(&vault),
+        );
+        assert!(matches!(
+            denied,
+            Err(OwsLibError::Core(OwsError::PolicyDenied { .. }))
+        ));
+
+        // Within the cap → allowed.
+        let allowed = enforce_effect_policies(
+            &key_file,
+            &wallet_id,
+            &chain,
+            tx(),
+            chain_extra(-500),
+            Some(&vault),
+        );
+        assert!(
+            allowed.is_ok(),
+            "within-cap movement should pass: {allowed:?}"
+        );
+    }
+
+    /// The seam is wired into the token entry points, not only callable: a makeIntent that spends no
+    /// coin plans without a network, so `sign_with_api_key` and `sign_and_send` must refuse one over
+    /// the token's cap at the second pass, and `sign_with_api_key` must sign one within it. A gate
+    /// replaced by a no-op signs the first; one that always denies refuses the second.
+    #[test]
+    fn token_entry_points_gate_a_midnight_request_at_the_seam() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let info = crate::ops::import_wallet_mnemonic(
+            "mn-agent",
+            phrase,
+            Some(passphrase),
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+        let stored = &info
+            .accounts
+            .iter()
+            .find(|a| a.chain_id == "midnight:mainnet")
+            .unwrap()
+            .address;
+        let own = ows_signer::chains::MidnightSigner::preview()
+            .reencode_unshielded_address(stored)
+            .unwrap();
+        let policy = save_midnight_cap_policy(dir.path(), &vault, 1_000_000);
+        let (token, _) = create_api_key(
+            "midnight-agent",
+            &[info.id],
+            &[policy.id],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+        let chain = ows_core::parse_chain("midnight:preview").unwrap();
+        let asking = |value: u64| {
+            format!(
+                r#"{{"method":"makeIntent","desiredInputs":[],"desiredOutputs":[{{"kind":"unshielded","type":"night","value":"{value}","recipient":"{own}"}}],"options":{{"intentId":1}}}}"#
+            )
+        };
+        let over_cap = asking(5_000_000);
+        let denied_at_seam = |result: Result<(), OwsLibError>| match result {
+            Err(OwsLibError::Core(OwsError::PolicyDenied { reason, .. })) => assert!(
+                reason.contains("summed movement 5000000"),
+                "denied for another reason: {reason}"
+            ),
+            other => panic!("expected the seam to deny, got {other:?}"),
+        };
+
+        denied_at_seam(
+            sign_with_api_key(
+                &token,
+                "mn-agent",
+                &chain,
+                over_cap.as_bytes(),
+                None,
+                Some(&vault),
+            )
+            .map(|_| ()),
+        );
+        denied_at_seam(
+            crate::ops::sign_and_send(
+                "mn-agent",
+                "midnight:preview",
+                &over_cap,
+                Some(&token),
+                None,
+                None,
+                Some(&vault),
+            )
+            .map(|_| ()),
+        );
+        let signed = sign_with_api_key(
+            &token,
+            "mn-agent",
+            &chain,
+            asking(500).as_bytes(),
+            None,
+            Some(&vault),
+        )
+        .expect("an intent within the cap passes the seam");
+        assert!(signed.transaction.is_some(), "{signed:?}");
+    }
+
+    /// The second pass re-runs the declarative rules, not only the executables: planning can outlast a
+    /// rule that held at the first pass, such as an expiry, and the seam must still deny.
+    #[test]
+    fn effect_policy_pass_rechecks_declarative_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+
+        let policy = ows_core::Policy {
+            id: "expired".to_string(),
+            name: "Expired".to_string(),
+            version: 1,
+            created_at: "2026-03-22T10:00:00Z".to_string(),
+            rules: vec![PolicyRule::ExpiresAt {
+                timestamp: "2020-01-01T00:00:00Z".to_string(),
+            }],
+            executable: None,
+            config: None,
+            action: PolicyAction::Deny,
+        };
+        policy_store::save_policy(&policy, Some(&vault)).unwrap();
+        let (_token, key_file) = create_api_key(
+            "agent",
+            std::slice::from_ref(&wallet_id),
+            std::slice::from_ref(&policy.id),
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+
+        let chain = ows_core::parse_chain("midnight:mainnet").unwrap();
+        let tx = ows_core::policy::TransactionContext {
+            effects: vec![],
+            raw_hex: "00".into(),
+            data: None,
+            chain_extra: None,
+        };
+        let denied = enforce_effect_policies(
+            &key_file,
+            &wallet_id,
+            &chain,
+            tx,
+            serde_json::json!({ "segment_effects": [] }),
+            Some(&vault),
+        );
+        assert!(matches!(
+            denied,
+            Err(OwsLibError::Core(OwsError::PolicyDenied { .. }))
+        ));
+    }
+
+    /// The key's own expiry is not a policy rule, so re-running the rules alone would miss it: a token
+    /// that lapses while the plan is built must still be refused at the seam.
+    #[test]
+    fn effect_policy_pass_rechecks_the_keys_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let (_token, mut key_file) = create_api_key(
+            "agent",
+            std::slice::from_ref(&wallet_id),
+            &[],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+        key_file.expires_at = Some("2020-01-01T00:00:00Z".to_string());
+        key_store::save_api_key(&key_file, Some(&vault)).unwrap();
+
+        let chain = ows_core::parse_chain("midnight:mainnet").unwrap();
+        let tx = ows_core::policy::TransactionContext {
+            effects: vec![],
+            raw_hex: "00".into(),
+            data: None,
+            chain_extra: None,
+        };
+        let denied = enforce_effect_policies(
+            &key_file,
+            &wallet_id,
+            &chain,
+            tx,
+            serde_json::json!({ "segment_effects": [] }),
+            Some(&vault),
+        );
+        assert!(matches!(
+            denied,
+            Err(OwsLibError::Core(OwsError::ApiKeyExpired { .. }))
+        ));
+    }
+
+    /// Revoking a key deletes its file, and planning can outlast that: the seam reloads the key, so a
+    /// token revoked while the plan is built is refused before anything is signed.
+    #[test]
+    fn effect_policy_pass_refuses_a_key_revoked_since_the_first_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = dir.path().to_path_buf();
+        let passphrase = "test-pass";
+        let wallet_id = setup_test_wallet(&vault, passphrase);
+        let (_token, key_file) = create_api_key(
+            "agent",
+            std::slice::from_ref(&wallet_id),
+            &[],
+            passphrase,
+            None,
+            Some(&vault),
+        )
+        .unwrap();
+        key_store::delete_api_key(&key_file.id, Some(&vault)).unwrap();
+
+        let chain = ows_core::parse_chain("midnight:mainnet").unwrap();
+        let tx = ows_core::policy::TransactionContext {
+            effects: vec![],
+            raw_hex: "00".into(),
+            data: None,
+            chain_extra: None,
+        };
+        let denied = enforce_effect_policies(
+            &key_file,
+            &wallet_id,
+            &chain,
+            tx,
+            serde_json::json!({ "segment_effects": [] }),
+            Some(&vault),
+        );
+        assert!(matches!(
+            denied,
+            Err(OwsLibError::Core(OwsError::ApiKeyNotFound))
+        ));
     }
 }

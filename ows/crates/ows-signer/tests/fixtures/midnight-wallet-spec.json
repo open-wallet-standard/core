@@ -1,0 +1,723 @@
+{
+  "source": "https://github.com/midnightntwrk/midnight-wallet/blob/055517d38c5c88ffc6fdb595396790ddfcf238b7/packages/spec-reference/test-vectors/ (seedDerivation.json, keyDerivation.json, addresses.json)",
+  "license": "Apache-2.0, Copyright 2019 Input Output (Hong Kong) Ltd.",
+  "trimmed": "Only what OWS derives: the three roles it uses, at address index 0 where it derives every role; each key's unshielded public key; every seed's addresses on mainnet (networkId null) and two seeds' on the other networks. Values are unchanged.",
+  "seedDerivation": [
+    {
+      "masterSeed": "0000000000000000000000000000000000000000000000000000000000000001",
+      "account": 0,
+      "addressIndex": 0,
+      "seedsByRole": {
+        "UnshieldedExternal": {
+          "path": "m/44'/2400'/0'/0/0",
+          "seed": "22b8e577b3f638b2b361f36fd62d7138ed489d9afe3da5f7c325e2d0a95ae043"
+        },
+        "Dust": {
+          "path": "m/44'/2400'/0'/2/0",
+          "seed": "b9b76cce66828aa6bd798abbb15b012331a6aa1e5f99e678724c37463b5775a1"
+        },
+        "Shielded": {
+          "path": "m/44'/2400'/0'/3/0",
+          "seed": "9690d4013e42e6739d9496f836b2cbd4339451c02a00624b86e9fb15cc4197a8"
+        }
+      }
+    },
+    {
+      "masterSeed": "0000000000000000000000000000000000000000000000000000000000000001",
+      "account": 1,
+      "addressIndex": 0,
+      "seedsByRole": {
+        "UnshieldedExternal": {
+          "path": "m/44'/2400'/1'/0/0",
+          "seed": "69a8e4a2fb369257cee62135a12685c133ac2f8aca76008287e4f6807ef1373e"
+        },
+        "Dust": {
+          "path": "m/44'/2400'/1'/2/0",
+          "seed": "6b0aa53d5e8afabaed15e8cf3863978b6b866dff0683957af6c594f496f38d04"
+        },
+        "Shielded": {
+          "path": "m/44'/2400'/1'/3/0",
+          "seed": "a8096953e10dab792d0f305417a7a7167849482a1cfdd880f689c42d62d2dc74"
+        }
+      }
+    },
+    {
+      "masterSeed": "0000000000000000000000000000000000000000000000000000000000000000",
+      "account": 0,
+      "addressIndex": 0,
+      "seedsByRole": {
+        "UnshieldedExternal": {
+          "path": "m/44'/2400'/0'/0/0",
+          "seed": "b76bd8d92eb76098e938051af9d6bf2c81d8bf47ead2aa5442ca60c04346378b"
+        },
+        "Dust": {
+          "path": "m/44'/2400'/0'/2/0",
+          "seed": "cab391b2eaaf459bd7ef54c461e7fc4e2377afb12fbdd532b0d63b0f48803534"
+        },
+        "Shielded": {
+          "path": "m/44'/2400'/0'/3/0",
+          "seed": "a33865674c03ca1f6c4eb3f6b56625dce0accc96d2ca52114876a58773f5ecab"
+        }
+      }
+    },
+    {
+      "masterSeed": "0000000000000000000000000000000000000000000000000000000000000000",
+      "account": 1,
+      "addressIndex": 0,
+      "seedsByRole": {
+        "UnshieldedExternal": {
+          "path": "m/44'/2400'/1'/0/0",
+          "seed": "a400ff335801080272ae0ecc6b76798783e9a4012077ba233ee871a5db291b0a"
+        },
+        "Dust": {
+          "path": "m/44'/2400'/1'/2/0",
+          "seed": "9ec00f2a6ef7bb54499933a2ea704a972128237cdaa6e0f7511d35d1929a0856"
+        },
+        "Shielded": {
+          "path": "m/44'/2400'/1'/3/0",
+          "seed": "e26f8087e3c7dad0ee81447e9ea5ab29793d826a171b53d52a0941fadc43a66d"
+        }
+      }
+    },
+    {
+      "masterSeed": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "account": 0,
+      "addressIndex": 0,
+      "seedsByRole": {
+        "UnshieldedExternal": {
+          "path": "m/44'/2400'/0'/0/0",
+          "seed": "b39bd35a1f2ab12434fe89502245c4d49e955e623152ffb108d3eab7577588b0"
+        },
+        "Dust": {
+          "path": "m/44'/2400'/0'/2/0",
+          "seed": "535ca6755d051baaaacbcbcdb6247271d176b0de7ad56bdd644c18bd27903685"
+        },
+        "Shielded": {
+          "path": "m/44'/2400'/0'/3/0",
+          "seed": "8e9d2e7244f986a6b9b86847b6188b0fd62a588a19995e2fe1bd37c6fa0d6a71"
+        }
+      }
+    },
+    {
+      "masterSeed": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "account": 1,
+      "addressIndex": 0,
+      "seedsByRole": {
+        "UnshieldedExternal": {
+          "path": "m/44'/2400'/1'/0/0",
+          "seed": "b41158ea0e64b6beb74e230f2e1a808389dc2d183c6614b37ce9b3ca0c4388ba"
+        },
+        "Dust": {
+          "path": "m/44'/2400'/1'/2/0",
+          "seed": "30709aa981b4df091398d1964d315690fc2145d27c0e58714b72767133f97047"
+        },
+        "Shielded": {
+          "path": "m/44'/2400'/1'/3/0",
+          "seed": "d37c306ff7566d9469511433cf56a4b669f64af8d195291a0090220d0c22d6d6"
+        }
+      }
+    },
+    {
+      "masterSeed": "b49408db310c043ab736fb57a98e15c8cedbed4c38450df3755ac9726ee14d0c",
+      "account": 0,
+      "addressIndex": 0,
+      "seedsByRole": {
+        "UnshieldedExternal": {
+          "path": "m/44'/2400'/0'/0/0",
+          "seed": "543110874819c43470602a2710579b006de9d29788cd0f2e6d611d9994f40a81"
+        },
+        "Dust": {
+          "path": "m/44'/2400'/0'/2/0",
+          "seed": "2852902e81dbc84d6ed459c2b977995cd8aa18f35a016db139749bdef167f811"
+        },
+        "Shielded": {
+          "path": "m/44'/2400'/0'/3/0",
+          "seed": "641e75883e350a65dd3e93dd52229949be18456d5d17ea5484d5c1f73c4d57ce"
+        }
+      }
+    },
+    {
+      "masterSeed": "b49408db310c043ab736fb57a98e15c8cedbed4c38450df3755ac9726ee14d0c",
+      "account": 1,
+      "addressIndex": 0,
+      "seedsByRole": {
+        "UnshieldedExternal": {
+          "path": "m/44'/2400'/1'/0/0",
+          "seed": "1e2c3b62cf396e5e7bfbe7b04ce5c25cd5318e7013ba1dcbd22ed3b0bb15d3de"
+        },
+        "Dust": {
+          "path": "m/44'/2400'/1'/2/0",
+          "seed": "dedf271548ebb6cef6934bbe777a69207e043e93360dc82caaf49fc605a15fcb"
+        },
+        "Shielded": {
+          "path": "m/44'/2400'/1'/3/0",
+          "seed": "825a4ad95f7f79c682c7d2819e013a22fd8a8b0842e4058e4ac47de768829d0a"
+        }
+      }
+    },
+    {
+      "masterSeed": "06004625b6cb2ccead21b15fee2a940c404365702b697b4721bfeecfc6b1b15e",
+      "account": 0,
+      "addressIndex": 0,
+      "seedsByRole": {
+        "UnshieldedExternal": {
+          "path": "m/44'/2400'/0'/0/0",
+          "seed": "6f150d871e61d80b32a9f4c6cd29ef4522d84fec7b37030de98786a88383a385"
+        },
+        "Dust": {
+          "path": "m/44'/2400'/0'/2/0",
+          "seed": "0995ea2747cbafa26e81f39130e5f4d8c0cd23ee61ab882a9a434d544176b364"
+        },
+        "Shielded": {
+          "path": "m/44'/2400'/0'/3/0",
+          "seed": "8f46aae4617acdbd7dd705af463940f6e3dbb47a970fefdf51fcff027266bac2"
+        }
+      }
+    },
+    {
+      "masterSeed": "06004625b6cb2ccead21b15fee2a940c404365702b697b4721bfeecfc6b1b15e",
+      "account": 1,
+      "addressIndex": 0,
+      "seedsByRole": {
+        "UnshieldedExternal": {
+          "path": "m/44'/2400'/1'/0/0",
+          "seed": "114a5c2de771db642ddce57efbddc5017bfb6344b6d3acb23ab31960375ee86b"
+        },
+        "Dust": {
+          "path": "m/44'/2400'/1'/2/0",
+          "seed": "5fd7cf92b0f560eb5b6c1ce40fa2561ac42decddf353558671f12e9fcb747489"
+        },
+        "Shielded": {
+          "path": "m/44'/2400'/1'/3/0",
+          "seed": "bc9169d8de5abc104274b7180ba50fddc37cc22a0c74473cbb797e98ec925b4d"
+        }
+      }
+    },
+    {
+      "masterSeed": "215ca8a6923ec73f241c92ef702ccfc277aa5856bc94f59afa7e82ec94547850",
+      "account": 0,
+      "addressIndex": 0,
+      "seedsByRole": {
+        "UnshieldedExternal": {
+          "path": "m/44'/2400'/0'/0/0",
+          "seed": "f7ea70204ad7c72bde05b667584160d4feecf435863ab1c902a107852b7a5531"
+        },
+        "Dust": {
+          "path": "m/44'/2400'/0'/2/0",
+          "seed": "683a154ce937a0d7a1b23f90ffcc04c1cfab66fcac4aaf130a8264a79891e841"
+        },
+        "Shielded": {
+          "path": "m/44'/2400'/0'/3/0",
+          "seed": "ed5c4fd2223106c727e1dac1de67e5c7073ec25f0e6a0f5926cea3cc758bb1b2"
+        }
+      }
+    },
+    {
+      "masterSeed": "215ca8a6923ec73f241c92ef702ccfc277aa5856bc94f59afa7e82ec94547850",
+      "account": 1,
+      "addressIndex": 0,
+      "seedsByRole": {
+        "UnshieldedExternal": {
+          "path": "m/44'/2400'/1'/0/0",
+          "seed": "9f32da89d21a3c791a6b79aa92e4fa36b039d090bb65c278d69501ac343bcd8c"
+        },
+        "Dust": {
+          "path": "m/44'/2400'/1'/2/0",
+          "seed": "42098698a8e18bc7f5a7b80439fa788c119e5b6700805e3a4ad2f5657ba388ca"
+        },
+        "Shielded": {
+          "path": "m/44'/2400'/1'/3/0",
+          "seed": "9ef53cd2917ce0f6765b2cfb5838425eef885a8ce220365fdcc3e28b60146af0"
+        }
+      }
+    }
+  ],
+  "keyDerivation": [
+    {
+      "seed": "0000000000000000000000000000000000000000000000000000000000000000",
+      "unshielded": {
+        "publicKey": null
+      }
+    },
+    {
+      "seed": "0101010101010101010101010101010101010101010101010101010101010101",
+      "unshielded": {
+        "publicKey": "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"
+      }
+    },
+    {
+      "seed": "0202020202020202020202020202020202020202020202020202020202020202",
+      "unshielded": {
+        "publicKey": "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766"
+      }
+    },
+    {
+      "seed": "0404040404040404040404040404040404040404040404040404040404040404",
+      "unshielded": {
+        "publicKey": "462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0b"
+      }
+    },
+    {
+      "seed": "0808080808080808080808080808080808080808080808080808080808080808",
+      "unshielded": {
+        "publicKey": "f991f944d1e1954a7fc8b9bf62e0d78f015f4c07762d505e20e6c45260a3661b"
+      }
+    },
+    {
+      "seed": "1010101010101010101010101010101010101010101010101010101010101010",
+      "unshielded": {
+        "publicKey": "a92c9b7cac68758de5783ed8e5123598e4ad137091e42987d3bad8a08e35bf3d"
+      }
+    },
+    {
+      "seed": "2020202020202020202020202020202020202020202020202020202020202020",
+      "unshielded": {
+        "publicKey": "187db77a59f1c5f3cfd2296f87ebd7e829226b0f628d9efe4b9f221414e3b967"
+      }
+    },
+    {
+      "seed": "4040404040404040404040404040404040404040404040404040404040404040",
+      "unshielded": {
+        "publicKey": "50d1203e168650a52be58141df7b5be8e11f9c38e3ef76bffc9a8225039fcb97"
+      }
+    },
+    {
+      "seed": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "unshielded": {
+        "publicKey": null
+      }
+    },
+    {
+      "seed": "b49408db310c043ab736fb57a98e15c8cedbed4c38450df3755ac9726ee14d0c",
+      "unshielded": {
+        "publicKey": "660bff1a01d31a4edec53408a09773e24146165900d75a00c704d11b85d05149"
+      }
+    },
+    {
+      "seed": "06004625b6cb2ccead21b15fee2a940c404365702b697b4721bfeecfc6b1b15e",
+      "unshielded": {
+        "publicKey": "04129742797f3336d6c3c0255ccfbca8101ed6c8de879db0c5472c9324fd8a77"
+      }
+    },
+    {
+      "seed": "215ca8a6923ec73f241c92ef702ccfc277aa5856bc94f59afa7e82ec94547850",
+      "unshielded": {
+        "publicKey": "62b211cad7dcb32569fdcb757e46b5e7123d47d654dc2ee568aef9f200060871"
+      }
+    },
+    {
+      "seed": "4c684b618deccc0c7609536b81f6ea25f223c472c63b11fc440be8e79af6c1b1",
+      "unshielded": {
+        "publicKey": "2807578c4f7f14de1e3bb2476640e45532d20bcbd16f4b789dbd203ad89b2bb0"
+      }
+    },
+    {
+      "seed": "480d28c2b74b14d4a38b4fffe8405c10a85d819d009e2c27fffaba514f6c345d",
+      "unshielded": {
+        "publicKey": "afd9b358bcb92b735a3271198eb2b8fe6075ade6b9ad7d1accdd784e39a6cc83"
+      }
+    },
+    {
+      "seed": "a84e2e6675e991876f75c9918d9e86edfeb431b0b44a019980c95a36a27be45c",
+      "unshielded": {
+        "publicKey": "9f4b8f3c1c1fb3c45f9f3c22fd4709559fec91865c5d3fc03c5d137dd7fd48ca"
+      }
+    },
+    {
+      "seed": "6f0ca9ff74fc082d5ab72f996f682d9831da8f79f731a6a48159665df22b6c71",
+      "unshielded": {
+        "publicKey": "f4e18f41dc269a75c78791f800b782a6eb93e26247cac5792fb7f6d97c26f51c"
+      }
+    },
+    {
+      "seed": "f4f9986bb7e602d1333267ce7c4320a5837c9710b95118639ee6c27f4ed55334",
+      "unshielded": {
+        "publicKey": "7815dad59021c35586a1e8fafab83ff57324a836c671247653b64fd327f3f734"
+      }
+    },
+    {
+      "seed": "37ec63328c318df8cf32722fa7ff0b75c389e38c7c7e9e9da32e09338e2b9351",
+      "unshielded": {
+        "publicKey": "cf1d584fc149999d1c87398acd2eb1084f499ddaea1c234c61426cd492d94844"
+      }
+    },
+    {
+      "seed": "a48b298c95152242413880fb8a57d348b7e1d37d669634c0ae1d7b363a7a140d",
+      "unshielded": {
+        "publicKey": "ffaab49fc298db13ceb85ba306ea8e39b69d2d77cb606222713724f77f5a129c"
+      }
+    },
+    {
+      "seed": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",
+      "unshielded": {
+        "publicKey": null
+      }
+    }
+  ],
+  "addresses": [
+    {
+      "seed": "0000000000000000000000000000000000000000000000000000000000000000",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": null
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr10my5e87d4vfmm7430mq28jj72ftvvekjthguqewmaxzfp5mepc9tycaxc8eflrwd790hr2kq3fzp3yym6as8xerp7rjpgclv253z85q3ftmvk"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1wwp5pgncjhhe888zx5tuer0hdru5xwwt32tddcjy64kd7xddmeq45k34a5n"
+      }
+    },
+    {
+      "seed": "0101010101010101010101010101010101010101010101010101010101010101",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1asujt0dayj4pelgq97wv75hjhscqv9epmzzpapkf8sy8c87jhh9s6e0fs3"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1p99fzfvf2z2q05zaaqzml8laccfd8uhzm9t2jewxggyr65tj4dp4gcfv7e04ka0x7qeajljmln7za5d4edntjxncx4q0uh6gkkj706g3tr2at"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1w0uhul6nq3705w5etn9j7uyrv047w6e893yjcuvsycdlm9szkdqkgkerpav"
+      }
+    },
+    {
+      "seed": "0101010101010101010101010101010101010101010101010101010101010101",
+      "networkId": "my-private-net",
+      "unshieldedAddress": {
+        "bech32m": "mn_addr_my-private-net1asujt0dayj4pelgq97wv75hjhscqv9epmzzpapkf8sy8c87jhh9sj8jm9g"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr_my-private-net1p99fzfvf2z2q05zaaqzml8laccfd8uhzm9t2jewxggyr65tj4dp4gcfv7e04ka0x7qeajljmln7za5d4edntjxncx4q0uh6gkkj706grqdc77"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust_my-private-net1w0uhul6nq3705w5etn9j7uyrv047w6e893yjcuvsycdlm9szkdqkghsluaf"
+      }
+    },
+    {
+      "seed": "0101010101010101010101010101010101010101010101010101010101010101",
+      "networkId": "devnet",
+      "unshieldedAddress": {
+        "bech32m": "mn_addr_devnet1asujt0dayj4pelgq97wv75hjhscqv9epmzzpapkf8sy8c87jhh9syn2j3y"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr_devnet1p99fzfvf2z2q05zaaqzml8laccfd8uhzm9t2jewxggyr65tj4dp4gcfv7e04ka0x7qeajljmln7za5d4edntjxncx4q0uh6gkkj706ggme77n"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust_devnet1w0uhul6nq3705w5etn9j7uyrv047w6e893yjcuvsycdlm9szkdqkgr5x2ur"
+      }
+    },
+    {
+      "seed": "0101010101010101010101010101010101010101010101010101010101010101",
+      "networkId": "testnet",
+      "unshieldedAddress": {
+        "bech32m": "mn_addr_testnet1asujt0dayj4pelgq97wv75hjhscqv9epmzzpapkf8sy8c87jhh9s7wrhna"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr_testnet1p99fzfvf2z2q05zaaqzml8laccfd8uhzm9t2jewxggyr65tj4dp4gcfv7e04ka0x7qeajljmln7za5d4edntjxncx4q0uh6gkkj706g6d0vuc"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust_testnet1w0uhul6nq3705w5etn9j7uyrv047w6e893yjcuvsycdlm9szkdqkgtrqd0p"
+      }
+    },
+    {
+      "seed": "0101010101010101010101010101010101010101010101010101010101010101",
+      "networkId": "my-private-net-5",
+      "unshieldedAddress": {
+        "bech32m": "mn_addr_my-private-net-51asujt0dayj4pelgq97wv75hjhscqv9epmzzpapkf8sy8c87jhh9s5tz2ey"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr_my-private-net-51p99fzfvf2z2q05zaaqzml8laccfd8uhzm9t2jewxggyr65tj4dp4gcfv7e04ka0x7qeajljmln7za5d4edntjxncx4q0uh6gkkj706gu6l2dl"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust_my-private-net-51w0uhul6nq3705w5etn9j7uyrv047w6e893yjcuvsycdlm9szkdqkgsde939"
+      }
+    },
+    {
+      "seed": "0202020202020202020202020202020202020202020202020202020202020202",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1gmmgsqam7wy7rhc08ca088pscjvqvv6jtqjmju35vgjeu7e6h3zstya9lg"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1refy4rszhqpz7fpakmye9ayvsekl7nark8qpvf8e7tqay60pzqtsd4z7w3plrfsrjq8u982z5kn90agjn8gx2shh8t8ga8zsu39ew3q82uhz0"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1w0ypuz6tnj2xgd24e4nl2wtszylqdmcptda538sajkkdf4kq6uyyq25wv23"
+      }
+    },
+    {
+      "seed": "0404040404040404040404040404040404040404040404040404040404040404",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1d96ta2ngtgjcevcu2g2nz7dcxpldv0f6guv93xme8cxyqvj5acgq7d0acr"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1yaks58qr3hm9ls6u8zqptrhvqf53dknw3x8lz4eyyr8glva48crs7aetzay04ra689gn9xrjc0m38k4gqm8z6q8enm377zxdd59t5kglnas98"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1wwn4k0acrgpaj7dhluk94srhv07sxahsqkrt97enl3lxx76l432979jgkdf"
+      }
+    },
+    {
+      "seed": "0808080808080808080808080808080808080808080808080808080808080808",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1gmqkr9052qzznflnfqeem4tj80h6vt8dt30z56qq9x38mqypwlgqxsuya9"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1ayt957zm6jm5glw24pw3q752cq2jnttp8svk27dle9qh6fhphg9d79e0m4m47kvqzsw7u2m9ye4ytn6wl5lkguznxgzsl8pey3qfqyq57hgtp"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1ww5j0v9sgh9tmj80xem59mtxyv049tlca7py0357f3nxms3x8f0kqlhaynt"
+      }
+    },
+    {
+      "seed": "1010101010101010101010101010101010101010101010101010101010101010",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1x2x3y06dscp8pcv8vsk3sunedag0nwswx3egejrpwa03x630ckvs4p3n4u"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1wm5fdhtfpr9jm2jznlsrkkxx2mng8wdc3a6j8msrtjegnp6kgx98ux8cvq42nwghsl5sd860umyuyvnj639ra2p652h9ally8qzthfsm0qt3p"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1ww3jgxj2s4tnmtpyxdf95aqdu3u26w5vughrc4r25nm5489hwxznuy47dc8"
+      }
+    },
+    {
+      "seed": "2020202020202020202020202020202020202020202020202020202020202020",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1mrtj8xugw09wkjljkx7fux6h3cx8xpwz6wclqjart8jxyq3rl5nq6w22uc"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1kl9gaffpvwuej82akw3xk5smzl20xkzj475d56qagzelgyhv60has6fupuxztx3k05xmwx6gwzl5gdn4qrhuxcucg5maw6w0h06k3cgmf60kk"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1w0dpvx0m4y33mgv8rcq4xvq456nf9jxtqmk2082vev3ktyqcezqjjk69zj3"
+      }
+    },
+    {
+      "seed": "4040404040404040404040404040404040404040404040404040404040404040",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr106du6dvu70exrx9agwj9jjw2auxz8cq335uz6hpz20xzp2vkq8fq7463tv"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr149y4qjwhe3hqetnxzyz38lhtztmjct5xfw85suhg2vke7z7u3vfyudka2zp9vaaxts5fff4d2f76d0k3tt2zq3w69c953utm47mgtmqcjdhe7"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1wd4dy6g0ypkpjgyvluv7ghcmrw8fyu2p2v67jmhez59yu40jg7vpjhfzfau"
+      }
+    },
+    {
+      "seed": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": null
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1zrqqupgxzf3gysyuy6vq5fg4ue7ztuhzarafa4l7d739kwnysl6ws9vtadlgfhwafw6h23mu7wy7uhhp8pqxly5hdemp5ln2sthkc6sarnnee"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1ww5c5t280lkpwteym2pch8ghv9u6luj6wuzq0rf83t5k2zwwzkqpqk4nn72"
+      }
+    },
+    {
+      "seed": "b49408db310c043ab736fb57a98e15c8cedbed4c38450df3755ac9726ee14d0c",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1pzpm653ss49akx70ea5w4ra9crt6ny6dvyq969mn6kq4selvlqas532jwt"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1cu9mjg05a0wxyny4rnfdvln56j2xe2q55af2yey8mt4gpv2ywfaczatutcv6cn20z04c8wfx6xkg2ekrd97gmkm3c8uwx8r7artfv3gdtqgaa"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1wwfjn0x47qxzxpyw9pk2wxvn2k8qmxaf93qwem4u640c9d8ak8v3x5ltayf"
+      }
+    },
+    {
+      "seed": "b49408db310c043ab736fb57a98e15c8cedbed4c38450df3755ac9726ee14d0c",
+      "networkId": "my-private-net",
+      "unshieldedAddress": {
+        "bech32m": "mn_addr_my-private-net1pzpm653ss49akx70ea5w4ra9crt6ny6dvyq969mn6kq4selvlqasu0hqmj"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr_my-private-net1cu9mjg05a0wxyny4rnfdvln56j2xe2q55af2yey8mt4gpv2ywfaczatutcv6cn20z04c8wfx6xkg2ekrd97gmkm3c8uwx8r7artfv3glqw67g"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust_my-private-net1wwfjn0x47qxzxpyw9pk2wxvn2k8qmxaf93qwem4u640c9d8ak8v3x4khqyv"
+      }
+    },
+    {
+      "seed": "b49408db310c043ab736fb57a98e15c8cedbed4c38450df3755ac9726ee14d0c",
+      "networkId": "devnet",
+      "unshieldedAddress": {
+        "bech32m": "mn_addr_devnet1pzpm653ss49akx70ea5w4ra9crt6ny6dvyq969mn6kq4selvlqas2m0f07"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr_devnet1cu9mjg05a0wxyny4rnfdvln56j2xe2q55af2yey8mt4gpv2ywfaczatutcv6cn20z04c8wfx6xkg2ekrd97gmkm3c8uwx8r7artfv3g5m6u79"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust_devnet1wwfjn0x47qxzxpyw9pk2wxvn2k8qmxaf93qwem4u640c9d8ak8v3xpjwk9x"
+      }
+    },
+    {
+      "seed": "b49408db310c043ab736fb57a98e15c8cedbed4c38450df3755ac9726ee14d0c",
+      "networkId": "testnet",
+      "unshieldedAddress": {
+        "bech32m": "mn_addr_testnet1pzpm653ss49akx70ea5w4ra9crt6ny6dvyq969mn6kq4selvlqassxxvd8"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr_testnet1cu9mjg05a0wxyny4rnfdvln56j2xe2q55af2yey8mt4gpv2ywfaczatutcv6cn20z04c8wfx6xkg2ekrd97gmkm3c8uwx8r7artfv3gxdvwuw"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust_testnet1wwfjn0x47qxzxpyw9pk2wxvn2k8qmxaf93qwem4u640c9d8ak8v3xf9g3ky"
+      }
+    },
+    {
+      "seed": "b49408db310c043ab736fb57a98e15c8cedbed4c38450df3755ac9726ee14d0c",
+      "networkId": "my-private-net-5",
+      "unshieldedAddress": {
+        "bech32m": "mn_addr_my-private-net-51pzpm653ss49akx70ea5w4ra9crt6ny6dvyq969mn6kq4selvlqas6r8387"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr_my-private-net-51cu9mjg05a0wxyny4rnfdvln56j2xe2q55af2yey8mt4gpv2ywfaczatutcv6cn20z04c8wfx6xkg2ekrd97gmkm3c8uwx8r7artfv3gq6ugdf"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust_my-private-net-51wwfjn0x47qxzxpyw9pk2wxvn2k8qmxaf93qwem4u640c9d8ak8v3xjt3egq"
+      }
+    },
+    {
+      "seed": "06004625b6cb2ccead21b15fee2a940c404365702b697b4721bfeecfc6b1b15e",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1ytzjzawrcshz6kg8hr370fravrgry2cazcak7kh9k43ujpza6eus6kphv7"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr140qpf33a2we2u2crm2fcqdh7xaj5d2603dlmd4nucnljq879t232qxy0mxq6mrggv3ln67rnsplgj4zrhvexeysczcuf3mrdgutlt0qh878v2"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1wd8xyhq4uxg5u3hthwjhu7x5d37dgt7mtvm00janyk0w5xapz43qvxglhaf"
+      }
+    },
+    {
+      "seed": "215ca8a6923ec73f241c92ef702ccfc277aa5856bc94f59afa7e82ec94547850",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1s0jv2damryfcxewsxw7arvf6qgnwvntwxeg0ym94n5v6mxjyq5rsxz6lpr"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr14s2xnz8y98a48r5mqv3y2agumzahrlq273gxfh6kgzz6jh2ar0ax493jt32j9a3zn2xqngxlgk2rhlyss32deqxqcld6huxj34q582q00mxz3"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1wwncllgfkex3uk5vt0rwj8ctdvy5vxm7fuegtgjnfef3ea0vexnsy8rpug0"
+      }
+    },
+    {
+      "seed": "4c684b618deccc0c7609536b81f6ea25f223c472c63b11fc440be8e79af6c1b1",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr12ku6xqsmxsjh4dqg2hg3lzm76q0546jfhtkn7x49w7xsqw8qmk9q83tdm5"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1wzwl6zek4k9pdu3lkyc8z3sgumav73efty9mt06rm805tl4mehl97xuxwce4hzqv4uc77u34uc0h3p4ye3fud400f8n4r53802w2x0c4w93d2"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1wdm8qqddnm8nhcjxwh429yhsp8tufhmfwcjtfud9lallpwtkpa7jcaa3waq"
+      }
+    },
+    {
+      "seed": "480d28c2b74b14d4a38b4fffe8405c10a85d819d009e2c27fffaba514f6c345d",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1ngpzeg2slnj3fawlllmy4wcjfy3ls4zy5sfzu98vkal2qkyhtqas3aufls"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr14mas2p85xymyx8u9ckad0w69xswd2g2cgjp925964nvckw2sngprxea8yy09p6wa0msur7f90adk5aykgnsfx23g4kkffm0ltltc6ygc9jcn0"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1wvgddfwnjda9af9eagxa5wra2gpulvq9nh6dfcy3veqaqn9u2l8yv5p62pj"
+      }
+    },
+    {
+      "seed": "a84e2e6675e991876f75c9918d9e86edfeb431b0b44a019980c95a36a27be45c",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1fzee38hjsk09wzuadkwmdc6vvg5dalz78rly5e4ncl04dm38u6sqcxuaqa"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1u400fjc6p40wd2j874y96mnvmtx2k8fvdcun6y0qqyfr86eql0ddg0zuykp853vexxt0hawdy2rh9t06d9560mjpkskaft2fg6x0c4sk635cs"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1ww5z0hq4hwvw3w2j00sprwy59nawd38q9gs06d0kcf0l9qctvpsk2cfnfe3"
+      }
+    },
+    {
+      "seed": "6f0ca9ff74fc082d5ab72f996f682d9831da8f79f731a6a48159665df22b6c71",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr17adca4d94675nz75uhtuhx4zevudqz0zpwzn8ds39uy7jhfx2jyqctuxzg"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1gt60pgcz2qp7qsvllvpsm55zmel85p84pzcy48h8ycl8kymdqnullq7gum346mkqg82pu5gt8la53yu2kju670u0ev3z4yuw3wadzccqnrcqz"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1wvywh3c5fpn3dhcdqplgtxu2m07yz5wsxk7pwu3xm78kq09pz8zky636cx2"
+      }
+    },
+    {
+      "seed": "f4f9986bb7e602d1333267ce7c4320a5837c9710b95118639ee6c27f4ed55334",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1eshpwg94se92ykzflhgyr800uy8p06mvpl46jgtghdlfq37a98cq50tg74"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1pjsl7r8kyz8vcwe8r93du37j4rjdpssjhnzx636nz6s0gdcvzvvfg8swev5jp9mf93tzlwc3hy344dt009rnygkxcn8f5hzh5sgcrfczlxv09"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1w0l58v6w9ztgk6j7a0em22fzn3wyxqf5w9a6985fv6yq2dx9n3spzmr5d8k"
+      }
+    },
+    {
+      "seed": "37ec63328c318df8cf32722fa7ff0b75c389e38c7c7e9e9da32e09338e2b9351",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1kc3nq330gjr78mwvsuhh45kych08ptvjamasydtut94kxy069ncqwvpscf"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1uw4980u2jaq3cwa6pj0v79cj4y83sfr9w580ke4y083yrqw6xyg2mcy0g089waynwtxv5fgue2s589qs50jeve5eceywdte4f2srndqzmrl9q"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1dlsen7ushmw3qshmtqdtceks7wkfp0z78acrc2tuqfsj92n8332safc4jj"
+      }
+    },
+    {
+      "seed": "a48b298c95152242413880fb8a57d348b7e1d37d669634c0ae1d7b363a7a140d",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": "mn_addr1s3z5ka6hsm3a2aks5vsk5sp36umhmpf7zqauwsr6qkkqfy50f6uqgakucz"
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr1lj4qrl7fspahush2hgmeglc7tm9smwgczne27xjrqjl0m3vwlwx3k04sen7klcz2jy3ge8x9n6qdukdy9ja7vxsev0qu3k290zmtc5sq7sy3n"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1d0u2rmmxgjdk0kertgrpuymlx4s8ryjcc0ndm6jhylvxmay2rcrwfnz4"
+      }
+    },
+    {
+      "seed": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141",
+      "networkId": null,
+      "unshieldedAddress": {
+        "bech32m": null
+      },
+      "shieldedAddress": {
+        "bech32m": "mn_shield-addr10qyyvtj8hhu70yty9rsxp7sg2v4ey3ggcvpgn6mhj7wa7t7fc0dr6w7krv07za2an66tywpfr0d5uxp8n4l5ay03fpl3xhdprylwe4qjdhcke"
+      },
+      "dustAddress": {
+        "bech32m": "mn_dust1wvqrpjwnun0sz08ufez48snchyr2s3y63vjc3tqcjjgs2d7s35fnuvnmzm5"
+      }
+    }
+  ]
+}

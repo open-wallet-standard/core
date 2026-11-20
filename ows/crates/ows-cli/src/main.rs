@@ -153,9 +153,9 @@ enum SignCommands {
         /// EIP-712 typed data JSON (EVM only)
         #[arg(long)]
         typed_data: Option<String>,
-        /// Account index
-        #[arg(long, default_value = "0")]
-        index: u32,
+        /// Account index (default: 0, or the wallet's stored account on Midnight)
+        #[arg(long)]
+        index: Option<u32>,
         /// Output structured JSON instead of raw hex
         #[arg(long)]
         json: bool,
@@ -174,9 +174,9 @@ enum SignCommands {
         /// Hex transaction bytes; for Midnight also a swapoffer bech32 (MIP-0005) offer or a DApp Connector request JSON
         #[arg(long)]
         tx: String,
-        /// Account index
-        #[arg(long, default_value = "0")]
-        index: u32,
+        /// Account index (default: 0, or the wallet's stored account on Midnight)
+        #[arg(long)]
+        index: Option<u32>,
         /// Output structured JSON instead of raw hex
         #[arg(long)]
         json: bool,
@@ -192,9 +192,9 @@ enum SignCommands {
         /// Hex transaction bytes; for Midnight also a swapoffer bech32 (MIP-0005) offer or a DApp Connector request JSON
         #[arg(long)]
         tx: String,
-        /// Account index
-        #[arg(long, default_value = "0")]
-        index: u32,
+        /// Account index (default: 0, or the wallet's stored account on Midnight)
+        #[arg(long)]
+        index: Option<u32>,
         /// Output structured JSON instead of raw hex
         #[arg(long)]
         json: bool,

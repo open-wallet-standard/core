@@ -1,4 +1,4 @@
-use crate::CliError;
+use crate::{audit, CliError};
 
 /// Register a policy from a JSON file.
 pub fn create(file: &str) -> Result<(), CliError> {
@@ -9,6 +9,13 @@ pub fn create(file: &str) -> Result<(), CliError> {
         .map_err(|e| CliError::InvalidArgs(format!("invalid policy JSON: {e}")))?;
 
     ows_lib::policy_store::save_policy(&policy, None)?;
+
+    audit::log_policy_registered(
+        &policy.id,
+        &policy.name,
+        policy.rules.len(),
+        policy.executable.is_some(),
+    );
 
     println!("Policy registered: {}", policy.id);
     println!("Name:              {}", policy.name);
@@ -95,6 +102,8 @@ pub fn delete(id: &str, confirm: bool) -> Result<(), CliError> {
 
     let policy = ows_lib::policy_store::load_policy(id, None)?;
     ows_lib::policy_store::delete_policy(id, None)?;
+
+    audit::log_policy_deleted(&policy.id, &policy.name);
 
     println!("Policy deleted: {} ({})", policy.id, policy.name);
     Ok(())

@@ -1,4 +1,4 @@
-use crate::CliError;
+use crate::{audit, CliError};
 use ows_core::{parse_chain, ChainType};
 use ows_lib::ops::resolve_rpc_url;
 use ows_lib::types::AccountInfo;
@@ -34,26 +34,24 @@ fn find_account_for_chain<'a>(
         })
 }
 
-/// The address index a mnemonic account was derived at: the last segment of its stored path, so
-/// the keys unsealed for it match the stored address.
+/// The BIP-44 account a Midnight mnemonic account was derived at, read from its stored path, so the
+/// keys unsealed for it match the stored address.
 fn account_index(account: &AccountInfo) -> Result<u32, CliError> {
-    account
-        .derivation_path
-        .rsplit('/')
-        .next()
-        .and_then(|index| index.parse().ok())
-        .ok_or_else(|| {
+    ows_signer::chains::MidnightSigner::account_from_path(&account.derivation_path).ok_or_else(
+        || {
             CliError::InvalidArgs(format!(
                 "cannot read the account index from derivation path \"{}\"",
                 account.derivation_path
             ))
-        })
+        },
+    )
 }
 
 /// Unseal the Midnight account key for a balance read. The passphrase is either an api-key token,
-/// which goes through the same policy-enforcing channel as sign-message and sign-transaction, or the
-/// owner passphrase. Without one the empty passphrase is tried, as the signing commands do; when
-/// that does not open the wallet there is no credential and only the unshielded balance shows.
+/// which goes through the same policy-enforcing channel as sign-message and sign-transaction and is
+/// audited like them, allowed or denied, or the owner passphrase. Without one the empty passphrase is
+/// tried, as the signing commands do; when that does not open the wallet there is no credential and
+/// only the unshielded balance shows.
 fn midnight_credential(
     wallet_name: &str,
     chain: &ows_core::Chain,
@@ -64,7 +62,8 @@ fn midnight_credential(
         Some(token) if token.starts_with(ows_lib::key_store::TOKEN_PREFIX) => {
             let (key_file, wallet) =
                 ows_lib::key_ops::load_authorized_wallet(token, wallet_name, None)?;
-            let (key, _) = ows_lib::key_ops::enforce_policies_and_decrypt_key(
+            let wallet_id = wallet.id.clone();
+            let unsealed = ows_lib::key_ops::enforce_policies_and_decrypt_key(
                 token,
                 key_file,
                 wallet,
@@ -74,7 +73,20 @@ fn midnight_credential(
                 None,
                 Some(index),
                 None,
-            )?;
+            );
+            let outcome = match &unsealed {
+                Ok(_) => Some(audit::Outcome::Allowed),
+                Err(e) => audit::denial(e),
+            };
+            if let Some(outcome) = outcome {
+                audit::log_balance_read(
+                    &wallet_id,
+                    chain.chain_id,
+                    &audit::Actor::ApiKey,
+                    &outcome,
+                );
+            }
+            let (key, _) = unsealed?;
             Ok(Some(key))
         }
         Some(passphrase) => Ok(Some(ows_lib::decrypt_signing_key(
@@ -266,15 +278,16 @@ mod tests {
     }
 
     #[test]
-    fn the_account_index_is_the_last_derivation_path_segment() {
+    fn the_account_index_is_the_hardened_account_segment() {
         let at = |path: &str| AccountInfo {
             derivation_path: path.to_string(),
             ..account("midnight:mainnet", "mn_addr")
         };
         assert_eq!(account_index(&at("m/44'/2400'/0'/0/0")).unwrap(), 0);
-        assert_eq!(account_index(&at("m/44'/2400'/0'/0/7")).unwrap(), 7);
+        assert_eq!(account_index(&at("m/44'/2400'/7'/0/0")).unwrap(), 7);
         assert!(account_index(&at("")).is_err());
-        assert!(account_index(&at("m/44'/2400'/0'/0/7'")).is_err());
+        assert!(account_index(&at("m/44'/2400'/7/0/0")).is_err());
+        assert!(account_index(&at("m/44'/2400'/0'/0/7")).is_err());
     }
 
     #[test]

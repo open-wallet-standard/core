@@ -153,9 +153,18 @@ run "OWNER-mode balance on $CHAIN (unshielded + shielded + dust)" \
   env OWS_PASSPHRASE="$PASS" "$OWS" fund balance --wallet "$WALLET" --chain "$CHAIN"
 
 # ── 7. Mint an API token (owner passphrase decrypts the wallet; token re-encrypts it) ────
+# The token carries no policy, so it can sign anything the wallet can: it is never shown, and it is
+# revoked when the script exits, however it exits.
+revoke_smoke_key() {
+  local ids id
+  ids="$("$OWS" key list 2>/dev/null | awk -v n="$KEYNAME" '/^ID:/{id=$2} /^Name:/{ if ($2==n) print id }')"
+  for id in $ids; do "$OWS" key revoke --id "$id" --confirm >/dev/null 2>&1 || true; done
+}
+trap revoke_smoke_key EXIT
 pause "mint an API token for $WALLET (owner passphrase → scoped token)" \
       "OWS_PASSPHRASE=<hidden> ows key create --name $KEYNAME --wallet $WALLET"
-KEY_OUT="$(OWS_PASSPHRASE="$PASS" "$OWS" key create --name "$KEYNAME" --wallet "$WALLET" 2>&1 | tee /dev/tty)"
+KEY_OUT="$(OWS_PASSPHRASE="$PASS" "$OWS" key create --name "$KEYNAME" --wallet "$WALLET" 2>&1)"
+printf '%s\n' "$KEY_OUT" | sed -E 's/ows_key_[A-Za-z0-9_.-]+/ows_key_<hidden>/'
 TOKEN="$(printf '%s\n' "$KEY_OUT" | grep -oE 'ows_key_[A-Za-z0-9_.-]+' | head -1)"
 
 # ── 8. TOKEN MODE: same balance, authenticated by the API token ─────────────────────────
@@ -179,4 +188,4 @@ note "• the Dust status section appeared on $CHAIN — the runtime dust probe 
 note "• the no-passphrase run matched owner mode for an empty-passphrase wallet, and otherwise"
 note "  showed unshielded only, with the 'set OWS_PASSPHRASE' note."
 echo
-note "Revoke the smoke-test token when finished:  ${CYAN}ows key list${DIM}  then  ${CYAN}ows key revoke --id <id> --confirm"
+note "The smoke-test token is revoked as the script exits."

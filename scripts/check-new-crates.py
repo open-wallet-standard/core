@@ -8,6 +8,12 @@ from datetime import datetime, timezone
 
 MIN_CRATE_AGE_DAYS = 90
 MIN_VERSION_AGE_DAYS = 7
+# Reviewed crates allowed before they are MIN_CRATE_AGE_DAYS old, each by exact name and version.
+# Every other check still applies to them.
+NEW_CRATE_EXCEPTIONS = {
+    # Midnight ledger 9: owned by MidnightCI, built from midnightntwrk/midnight-ledger, no build.rs.
+    ("midnight-ledger-v9", "1.0.1"),
+}
 LOCKFILES = ["ows/Cargo.lock", "bindings/node/Cargo.lock", "bindings/python/Cargo.lock"]
 USER_AGENT = "open-wallet-standard-ci (https://github.com/open-wallet-standard/core)"
 
@@ -47,7 +53,9 @@ def check(name, version, new_crate):
     if new_crate:
         crate_age = age_days(metadata["crate"]["created_at"])
         if crate_age < MIN_CRATE_AGE_DAYS:
-            return f"{name} {version}: new crate, first published {crate_age} days ago"
+            if (name, version) not in NEW_CRATE_EXCEPTIONS:
+                return f"{name} {version}: new crate, first published {crate_age} days ago"
+            print(f"allowed {name} {version}: new crate, first published {crate_age} days ago")
     match = next((v for v in metadata.get("versions", []) if v["num"] == version), None)
     if match is None:
         return f"{name} {version}: version not found on crates.io"

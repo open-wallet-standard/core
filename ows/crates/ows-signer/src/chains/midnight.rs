@@ -1,18 +1,19 @@
 use bech32::{Bech32m, Hrp};
 use k256::schnorr::SigningKey;
-use midnight_base_crypto::signatures::{
-    Signature as MnSignature, SigningKey as MidnightSigningKey,
-};
+use midnight_base_crypto::signatures::SigningKey as MidnightSigningKey;
 use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::coin::{Info as CoinInfo, QualifiedInfo, ShieldedTokenType};
+use midnight_coin_structure::transfer;
 use midnight_ledger::dust::{
     DustActions, DustLocalState, DustOutput, DustPublicKey, DustRegistration, DustSecretKey,
     DustSpend,
 };
 use midnight_ledger::semantics::ZswapLocalStateExt as _;
 use midnight_ledger::structure::{
-    Intent, LedgerParameters, ProofMarker, ProofPreimageMarker, StandardTransaction, Transaction,
+    Intent, LedgerParameters, ProofMarker, ProofPreimageMarker, Signature as MnSignature,
+    SignatureVerifyingKey, SigningKey as LedgerSigningKey, StandardTransaction, Transaction,
 };
+use midnight_ledger_v8::semantics::ZswapLocalStateExt as _;
 use midnight_serialize::{
     tagged_deserialize, tagged_serialize, Deserializable, ScaleBigInt, Serializable,
 };
@@ -22,6 +23,7 @@ use midnight_storage::storage::HashMap as MnHashMap;
 use midnight_zswap::keys::{SecretKeys as ZswapSecretKeys, Seed as ZswapSeed};
 use midnight_zswap::local::State as ZswapLocalState;
 use midnight_zswap::{Offer as ZswapOffer, Output as ZswapOutput};
+use midnight_zswap_v8::keys::{SecretKeys as ZswapSecretKeysV8, Seed as ZswapSeedV8};
 use num_bigint::BigUint;
 use rand::rngs::{OsRng, StdRng};
 use rand::SeedableRng as _;
@@ -223,10 +225,11 @@ pub struct MidnightAddresses {
 impl MidnightSigner {
     /// SLIP-44 coin type for Midnight.
     const COIN_TYPE: u32 = 2400;
-    /// BIP-44 hardened account. OWS uses one account per wallet (single-address
-    /// model), so this is fixed; per-address selection is the address index.
-    const DEFAULT_ACCOUNT: u32 = 0;
-    /// WalletEngine roles under `m/44'/COIN_TYPE'/DEFAULT_ACCOUNT'/role/index`.
+    /// Address index under each role. Midnight wallets such as Lace number their accounts at the
+    /// hardened BIP-44 account level, which the derivation index selects, and derive every role's
+    /// key at address index 0.
+    const ADDRESS_INDEX: u32 = 0;
+    /// WalletEngine roles under `m/44'/COIN_TYPE'/account'/role/ADDRESS_INDEX`.
     const ROLE_UNSHIELDED: u32 = 0;
     const ROLE_DUST: u32 = 2;
     const ROLE_SHIELDED: u32 = 3;
@@ -263,10 +266,10 @@ impl MidnightSigner {
         }
     }
 
-    /// Build a Wallet SDK derivation path for a `role` and address `index`.
-    /// The coin type and hardened account live here as the single source of truth.
-    fn derivation_path(role: u32, index: u32) -> String {
-        let (coin, account) = (Self::COIN_TYPE, Self::DEFAULT_ACCOUNT);
+    /// Build a Wallet SDK derivation path for a `role` of BIP-44 `account`.
+    /// The coin type and address index live here as the single source of truth.
+    fn derivation_path(role: u32, account: u32) -> String {
+        let (coin, index) = (Self::COIN_TYPE, Self::ADDRESS_INDEX);
         format!("m/44'/{coin}'/{account}'/{role}/{index}")
     }
 
@@ -275,6 +278,21 @@ impl MidnightSigner {
     /// the `role` embedded by [`Self::derivation_path`].
     fn role_from_path(path: &str) -> Option<u32> {
         path.split('/').nth(4).and_then(|s| s.parse().ok())
+    }
+
+    /// The BIP-44 account a stored Midnight path was derived at — the inverse of
+    /// [`Self::derivation_path`], so the keys unsealed for a wallet's account match its stored
+    /// address. `None` for any other shape, including a path at a nonzero address index.
+    pub fn account_from_path(path: &str) -> Option<u32> {
+        let coin = format!("{}'", Self::COIN_TYPE);
+        let index = Self::ADDRESS_INDEX.to_string();
+        match path.split('/').collect::<Vec<_>>().as_slice() {
+            ["m", "44'", c, account, role, i] if *c == coin && *i == index => {
+                role.parse::<u32>().ok()?;
+                account.strip_suffix('\'')?.parse().ok()
+            }
+            _ => None,
+        }
     }
 
     /// Resolve the 32-byte seed for `role` from a derived-key bundle. Returns a
@@ -352,22 +370,9 @@ impl MidnightSigner {
         Self::bech32m_encode(hrp, &hash)
     }
 
-    /// Shielded address payload: Wallet SDK Zswap derives the secret key set from
-    /// the 32-byte seed; the address is `coinPublicKey || encryptionPublicKey` (64
-    /// bytes), Bech32m-encoded under the given network HRP.
-    fn derive_shielded_address_with_hrp(
-        &self,
-        seed: &[u8],
-        hrp: &str,
-    ) -> Result<String, SignerError> {
-        let seed_arr = Zeroizing::new(<[u8; 32]>::try_from(seed).map_err(|_| {
-            SignerError::InvalidPrivateKey(format!(
-                "expected 32-byte shielded seed, got {} bytes",
-                seed.len()
-            ))
-        })?);
-        let keys = ZswapSecretKeys::from(ZswapSeed::from(*seed_arr));
-
+    /// Shielded address payload: the Zswap secret key set's `coinPublicKey ||
+    /// encryptionPublicKey` (64 bytes), Bech32m-encoded under the given network HRP.
+    fn shielded_address(keys: &ZswapSecretKeys, hrp: &str) -> Result<String, SignerError> {
         let coin_public = keys.coin_public_key().0 .0;
         let mut enc_public = Vec::new();
         keys.enc_public_key()
@@ -400,12 +405,10 @@ impl MidnightSigner {
         )))
     }
 
-    /// Dust address: Wallet SDK / ledger-v8 derives the dust public key (a field
-    /// element) from the 32-byte seed, SCALE-encodes it as a BigInt, and Bech32m-
-    /// encodes that payload under the network's `mn_dust{suffix}` HRP.
-    fn derive_dust_address_from_seed(&self, seed: &[u8]) -> Result<String, SignerError> {
-        let dpk = Self::dust_public_key_from_seed(seed)?;
-
+    /// Dust address: Wallet SDK / ledger-v8 SCALE-encodes the dust public key (a field
+    /// element) as a BigInt, and Bech32m-encodes that payload under the network's
+    /// `mn_dust{suffix}` HRP.
+    fn dust_address(&self, dpk: &DustPublicKey) -> Result<String, SignerError> {
         // JS `fr_to_bigint`: little-endian bytes reversed, interpreted as big-endian
         // hex. The numeric value is the same; we build it from big-endian bytes.
         let mut be = dpk.0.as_le_bytes();
@@ -419,18 +422,8 @@ impl MidnightSigner {
     /// Derive all three Midnight addresses (unshielded / shielded / dust) from
     /// the OWS `signing_key` produced by `encode_keys` / `secret_to_signing_key`.
     pub fn derive_addresses(&self, signing_key: &[u8]) -> Result<MidnightAddresses, SignerError> {
-        let seeds = Self::decode_keys(signing_key)?;
-        Ok(MidnightAddresses {
-            unshielded: self.derive_unshielded_address_with_hrp(
-                seeds.unshielded.expose(),
-                &self.network.unshielded_hrp()?,
-            )?,
-            shielded: self.derive_shielded_address_with_hrp(
-                seeds.shielded.expose(),
-                &self.network.shielded_hrp()?,
-            )?,
-            dust: self.derive_dust_address_from_seed(seeds.dust.expose())?,
-        })
+        MidnightCryptoProvider::from_credential(&SecretBytes::from_slice(signing_key))?
+            .addresses(&self.network)
     }
 
     /// Derive the Zswap (shielded) secret keys from the 32-byte shielded role seed. The keys are
@@ -443,6 +436,18 @@ impl MidnightSigner {
             ))
         })?);
         Ok(ZswapSecretKeys::from(ZswapSeed::from(*seed_arr)))
+    }
+
+    /// The ledger 8 Zswap keys of the same shielded role seed, for replaying the shielded history a
+    /// network wrote before its hard fork to ledger 9. Both ledgers derive them the same way.
+    fn zswap_secret_keys_v8_from_seed(seed: &[u8]) -> Result<ZswapSecretKeysV8, SignerError> {
+        let seed_arr = Zeroizing::new(<[u8; 32]>::try_from(seed).map_err(|_| {
+            SignerError::InvalidPrivateKey(format!(
+                "expected 32-byte shielded seed, got {} bytes",
+                seed.len()
+            ))
+        })?);
+        Ok(ZswapSecretKeysV8::from(ZswapSeedV8::from(*seed_arr)))
     }
 
     /// Decode the `credential` (a packed Midnight signing key) into a [`MidnightCryptoProvider`]
@@ -535,6 +540,7 @@ type ShieldedPreimages = (
 pub struct MidnightCryptoProvider {
     seeds: MidnightSeeds,
     shielded_keys: ZswapSecretKeys,
+    shielded_keys_v8: ZswapSecretKeysV8,
     dust_sk: DustSecretKey,
 }
 
@@ -554,6 +560,8 @@ impl MidnightCryptoProvider {
     fn from_credential(credential: &SecretBytes) -> Result<Self, SignerError> {
         let seeds = MidnightSigner::decode_keys(credential.expose())?;
         let shielded_keys = MidnightSigner::zswap_secret_keys_from_seed(seeds.shielded.expose())?;
+        let shielded_keys_v8 =
+            MidnightSigner::zswap_secret_keys_v8_from_seed(seeds.shielded.expose())?;
         let dust_seed =
             Zeroizing::new(<[u8; 32]>::try_from(seeds.dust.expose()).map_err(|_| {
                 SignerError::InvalidPrivateKey("dust seed must be 32 bytes".into())
@@ -562,6 +570,7 @@ impl MidnightCryptoProvider {
         Ok(Self {
             seeds,
             shielded_keys,
+            shielded_keys_v8,
             dust_sk,
         })
     }
@@ -588,8 +597,9 @@ impl MidnightCryptoProvider {
     }
 
     /// Derive all three Midnight addresses (unshielded / shielded / dust) for `network` from the
-    /// seeds held in this provider — equivalent to [`MidnightSigner::derive_addresses`] on the
-    /// packed blob, but the seeds are used directly.
+    /// keys held in this provider. The shielded and dust keys were derived from their seeds once,
+    /// when the provider was built; listing the addresses, which the signing path does many times,
+    /// derives no secret key again, so it leaves no fresh copy of one behind.
     pub fn addresses(&self, network: &MidnightNetwork) -> Result<MidnightAddresses, SignerError> {
         let signer = MidnightSigner {
             network: network.clone(),
@@ -599,21 +609,19 @@ impl MidnightCryptoProvider {
                 self.seeds.unshielded.expose(),
                 &network.unshielded_hrp()?,
             )?,
-            shielded: signer.derive_shielded_address_with_hrp(
-                self.seeds.shielded.expose(),
+            shielded: MidnightSigner::shielded_address(
+                &self.shielded_keys,
                 &network.shielded_hrp()?,
             )?,
-            dust: signer.derive_dust_address_from_seed(self.seeds.dust.expose())?,
+            dust: signer.dust_address(&self.dust_public_key()?)?,
         })
     }
 
     /// Verifying key for the unshielded (Night) role — the counterpart to the signing key stored
     /// in `seeds.unshielded`. The ledger `UtxoSpend.owner` field is this key.
-    pub fn unshielded_verifying_key(
-        &self,
-    ) -> Result<midnight_base_crypto::signatures::VerifyingKey, SignerError> {
-        midnight_base_crypto::signatures::SigningKey::from_bytes(self.seeds.unshielded.expose())
-            .map(|sk| sk.verifying_key())
+    pub fn unshielded_verifying_key(&self) -> Result<SignatureVerifyingKey, SignerError> {
+        MidnightSigningKey::from_bytes(self.seeds.unshielded.expose())
+            .map(|sk| SignatureVerifyingKey::Schnorr(sk.verifying_key()))
             .map_err(|e| {
                 SignerError::InvalidPrivateKey(format!("invalid midnight signing key: {e}"))
             })
@@ -657,6 +665,46 @@ impl MidnightCryptoProvider {
         state
             .replay_events(&self.shielded_keys, std::iter::once(ev))
             .map_err(|e| SignerError::SigningFailed(format!("replay zswap event failed: {e:?}")))
+    }
+
+    /// [`Self::fold_shielded`] for a zswap event a network wrote before its hard fork to ledger 9:
+    /// the event and the state are ledger 8 types, folded with the ledger 8 keys of the same seed.
+    pub fn fold_shielded_v8(
+        &self,
+        state: midnight_zswap_v8::local::State<midnight_storage_v8::db::InMemoryDB>,
+        ev: &midnight_ledger_v8::events::Event<midnight_storage_v8::db::InMemoryDB>,
+    ) -> Result<midnight_zswap_v8::local::State<midnight_storage_v8::db::InMemoryDB>, SignerError>
+    {
+        state
+            .replay_events(&self.shielded_keys_v8, std::iter::once(ev))
+            .map_err(|e| {
+                SignerError::SigningFailed(format!("replay ledger 8 zswap event failed: {e:?}"))
+            })
+    }
+
+    /// Recognize the wallet-owned shielded receipts a Zswap offer routes to this wallet: trial-decrypt
+    /// each output's ciphertext with the shielded keys and keep only those whose coin commitment
+    /// reconstructs from our coin public key, returning each receipt's token and value. Recognizing a
+    /// *receipt* is a viewing-tier operation — it needs no spend authority (only recognizing a *spend*
+    /// does, since that means matching precomputed nullifiers) — and the keys never leave the provider.
+    /// Transient outputs (created and spent within the same offer) are skipped: they net to nothing for
+    /// the wallet.
+    pub fn recognize_shielded_inflow<P: midnight_storage::Storable<InMemoryDB>>(
+        &self,
+        offer: &ZswapOffer<P, InMemoryDB>,
+    ) -> Vec<(ShieldedTokenType, u128)> {
+        offer
+            .outputs
+            .iter_deref()
+            .filter_map(|o| {
+                let ci = o
+                    .ciphertext
+                    .as_ref()
+                    .and_then(|ciph| self.shielded_keys.try_decrypt(ciph))?;
+                let recipient = transfer::Recipient::User(self.shielded_keys.coin_public_key());
+                (ci.commitment(&recipient) == o.coin_com).then_some((ci.type_, ci.value))
+            })
+            .collect()
     }
 
     /// Build the proof-preimage shielded input offers for each segment (the key-bearing spend-witness
@@ -930,16 +978,22 @@ fn mock_prove_shielded_offer(
         })
 }
 
-/// Select just enough of the wallet's generated dust notes to pay `fee_dust`, building each spend's
-/// proof-preimage against the synced state. Targets a headroom over the fee (the spends themselves
-/// add to the fee, so the caller re-runs this with a higher target when needed).
+/// Select just enough of the wallet's generated dust notes to pay exactly `fee_dust`, building each
+/// spend's proof-preimage against the synced state.
+///
+/// The selected spends' `v_fee` sums to `fee_dust` and no more: every star of `v_fee` is burnt, so a
+/// cushion added here would be a silent donation *and* would understate the burn to a policy (the
+/// plan reports `fee_dust` as the wallet's DUST outflow). The cushion that covers fee drift between
+/// sizing and inclusion belongs in `fee_dust` itself — the balancer sizes it with
+/// `Transaction::fees_with_margin`, which prices the ledger's per-block fee adjustment properly
+/// rather than guessing a multiplier.
 fn select_dust_spends_preimage(
     mut st: DustLocalState<InMemoryDB>,
     dsk: &DustSecretKey,
     fee_dust: u128,
     dust_ctime: Timestamp,
 ) -> Result<Vec<DustSpend<ProofPreimageMarker, InMemoryDB>>, SignerError> {
-    let mut need = fee_dust.saturating_mul(2).saturating_add(100_000);
+    let mut need = fee_dust;
     let mut spends = Vec::new();
     for qdo in st.utxos().collect::<Vec<_>>() {
         if need == 0 {
@@ -1039,9 +1093,11 @@ fn sign_proven_intent(private_key: &[u8], tx_bytes: &[u8]) -> Result<Vec<u8>, Si
     }
 
     let seeds = MidnightSigner::decode_keys(private_key)?;
-    let signing_key = MidnightSigningKey::from_bytes(seeds.unshielded.expose()).map_err(|e| {
-        SignerError::InvalidPrivateKey(format!("invalid midnight signing key: {e}"))
-    })?;
+    let signing_key = MidnightSigningKey::from_bytes(seeds.unshielded.expose())
+        .map(LedgerSigningKey::Schnorr)
+        .map_err(|e| {
+            SignerError::InvalidPrivateKey(format!("invalid midnight signing key: {e}"))
+        })?;
     let vk = signing_key.verifying_key();
     let own_dust_address = MidnightSigner::dust_public_key_from_seed(seeds.dust.expose())?;
 
@@ -1340,6 +1396,7 @@ impl ChainSigner for MidnightSigner {
         seal_signed_proven(tx_bytes, &signature.signature)
     }
 
+    /// `index` selects the BIP-44 account: `m/44'/2400'/{index}'/0/0`.
     fn default_derivation_path(&self, index: u32) -> String {
         Self::derivation_path(Self::ROLE_UNSHIELDED, index)
     }
@@ -1379,6 +1436,21 @@ impl ChainSigner for MidnightSigner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pre-fork shielded history is replayed with ledger 8 keys, so they have to recognize the
+    /// same coins as the ledger 9 keys of the same seed.
+    #[test]
+    fn ledger_8_and_ledger_9_shielded_keys_of_one_seed_share_their_public_keys() {
+        let seed = [0x22u8; 32];
+        let v9 = MidnightSigner::zswap_secret_keys_from_seed(&seed).unwrap();
+        let v8 = MidnightSigner::zswap_secret_keys_v8_from_seed(&seed).unwrap();
+        assert_eq!(v9.coin_public_key().0 .0, v8.coin_public_key().0 .0);
+        let mut v9_epk = Vec::new();
+        let mut v8_epk = Vec::new();
+        midnight_serialize::Serializable::serialize(&v9.enc_public_key(), &mut v9_epk).unwrap();
+        midnight_serialize::Serializable::serialize(&v8.enc_public_key(), &mut v8_epk).unwrap();
+        assert_eq!(v9_epk, v8_epk);
+    }
 
     // Unshielded role 0 seed for the abandon-phrase wallet at index 0
     // (path m/44'/2400'/0'/0/0). Hardcoded so tests don't depend on
@@ -1437,6 +1509,134 @@ mod tests {
         assert!(
             format!("{e}").contains("insufficient DUST balance"),
             "unexpected error: {e}"
+        );
+    }
+
+    /// A dust state holding one generated note the wallet owns, replayed from the ledger's own
+    /// `DustInitialUtxo` event so the generation and commitment trees line up the way a synced state's
+    /// do — enough for `spend` to build a proof preimage against it, with no indexer or prover.
+    fn dust_state_with_one_note(
+        dsk: &DustSecretKey,
+        night_value: u128,
+        ctime: Timestamp,
+    ) -> DustLocalState<InMemoryDB> {
+        use midnight_base_crypto::hash::HashOutput;
+        use midnight_ledger::dust::{
+            dust_nonce, DustGenerationInfo, InitialNonce, QualifiedDustOutput,
+            INITIAL_DUST_PARAMETERS,
+        };
+        use midnight_ledger::events::{Event, EventDetails, EventSource};
+        use midnight_ledger::structure::TransactionHash;
+
+        let owner = DustPublicKey::from(dsk.clone());
+        let backing_night = InitialNonce(HashOutput([7u8; 32]));
+        let event = Event {
+            source: EventSource {
+                transaction_hash: TransactionHash(HashOutput([0u8; 32])),
+                logical_segment: 0,
+                physical_segment: 0,
+            },
+            content: EventDetails::DustInitialUtxo {
+                output: QualifiedDustOutput {
+                    initial_value: night_value
+                        .saturating_mul(INITIAL_DUST_PARAMETERS.night_dust_ratio as u128),
+                    owner,
+                    nonce: dust_nonce(&backing_night, 0, dsk),
+                    seq: 0,
+                    ctime,
+                    backing_night,
+                    mt_index: 0,
+                },
+                generation: DustGenerationInfo {
+                    value: night_value,
+                    owner,
+                    nonce: backing_night,
+                    dtime: Timestamp::from_secs(u64::MAX),
+                },
+                generation_index: 0,
+                block_time: ctime,
+            },
+        };
+        DustLocalState::new(INITIAL_DUST_PARAMETERS)
+            .replay_events(dsk, std::iter::once(&event))
+            .expect("replay the initial dust utxo")
+    }
+
+    /// The selected spends pay **exactly** the requested fee — no cushion. Every star of `v_fee` is
+    /// burnt, so a cushion here is a silent donation, and it would also understate the burn to a
+    /// policy (which is shown the plan's `fee_dust`). Headroom against fee drift belongs in
+    /// `fee_dust` itself, sized by the balancer with `fees_with_margin`.
+    #[test]
+    fn dust_spends_pay_exactly_the_requested_fee() {
+        let provider = MidnightSigner::mainnet()
+            .crypto_provider(&SecretBytes::from_slice(&signing_key_blob()))
+            .unwrap();
+        let ctime = Timestamp::from_secs(1_000);
+        // A whole NIGHT backing the note, spent an hour on so it has generated well past the fee.
+        let st = dust_state_with_one_note(
+            &provider.dust_sk,
+            midnight_ledger::structure::STARS_PER_NIGHT,
+            ctime,
+        );
+        let now = Timestamp::from_secs(1_000 + 3_600);
+
+        for fee in [1u128, 10_000, 999_999] {
+            let spends = provider
+                .build_preimage_dust_spends(st.clone(), fee, now)
+                .unwrap_or_else(|e| panic!("build spends for fee {fee}: {e}"));
+            let paid: u128 = spends.iter().map(|s| s.v_fee).sum();
+            assert_eq!(paid, fee, "spends must pay exactly the requested fee");
+        }
+    }
+
+    /// `recognize_shielded_inflow` picks up exactly the zswap outputs routed to this wallet — the
+    /// viewing-tier trial-decrypt behind true-net shielded effects. An output encrypted to the wallet's
+    /// shielded key is recognized with its token and value; a foreign-keyed output in the same offer is
+    /// ignored.
+    #[test]
+    fn recognize_shielded_inflow_finds_wallet_outputs_and_rejects_foreign() {
+        use midnight_base_crypto::hash::HashOutput;
+        use rand::Rng as _;
+
+        let wallet = MidnightSigner::mainnet()
+            .crypto_provider(&SecretBytes::from_slice(&signing_key_blob()))
+            .unwrap();
+        let foreign = ZswapSecretKeys::from(ZswapSeed::from([9u8; 32]));
+
+        let mut rng = OsRng;
+        let wallet_token = ShieldedTokenType(HashOutput([4u8; 32]));
+        let wallet_coin = CoinInfo {
+            nonce: rng.r#gen(),
+            type_: wallet_token,
+            value: 4242,
+        };
+        let foreign_coin = CoinInfo {
+            nonce: rng.r#gen(),
+            type_: ShieldedTokenType(HashOutput([5u8; 32])),
+            value: 777,
+        };
+
+        let wallet_out = ZswapOutput::new(
+            &mut rng,
+            &wallet_coin,
+            Some(0),
+            &wallet.shielded_keys.coin_public_key(),
+            Some(wallet.shielded_keys.enc_public_key()),
+        )
+        .unwrap();
+        let foreign_out = ZswapOutput::new(
+            &mut rng,
+            &foreign_coin,
+            Some(0),
+            &foreign.coin_public_key(),
+            Some(foreign.enc_public_key()),
+        )
+        .unwrap();
+
+        let offer = ZswapOffer::new(vec![], vec![wallet_out, foreign_out], vec![]).unwrap();
+        assert_eq!(
+            wallet.recognize_shielded_inflow(&offer),
+            vec![(wallet_token, 4242)]
         );
     }
 
@@ -1703,6 +1903,39 @@ mod tests {
     }
 
     #[test]
+    fn midnight_index_selects_the_account_not_the_address_index() {
+        let signer = MidnightSigner::mainnet();
+        assert_eq!(
+            signer.default_derivation_paths(1),
+            vec![
+                "m/44'/2400'/1'/0/0".to_string(),
+                "m/44'/2400'/1'/3/0".to_string(),
+                "m/44'/2400'/1'/2/0".to_string(),
+            ]
+        );
+        assert_eq!(signer.default_derivation_path(7), "m/44'/2400'/7'/0/0");
+    }
+
+    #[test]
+    fn midnight_account_from_path_inverts_the_derivation_path() {
+        let signer = MidnightSigner::mainnet();
+        for account in [0, 1, 7, 0x7fff_ffff] {
+            for path in signer.default_derivation_paths(account) {
+                assert_eq!(MidnightSigner::account_from_path(&path), Some(account));
+            }
+        }
+        // A path from before the account level was selectable put the index last; for a nonzero
+        // index it names no account these keys derive at.
+        assert_eq!(
+            MidnightSigner::account_from_path("m/44'/2400'/0'/0/7"),
+            None
+        );
+        assert_eq!(MidnightSigner::account_from_path("m/44'/2400'/3/0/0"), None);
+        assert_eq!(MidnightSigner::account_from_path("m/44'/60'/3'/0/0"), None);
+        assert_eq!(MidnightSigner::account_from_path(""), None);
+    }
+
+    #[test]
     fn midnight_opts_out_of_private_key_import() {
         // A single raw curve key can't represent the three-seed MNK1 bundle, so
         // universal-wallet import skips Midnight rather than deriving from a bare key.
@@ -1794,6 +2027,82 @@ mod tests {
                 .sign_message(blob.as_slice(), message, Some(foreign))
                 .unwrap_err();
             assert!(matches!(err, SignerError::AddressMismatch), "{foreign}");
+        }
+    }
+
+    /// Message signatures and the ledger's intent and reward-claim signatures share the unshielded
+    /// key, so the bytes they cover must never coincide. Every ledger signing domain starts
+    /// `midnight:`, and the frame differs from that at its ninth byte whatever the payload, even one
+    /// that is itself ledger signing data.
+    #[test]
+    fn midnight_message_frame_is_disjoint_from_the_ledger_signing_domains() {
+        use midnight_base_crypto::hash::HashOutput;
+        use midnight_coin_structure::coin::Nonce;
+        use midnight_ledger::structure::{ClaimKind, ClaimRewardsTransaction};
+
+        let intent: Intent<MnSignature, ProofPreimageMarker, PedersenRandomness, InMemoryDB> =
+            Intent {
+                guaranteed_unshielded_offer: None,
+                fallible_unshielded_offer: None,
+                actions: vec![].into(),
+                dust_actions: None,
+                ttl: Timestamp::from_secs(0),
+                binding_commitment: Default::default(),
+            };
+        let intent_data = intent.erase_proofs().erase_signatures().data_to_sign(1);
+        assert!(intent_data.starts_with(b"midnight:intent-signing-envelope[v9]:"));
+
+        let owner = SignatureVerifyingKey::Schnorr(
+            MidnightSigningKey::from_bytes(&hex::decode(UNSHIELDED_KEY_HEX).unwrap())
+                .unwrap()
+                .verifying_key(),
+        );
+        let claim = ClaimRewardsTransaction::<(), InMemoryDB> {
+            network_id: "mainnet".into(),
+            value: 1,
+            owner,
+            nonce: Nonce(HashOutput([0; 32])),
+            signature: (),
+            kind: ClaimKind::Reward,
+        };
+        let claim_data = claim.data_to_sign();
+        assert!(claim_data.starts_with(b"midnight:claim-rewards-transaction-signing-envelope[v2]:"));
+
+        for payload in [
+            &intent_data[..],
+            &claim_data[..],
+            b"midnight:contract-maintenance-update-signing-envelope[v3]:",
+            b"",
+        ] {
+            let framed = signed_message_bytes(payload);
+            assert!(framed.starts_with(SIGNED_MESSAGE_PREFIX.as_bytes()));
+            assert!(!framed.starts_with(b"midnight:"));
+        }
+    }
+
+    /// The frame names no network, so a message signature speaks for the wallet on every Midnight
+    /// network: each network's signer signs with the same key, and its signature verifies under it.
+    #[test]
+    fn midnight_message_signatures_do_not_depend_on_the_network() {
+        use k256::schnorr::signature::Verifier as _;
+
+        let blob = signing_key_blob();
+        let message = b"hello midnight";
+        let signed: Vec<SignOutput> = [
+            MidnightSigner::mainnet(),
+            MidnightSigner::preview(),
+            MidnightSigner::from_chain_id("midnight:feature-x"),
+        ]
+        .iter()
+        .map(|signer| signer.sign_message(&blob, message, None).unwrap())
+        .collect();
+
+        let public_key = signed[0].public_key.clone().unwrap();
+        let vk = k256::schnorr::VerifyingKey::from_bytes(&public_key).unwrap();
+        for out in &signed {
+            assert_eq!(out.public_key.as_deref(), Some(public_key.as_slice()));
+            let sig = k256::schnorr::Signature::try_from(out.signature.as_slice()).unwrap();
+            vk.verify(&signed_message_bytes(message), &sig).unwrap();
         }
     }
 }

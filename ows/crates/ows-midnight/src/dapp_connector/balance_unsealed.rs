@@ -2,6 +2,8 @@
 //! planning. The dapp hands the wallet an already-**proven** (`proof,embedded-fr`) unsealed tx; the
 //! wallet balances it against its own inputs, then signs and seals.
 
+use std::path::Path;
+
 use ows_signer::chains::MidnightCryptoProvider;
 use serde::Deserialize;
 
@@ -22,15 +24,15 @@ pub enum UnsealedKind {
 }
 
 const TAG_PROOF_EMBEDDED_FR: &[u8] =
-    b"midnight:transaction[v9](signature[v1],proof,embedded-fr[v1]):";
+    b"midnight:transaction[v12](signature[v2],proof,embedded-fr[v1]):";
 const TAG_PROOF_PREIMAGE_EMBEDDED_FR: &[u8] =
-    b"midnight:transaction[v9](signature[v1],proof-preimage,embedded-fr[v1]):";
+    b"midnight:transaction[v12](signature[v2],proof-preimage,embedded-fr[v1]):";
 /// A fully sealed (`proof,pedersen-schnorr`) transaction — a maker offer whose Zswap offers must be
 /// *merged* with the taker's, not balanced against the wallet's own inputs.
 const TAG_PROOF_PEDERSEN_SCHNORR: &[u8] =
-    b"midnight:transaction[v9](signature[v1],proof,pedersen-schnorr[v1]):";
+    b"midnight:transaction[v12](signature[v2],proof,pedersen-schnorr[v1]):";
 
-/// Classify a tagged v9 Midnight transaction blob, or `None` if it is already sealed (or another
+/// Classify a tagged v12 Midnight transaction blob, or `None` if it is already sealed (or another
 /// shape the wallet pipeline does not handle).
 pub fn classify_unsealed_payload(tx_bytes: &[u8]) -> Option<UnsealedKind> {
     if tx_bytes.starts_with(TAG_PROOF_PREIMAGE_EMBEDDED_FR) {
@@ -49,7 +51,7 @@ pub fn is_sealed_maker_payload(tx_bytes: &[u8]) -> bool {
     tx_bytes.starts_with(TAG_PROOF_PEDERSEN_SCHNORR)
 }
 
-/// A parsed `balanceUnsealedTransaction` connector request: the tagged v9 transaction to balance and
+/// A parsed `balanceUnsealedTransaction` connector request: the tagged v12 transaction to balance and
 /// whether the wallet should register DUST to pay fees.
 #[derive(Debug, Clone)]
 pub struct BalanceUnsealedRequest {
@@ -61,18 +63,22 @@ fn default_pay_fees() -> bool {
     true
 }
 
+/// The spec's options bag. Any other key is refused rather than ignored.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PayFeesOptions {
     #[serde(default = "default_pay_fees")]
     pay_fees: bool,
 }
 
+/// The request object. Any key it does not define is refused, as in `options`.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BalanceUnsealedJson {
-    /// The tagged v9 transaction, hex-encoded. A top-level `method` key (if present) is used for
-    /// routing upstream and ignored here.
+    /// The key that routes the request ([`super::parse_connector_method`]); read there, not here.
+    #[serde(default, rename = "method")]
+    _method: Option<serde::de::IgnoredAny>,
+    /// The tagged v12 transaction, hex-encoded.
     tx: String,
     #[serde(default)]
     options: Option<PayFeesOptions>,
@@ -99,6 +105,7 @@ pub(super) fn plan(
     chain_id: &str,
     crypto_provider: &MidnightCryptoProvider,
     json: &str,
+    vault_path: Option<&Path>,
 ) -> Result<ConnectorPlan, std::io::Error> {
     let request = parse_balance_unsealed_json(json)?;
     match classify_unsealed_payload(&request.tx_bytes) {
@@ -110,6 +117,7 @@ pub(super) fn plan(
                 crypto_provider,
                 &request.tx_bytes,
                 request.pay_fees,
+                vault_path,
             )?;
             Ok(ConnectorPlan::BalanceUnsealed(Box::new(plan)))
         }
@@ -146,6 +154,14 @@ mod tests {
     }
 
     #[test]
+    fn rejects_an_unknown_option() {
+        let err = parse_balance_unsealed_json(r#"{"tx":"0x00","options":{"payfees":false}}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown field"), "{err}");
+    }
+
+    #[test]
     fn rejects_non_hex_tx() {
         assert!(parse_balance_unsealed_json(r#"{"tx":"zz"}"#).is_err());
     }
@@ -161,7 +177,7 @@ mod tests {
             Some(UnsealedKind::ProofPreimage)
         );
         assert_eq!(
-            classify_unsealed_payload(b"midnight:transaction[v9]sealed"),
+            classify_unsealed_payload(b"midnight:transaction[v12]sealed"),
             None
         );
     }

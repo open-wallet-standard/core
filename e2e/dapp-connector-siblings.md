@@ -71,12 +71,12 @@ $OWS sign tx --chain $CHAIN --wallet $WALLET --json --tx '{
   "method": "makeIntent",
   "desiredInputs":  [ { "kind": "unshielded", "type": "<other-token-hex>", "value": "10" } ],
   "desiredOutputs": [ { "kind": "unshielded", "type": "night", "value": "500000", "recipient": "<mn_addr_preview1…self>" } ],
-  "intentSegment": 1,
-  "options": { "payFees": true }
+  "options": { "intentId": 1, "payFees": false }
 }'
 ```
 
-Expect: a proven, imbalanced maker offer. `sign tx` seals it as a **fully-sealed**
+Expect: a proven, imbalanced maker offer. (`payFees: true` is rejected here — the taker funds the
+DUST fee when it completes the swap.) `sign tx` seals it as a **fully-sealed**
 (`proof,pedersen-schnorr`) offer — which a taker completes by MERGING in its complement (step 3).
 
 ## 3. balanceSealedTransaction — taker completes the maker offer
@@ -98,8 +98,9 @@ $OWS sign tx --chain $CHAIN --wallet <taker-wallet> --json --tx '{
 
 > **Note:** `sign tx`'s makeIntent output is *fully sealed*, so the step-2→step-3 chain completes by
 > MERGING (above). A proven, unsealed (`proof,embedded-fr`) maker is refused: `balanceSealedTransaction`
-> takes a sealed offer, and a proven transaction is `balanceUnsealedTransaction`'s input (§4). The taker
-> needs **dust** for fees; a freshly-funded wallet with only NIGHT and no dust cannot be the taker.
+> takes a sealed offer, and a proven transaction is `balanceUnsealedTransaction`'s input (§4). A taker
+> with no dust pays the fee by registering an unregistered NIGHT coin that has generated enough DUST, as
+> `makeTransfer` does, so a freshly-funded wallet can be the taker once its NIGHT has aged.
 
 > **Segment placement.** The maker offer must keep all its value in the guaranteed section (segment 0),
 > as MIP-0006's swap offers do. A maker with shielded coins, unshielded inputs or outputs, or an
@@ -115,7 +116,7 @@ against its own inputs, then signs and seals.
 ```sh
 # 4a. proof,embedded-fr → balanced + sealed (the spec-conformant input):
 $OWS sign tx --chain $CHAIN --wallet $WALLET --json --tx '{
-  "tx": "<proof,embedded-fr hex, e.g. e2e/shielded-movement-cap/tx-proven.hex>",
+  "tx": "<proof,embedded-fr hex, e.g. e2e/shielded-movement-cap/tx-proven-preview.hex>",
   "options": { "payFees": true }
 }'
 #   → { … "transaction": "0x…" }
